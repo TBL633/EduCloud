@@ -1725,7 +1725,6 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
-}
 
 // 16. BUSINESS DASHBOARD STATS (ZERO FAKE DATA)
 func BusinessDashboardHandler(w http.ResponseWriter, r *http.Request) {
