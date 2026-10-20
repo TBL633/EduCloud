@@ -93,6 +93,11 @@ func migrateSchema() {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS email_verifications (
+			email VARCHAR(255) PRIMARY KEY,
+			code VARCHAR(10) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
 		`CREATE TABLE IF NOT EXISTS products (
 			id SERIAL PRIMARY KEY,
 			username VARCHAR(100) NOT NULL,
@@ -101,10 +106,14 @@ func migrateSchema() {
 			description TEXT DEFAULT '',
 			ai_tag VARCHAR(50) DEFAULT '',
 			item_type VARCHAR(50) DEFAULT 'product',
+			unit_type VARCHAR(50) DEFAULT 'custom',
+			variants JSONB DEFAULT '[]'::jsonb,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`,
 		`ALTER TABLE products DROP COLUMN IF EXISTS image_url;`,
 		`DROP TABLE IF EXISTS neon_media_objects CASCADE;`,
 		`DROP TABLE IF EXISTS user_media CASCADE;`,

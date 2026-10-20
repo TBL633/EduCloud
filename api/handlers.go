@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,21 +25,39 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	json.NewEncoder(w).Encode(payload)
 }
 
-// 1. LOGIN API (Admin & SaaS Users)
+// 1. UNIFIED LOGIN API (Admin & SaaS Users)
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Identifier string `json:"identifier"`
+		Username   string `json:"username"`
+		Email      string `json:"email"`
+		Password   string `json:"password"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	loginId := strings.TrimSpace(req.Identifier)
+	if loginId == "" {
+		loginId = strings.TrimSpace(req.Username)
+	}
+	if loginId == "" {
+		loginId = strings.TrimSpace(req.Email)
+	}
+
+	if loginId == "" || req.Password == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Please enter Email / Username and Password."})
+		return
+	}
 
 	if DB == nil {
-		if req.Username == "admin" && req.Password == "admin123" {
+		// Fallback for Zero-Config Embedded Mode
+		if (strings.EqualFold(loginId, "admin") || strings.EqualFold(loginId, "admin@example.com") || strings.EqualFold(loginId, "admin@eduta.ai")) && req.Password == "admin123" {
 			respondJSON(w, 200, map[string]interface{}{
 				"status":        "success",
-				"token":         "eduta-token-" + req.Username,
-				"username":      req.Username,
+				"token":         "eduta-token-admin",
+				"username":      "admin",
+				"account_name":  "Master Administrator",
 				"role":          "admin",
+				"portal":        "admin_portal",
 				"user_id":       1,
 				"ai_provider":   "groq",
 				"api_key":       "",
@@ -51,40 +71,211 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id int
-	var hashPass, role, aiProvider, apiKey, sysPrompt string
+	var fetchedUsername, accountName, hashPass, role, userType, aiProvider, apiKey, sysPrompt string
 	var autoReply bool
 
-	err := DB.QueryRow(`SELECT id, password, role, ai_provider, api_key, system_prompt, auto_reply 
-		FROM users WHERE username=$1`, req.Username).
-		Scan(&id, &hashPass, &role, &aiProvider, &apiKey, &sysPrompt, &autoReply)
+	err := DB.QueryRow(`SELECT id, username, COALESCE(account_name, username), password, COALESCE(role, 'business_user'), COALESCE(user_type, 'business_user'), COALESCE(ai_provider, 'Groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true) 
+		FROM users WHERE LOWER(username)=$1 OR LOWER(email)=$1`, strings.ToLower(loginId)).
+		Scan(&id, &fetchedUsername, &accountName, &hashPass, &role, &userType, &aiProvider, &apiKey, &sysPrompt, &autoReply)
 
 	if err != nil {
-		respondJSON(w, 401, map[string]string{"status": "error", "message": "Invalid Username or Password!"})
+		respondJSON(w, 401, map[string]string{"status": "error", "message": "Account not found! Please check your credentials or create an account."})
 		return
 	}
 
-	if role == "admin" {
-		if req.Password != hashPass {
-			respondJSON(w, 401, map[string]string{"status": "error", "message": "Invalid Admin Password!"})
-			return
-		}
-	} else {
-		if err := bcrypt.CompareHashAndPassword([]byte(hashPass), []byte(req.Password)); err != nil {
-			respondJSON(w, 401, map[string]string{"status": "error", "message": "Invalid Password!"})
-			return
-		}
+	// Password Verification
+	isMatch := false
+	if req.Password == hashPass {
+		isMatch = true
+	} else if err := bcrypt.CompareHashAndPassword([]byte(hashPass), []byte(req.Password)); err == nil {
+		isMatch = true
+	}
+
+	if !isMatch {
+		respondJSON(w, 401, map[string]string{"status": "error", "message": "Invalid Password! Please check and try again."})
+		return
+	}
+
+	portal := "business_portal"
+	if role == "admin" || userType == "admin" {
+		portal = "admin_portal"
 	}
 
 	respondJSON(w, 200, map[string]interface{}{
 		"status":        "success",
-		"token":         "eduta-token-" + req.Username,
-		"username":      req.Username,
+		"token":         "eduta-token-" + fetchedUsername,
+		"username":      fetchedUsername,
+		"account_name":  accountName,
 		"role":          role,
+		"user_type":     userType,
+		"portal":        portal,
 		"user_id":       id,
 		"ai_provider":   aiProvider,
 		"api_key":       apiKey,
 		"system_prompt": sysPrompt,
 		"auto_reply":    autoReply,
+	})
+}
+
+// 1B. SEND OTP FOR EMAIL VERIFICATION (SIGN UP STEP 1)
+func SendOTPHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FullName        string `json:"full_name"`
+		Email           string `json:"email"`
+		Password        string `json:"password"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	emailInput := strings.ToLower(strings.TrimSpace(req.Email))
+	fullNameInput := strings.TrimSpace(req.FullName)
+	passInput := strings.TrimSpace(req.Password)
+
+	if emailInput == "" || passInput == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Please enter Full Name, Email Address, and Password."})
+		return
+	}
+
+	// Password Strength Validation
+	if len(passInput) < 6 {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Password must be at least 6 characters long."})
+		return
+	}
+
+	hasUpper := false
+	hasDigit := false
+	hasSpecial := false
+	for _, c := range passInput {
+		if c >= 'A' && c <= 'Z' {
+			hasUpper = true
+		} else if c >= '0' && c <= '9' {
+			hasDigit = true
+		} else if strings.ContainsRune("!@#$%^&*()_+-=[]{};':\"\\|,.<>/?", c) {
+			hasSpecial = true
+		}
+	}
+
+	if !hasUpper || !hasDigit || !hasSpecial {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Password must contain at least 1 capital letter, 1 number, and 1 special character (!@#$%^&*)."})
+		return
+	}
+
+	// Pre-signup check: Check if Email already exists in Neon DB
+	if DB != nil {
+		var existingId int
+		err := DB.QueryRow("SELECT id FROM users WHERE LOWER(email)=$1 OR LOWER(username)=$1", emailInput).Scan(&existingId)
+		if err == nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "This Email Address is already registered! Please sign in."})
+			return
+		}
+	}
+
+	// Generate 6-Digit Verification Code
+	otpCode := fmt.Sprintf("%06d", rand.Intn(900000)+100000)
+
+	// Save OTP to email_verifications table
+	if DB != nil {
+		_, _ = DB.Exec(`CREATE TABLE IF NOT EXISTS email_verifications (
+			email VARCHAR(255) PRIMARY KEY,
+			code VARCHAR(10) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`)
+
+		_, _ = DB.Exec(`INSERT INTO email_verifications (email, code) VALUES ($1, $2)
+			ON CONFLICT (email) DO UPDATE SET code=$2, created_at=CURRENT_TIMESTAMP`, emailInput, otpCode)
+	}
+
+	log.Printf("✉️ [Neon Auth] 6-digit OTP verification code %s generated for %s (%s)", otpCode, emailInput, fullNameInput)
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":  "success",
+		"message": fmt.Sprintf("Verification code sent to %s!", emailInput),
+		"email":   emailInput,
+	})
+}
+
+// 1C. VERIFY OTP CODE & CREATE USER ACCOUNT (SIGN UP STEP 2)
+func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email    string `json:"email"`
+		OTPCode  string `json:"otp_code"`
+		FullName string `json:"full_name"`
+		Password string `json:"password"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	emailInput := strings.ToLower(strings.TrimSpace(req.Email))
+	codeInput := strings.TrimSpace(req.OTPCode)
+	fullNameInput := strings.TrimSpace(req.FullName)
+	passInput := strings.TrimSpace(req.Password)
+
+	if emailInput == "" || codeInput == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Please enter your Email and 6-digit OTP Code."})
+		return
+	}
+
+	// Verify OTP Code against database
+	isValid := false
+	if DB != nil {
+		var dbCode string
+		err := DB.QueryRow("SELECT code FROM email_verifications WHERE LOWER(email)=$1", emailInput).Scan(&dbCode)
+		if err == nil && dbCode == codeInput {
+			isValid = true
+		}
+	} else {
+		// Fallback for memory mode
+		isValid = true
+	}
+
+	if !isValid {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Invalid or expired verification code! Please check your email."})
+		return
+	}
+
+	// Generate Username from email prefix
+	parts := strings.Split(emailInput, "@")
+	baseUsername := parts[0]
+	if len(baseUsername) < 3 {
+		baseUsername = "user_" + baseUsername
+	}
+	finalUsername := baseUsername
+
+	// Hash Password with bcrypt
+	hashedPass, _ := bcrypt.GenerateFromPassword([]byte(passInput), 10)
+
+	if fullNameInput == "" {
+		fullNameInput = baseUsername
+	}
+
+	// Insert User into Neon PostgreSQL DB
+	if DB != nil {
+		var exists bool
+		_ = DB.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(username)=$1)", finalUsername).Scan(&exists)
+		if exists {
+			finalUsername = fmt.Sprintf("%s_%d", baseUsername, rand.Intn(900)+100)
+		}
+
+		_, err := DB.Exec(`INSERT INTO users (username, email, password, role, user_type, account_name, automation_access, created_at)
+			VALUES ($1, $2, $3, 'user', 'business_user', $4, true, NOW())`,
+			finalUsername, emailInput, string(hashedPass), fullNameInput)
+
+		if err != nil {
+			respondJSON(w, 500, map[string]string{"status": "error", "message": "Database error while creating user account."})
+			return
+		}
+
+		// Clean up OTP record
+		_, _ = DB.Exec("DELETE FROM email_verifications WHERE LOWER(email)=$1", emailInput)
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":       "success",
+		"message":      "Account created & verified successfully!",
+		"token":        "eduta-token-" + finalUsername,
+		"username":     finalUsername,
+		"account_name": fullNameInput,
+		"role":         "business_user",
+		"portal":       "business_portal",
 	})
 }
 

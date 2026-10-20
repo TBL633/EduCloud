@@ -47,6 +47,9 @@ func main() {
 
 	// 4. API Routes
 	http.HandleFunc("/api/login", corsMiddleware(api.LoginHandler))
+	http.HandleFunc("/api/auth/send-otp", corsMiddleware(api.SendOTPHandler))
+	http.HandleFunc("/api/auth/verify-otp", corsMiddleware(api.VerifyOTPHandler))
+	http.HandleFunc("/api/create-account", corsMiddleware(api.VerifyOTPHandler))
 	http.HandleFunc("/api/status", corsMiddleware(api.StatusHandler))
 	http.HandleFunc("/api/pair", corsMiddleware(api.PairPhoneHandler))
 	http.HandleFunc("/api/logout-wa", corsMiddleware(api.LogoutWAHandler))
