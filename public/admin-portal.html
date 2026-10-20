@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Master Admin Portal | EduCloud SaaS</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome via CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
+        .glass-card { background: rgba(15, 23, 42, 0.82); backdrop-filter: blur(16px); border: 1px solid rgba(51, 65, 85, 0.45); }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-[#0f172a] text-slate-100 overflow-hidden selection:bg-amber-500 selection:text-black">
+
+    <!-- Mobile Top Navigation Header -->
+    <header class="md:hidden h-14 px-4 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between shrink-0 z-30">
+        <div class="flex items-center gap-3">
+            <button type="button" onclick="toggleSidebar()" class="p-2 text-slate-400 hover:text-white rounded-lg focus:outline-none cursor-pointer" aria-label="Toggle Navigation">
+                <i class="fa-solid fa-bars text-lg"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20 text-xs">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <span class="font-black text-sm tracking-tight text-white">Edu<span class="text-amber-400">Cloud</span> Admin</span>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Database Live</span>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden relative">
+        
+        <!-- Mobile Sidebar Backdrop -->
+        <div id="sidebar-backdrop" onclick="toggleSidebar()" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 md:hidden transition-opacity"></div>
+
+        <!-- Sidebar Navigation (Responsive Drawer on Mobile, Fixed on Desktop) -->
+        <aside id="sidebar-drawer" class="fixed inset-y-0 left-0 z-50 md:static md:translate-x-0 -translate-x-full w-64 bg-slate-950 border-r border-slate-800/80 flex flex-col shrink-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none">
+            <!-- Brand -->
+            <div class="h-16 px-5 flex items-center justify-between border-b border-slate-800/80">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center border border-amber-500/20 text-base shadow-sm">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </div>
+                    <div>
+                        <span class="font-black text-sm tracking-tight text-white">Edu<span class="text-amber-400">Cloud</span></span>
+                        <div class="text-[9px] font-bold text-amber-400 uppercase font-mono tracking-wider">MASTER ADMIN</div>
+                    </div>
+                </div>
+                <!-- Close Button on Mobile -->
+                <button type="button" onclick="toggleSidebar()" class="md:hidden text-slate-400 hover:text-white p-1 rounded-lg">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+
+            <!-- Admin Profile Banner -->
+            <div class="p-4 border-b border-slate-800/60 bg-slate-900/40">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-amber-950 text-amber-400 flex items-center justify-center text-xs font-bold border border-amber-800">
+                        <i class="fa-solid fa-crown"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-xs font-bold text-white truncate">Global Administrator</div>
+                        <div class="text-[10px] text-slate-400 font-mono truncate">admin@eduta.ai</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation Links -->
+            <nav class="flex-1 p-3 space-y-1.5 overflow-y-auto">
+                <button type="button" onclick="switchAdminTab('overview')" id="nav-btn-overview" class="admin-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-white bg-slate-900 border border-slate-800 transition cursor-pointer">
+                    <i class="fa-solid fa-chart-pie text-amber-400 w-4"></i>
+                    <span>Overview & Health</span>
+                </button>
+                <button type="button" onclick="switchAdminTab('tenants')" id="nav-btn-tenants" class="admin-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-users-gear text-emerald-400 w-4"></i>
+                    <span>Categorized Tenants</span>
+                </button>
+                <button type="button" onclick="switchAdminTab('gateway')" id="nav-btn-gateway" class="admin-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-network-wired text-cyan-400 w-4"></i>
+                    <span>WhatsApp Gateway API</span>
+                </button>
+            </nav>
+
+            <!-- Bottom Actions -->
+            <div class="p-3 border-t border-slate-800/80 space-y-2">
+                <a href="/business-portal.html" class="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-repeat"></i>
+                    <span>Open Business Workspace</span>
+                </a>
+                <button type="button" onclick="handleLogout()" class="w-full py-2 bg-slate-900 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-bold transition border border-slate-800 hover:border-rose-900 flex items-center justify-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                    <span>Logout Admin</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Workspace Viewport -->
+        <main class="flex-1 flex flex-col min-w-0 bg-[#0f172a] overflow-hidden">
+            <!-- Desktop Top App Bar -->
+            <header class="hidden md:flex h-16 px-6 border-b border-slate-800/80 bg-slate-950/70 items-center justify-between shrink-0">
+                <div class="flex items-center gap-3">
+                    <h2 id="admin-view-title" class="text-sm font-bold text-white tracking-wide">Master Overview & Metrics</h2>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-2 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>Cloud DB Live &bull; Golang Daemon</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Dynamic Content Area -->
+            <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+                
+                <!-- ========================================== -->
+                <!-- TAB 1: OVERVIEW & HIGH-LEVEL STATS         -->
+                <!-- ========================================== -->
+                <div id="tab-overview" class="admin-tab-content space-y-6">
+                    <!-- Metric Cards (Responsive Grid) -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Total SaaS Accounts</div>
+                            <div id="stat-total-accounts" class="text-2xl sm:text-3xl font-black text-white font-mono">-</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Active WhatsApp Devices</div>
+                            <div id="stat-active-devices" class="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">-</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Golang Engine RAM</div>
+                            <div id="stat-server-ram" class="text-2xl sm:text-3xl font-black text-cyan-400 font-mono">Healthy</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Cloud DB Connection</div>
+                            <div id="stat-db-status" class="text-2xl sm:text-3xl font-black text-amber-400 font-mono">Connected</div>
+                        </div>
+                    </div>
+
+                    <!-- System Overview Card -->
+                    <div class="glass-card p-5 sm:p-6 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div>
+                            <h3 class="text-sm font-bold text-white">Golang Cloud Engine &bull; Multi-Tenant Daemon</h3>
+                            <p class="text-xs text-slate-400 mt-1 leading-relaxed">High-throughput WhatsApp routing, database connection pooling, and automated anti-ban scheduling.</p>
+                        </div>
+                        <button type="button" onclick="fetchAdminStats()" class="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 transition cursor-pointer flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-arrows-rotate text-emerald-400"></i> Refresh Metrics
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ========================================== -->
+                <!-- TAB 2: CATEGORIZED TENANT MANAGEMENT       -->
+                <!-- ========================================== -->
+                <div id="tab-tenants" class="admin-tab-content hidden space-y-6">
+                    
+                    <!-- Provision New SaaS Tenant Form -->
+                    <div class="glass-card p-5 sm:p-6 rounded-2xl border border-slate-800 space-y-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                                <i class="fa-solid fa-user-plus text-emerald-400"></i> Provision New SaaS Tenant
+                            </h3>
+                            <span class="text-[10px] text-slate-500 font-mono">Cloud Database Sync</span>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email Address (@gmail.com supported)</label>
+                                <input type="email" id="adm-tenant-email" placeholder="e.g. zenith.growth@gmail.com" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Password</label>
+                                <input type="password" id="adm-tenant-pass" placeholder="Password" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Business / Library Name</label>
+                                <input type="text" id="adm-tenant-name" placeholder="e.g. Apex Central Library" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <!-- Category Dropdown with "Library Partner" & "Business/Marketing" -->
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Account Category</label>
+                                <select id="adm-tenant-category" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 font-semibold">
+                                    <option value="business_marketing">💼 Business/Marketing (Lead Gen)</option>
+                                    <option value="library_partner">📚 Library Partner (Student Shifts)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end pt-1">
+                            <button type="button" onclick="createTenantAccount()" class="w-full sm:w-auto px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                <i class="fa-solid fa-plus text-slate-950"></i>
+                                <span>Create Tenant Account</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Category Tab Switcher -->
+                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                        <div class="flex items-center p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold">
+                            <button type="button" id="cat-btn-biz" onclick="switchCategoryView('business')" class="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-slate-900 text-white transition flex items-center justify-center gap-2 cursor-pointer shadow-sm">
+                                <i class="fa-solid fa-briefcase text-cyan-400"></i>
+                                <span>Business Accounts</span>
+                                <span id="count-biz-badge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono">0</span>
+                            </button>
+                            <button type="button" id="cat-btn-lib" onclick="switchCategoryView('library')" class="flex-1 sm:flex-none px-4 py-2 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer">
+                                <i class="fa-solid fa-book-open text-amber-400"></i>
+                                <span>Library Partners</span>
+                                <span id="count-lib-badge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono">0</span>
+                            </button>
+                        </div>
+
+                        <button type="button" onclick="fetchTenantAccounts()" class="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-800 transition flex items-center justify-center gap-2 cursor-pointer">
+                            <i class="fa-solid fa-rotate text-emerald-400"></i> Refresh Tables
+                        </button>
+                    </div>
+
+                    <!-- SECTION A: BUSINESS ACCOUNTS TABLE (Fully Responsive) -->
+                    <div id="cat-view-business" class="glass-card rounded-2xl border border-slate-800 overflow-hidden space-y-0">
+                        <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-solid fa-briefcase text-cyan-400 text-xs"></i>
+                                <span class="text-xs font-bold text-white uppercase tracking-wider">Business & Marketing Tenants</span>
+                            </div>
+                            <span class="text-[10px] text-cyan-400 font-mono">WhatsMeow API Armed</span>
+                        </div>
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs min-w-[720px]">
+                                <thead>
+                                    <tr class="text-[10px] uppercase text-slate-400 bg-slate-950/60 border-b border-slate-800 font-mono">
+                                        <th class="p-3">Tenant / Email</th>
+                                        <th class="p-3">Username</th>
+                                        <th class="p-3">WhatsApp Number</th>
+                                        <th class="p-3">WhatsApp API Gateway Endpoint</th>
+                                        <th class="p-3">Status</th>
+                                        <th class="p-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <!-- Empty <tbody> Ready for Golang API Injection -->
+                                <tbody id="business-tenants-tbody" class="divide-y divide-slate-800/60 text-slate-300">
+                                    <tr><td colspan="6" class="p-6 text-center text-slate-500 font-mono">Business accounts will load here via Golang API.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- SECTION B: LIBRARY PARTNERS TABLE (Fully Responsive) -->
+                    <div id="cat-view-library" class="hidden glass-card rounded-2xl border border-slate-800 overflow-hidden space-y-0">
+                        <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-solid fa-book-open text-amber-400 text-xs"></i>
+                                <span class="text-xs font-bold text-white uppercase tracking-wider">Partner Study Libraries</span>
+                            </div>
+                            <span class="text-[10px] text-amber-400 font-mono">Student Shifts & Gateway</span>
+                        </div>
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs min-w-[720px]">
+                                <thead>
+                                    <tr class="text-[10px] uppercase text-slate-400 bg-slate-950/60 border-b border-slate-800 font-mono">
+                                        <th class="p-3">Library / Email</th>
+                                        <th class="p-3">Owner Username</th>
+                                        <th class="p-3">WhatsApp Number</th>
+                                        <th class="p-3">WhatsApp API Gateway Endpoint</th>
+                                        <th class="p-3">Status</th>
+                                        <th class="p-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <!-- Empty <tbody> Ready for Golang API Injection -->
+                                <tbody id="library-tenants-tbody" class="divide-y divide-slate-800/60 text-slate-300">
+                                    <tr><td colspan="6" class="p-6 text-center text-slate-500 font-mono">Library partner accounts will load here via Golang API.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- ============================================================== -->
+                <!-- TAB 3: WHATSAPP GATEWAY ENDPOINTS (FOR BOTH USER TYPES)        -->
+                <!-- ============================================================== -->
+                <div id="tab-gateway" class="admin-tab-content hidden space-y-6">
+                    <div class="glass-card p-5 sm:p-6 rounded-2xl border border-slate-800 space-y-6">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
+                            <div>
+                                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-network-wired text-cyan-400"></i> Render 24*7 Cloud WhatsApp Gateway & API Endpoints
+                                </h3>
+                                <p class="text-xs text-slate-400 mt-0.5">REST API endpoints and Webhook triggers for both Business & Library Partner tenants to send and auto-reply messages from anywhere.</p>
+                            </div>
+                            <span class="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                24/7 Active
+                            </span>
+                        </div>
+
+                        <!-- ENDPOINT CARDS FOR BOTH USER TYPES -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                            
+                            <!-- CARD 1: BUSINESS ACCOUNTS ENDPOINT -->
+                            <div class="p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800/90 space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                                        💼 Business & Marketing Tenant Gateway
+                                    </span>
+                                    <span class="text-[10px] text-slate-400 font-mono">Tenant: <code class="text-cyan-300 font-bold">lead_business1</code></span>
+                                </div>
+                                <h4 class="text-xs font-bold text-white">Outbound Message REST Endpoint</h4>
+                                <div class="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1 font-mono text-[11px]">
+                                    <div class="text-slate-400 text-[10px]">POST URL:</div>
+                                    <div class="text-cyan-300 font-bold break-all" id="endpoint-url-biz">https://<host>/api/send</div>
+                                </div>
+                                <div class="text-[11px] text-slate-400 font-bold">Example cURL Command:</div>
+                                <pre id="biz-curl-code" class="p-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-mono text-emerald-300 overflow-x-auto select-all leading-relaxed">curl -X POST https://<host>/api/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "lead_business1",
+    "phone": "919876543210",
+    "message": "Hello from external CRM!"
+  }'</pre>
+                                <button type="button" onclick="copyBusinessCurl()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-copy text-cyan-400"></i> Copy cURL Command
+                                </button>
+                            </div>
+
+                            <!-- CARD 2: LIBRARY PARTNERS ENDPOINT -->
+                            <div class="p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800/90 space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                        📚 Library Partner Tenant Gateway
+                                    </span>
+                                    <span class="text-[10px] text-slate-400 font-mono">Tenant: <code class="text-amber-300 font-bold">owner_library1</code></span>
+                                </div>
+                                <h4 class="text-xs font-bold text-white">Outbound Message REST Endpoint</h4>
+                                <div class="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1 font-mono text-[11px]">
+                                    <div class="text-slate-400 text-[10px]">POST URL:</div>
+                                    <div class="text-amber-300 font-bold break-all" id="endpoint-url-lib">https://<host>/api/send</div>
+                                </div>
+                                <div class="text-[11px] text-slate-400 font-bold">Example cURL Command:</div>
+                                <pre id="lib-curl-code" class="p-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-mono text-amber-300 overflow-x-auto select-all leading-relaxed">curl -X POST https://<host>/api/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "owner_library1",
+    "phone": "919876543201",
+    "message": "Notice: Shift timing update for Central Study Library."
+  }'</pre>
+                                <button type="button" onclick="copyLibraryCurl()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-copy text-amber-400"></i> Copy cURL Command
+                                </button>
+                            </div>
+
+                        </div>
+
+                        <!-- 24/7 INBOUND AI WEBHOOK INGESTION CARD -->
+                        <div class="p-4 sm:p-5 rounded-2xl bg-purple-950/20 border border-purple-900/50 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h4 class="text-xs font-bold text-purple-300 flex items-center gap-2">
+                                    <i class="fa-solid fa-bolt text-purple-400"></i> 24*7 Inbound WhatsApp Webhook Receiver (Auto-Reply Engine)
+                                </h4>
+                                <span class="text-[10px] text-purple-400 font-mono font-bold">Auto-Capture Leads</span>
+                            </div>
+                            <p class="text-xs text-slate-300 leading-relaxed">
+                                Point your external WhatsApp Engine, Baileys, WhatsMeow, or Meta Cloud API Webhook to this URL on Render.
+                                When a customer sends a message, our system receives it, searches the tenant's Product & Service catalog, formulates a personalized 24/7 AI reply, and automatically records the prospect in the database!
+                            </p>
+                            <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 font-mono text-xs">
+                                <span id="inbound-webhook-url" class="text-purple-300 font-bold break-all">https://<host>/api/whatsapp/incoming</span>
+                                <button type="button" onclick="copyInboundWebhookUrl()" class="px-3 py-1 bg-purple-500 hover:bg-purple-600 text-white text-[10px] font-bold rounded-lg transition shrink-0 cursor-pointer">
+                                    Copy Webhook URL
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Floating Toast Notification (Zero browser alert dependencies) -->
+    <div id="admin-toast" class="fixed top-5 right-5 z-[100] hidden max-w-sm px-4 py-3 rounded-2xl shadow-2xl border text-xs font-semibold flex items-center gap-3 backdrop-blur-md transition-all duration-300">
+        <i id="toast-icon" class="text-base"></i>
+        <span id="toast-msg" class="flex-1"></span>
+    </div>
+
+    <!-- In-DOM Delete Confirmation Modal (100% immune to iframe/browser pop-up blockers) -->
+    <div id="delete-tenant-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+        <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-2xl bg-rose-500/10 text-rose-400 border border-rose-500/20 flex items-center justify-center text-lg shrink-0">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div>
+                    <h3 class="text-base font-bold text-white">Permanently Delete Tenant?</h3>
+                    <p class="text-xs text-slate-400">All data will be permanently wiped from the database.</p>
+                </div>
+            </div>
+            
+            <div class="p-3.5 bg-slate-950 rounded-2xl border border-slate-800/80 text-xs space-y-1.5 font-mono">
+                <div class="text-slate-400">Account: <span id="del-modal-account" class="text-white font-bold font-sans"></span></div>
+                <div class="text-slate-400">Username: <span id="del-modal-username" class="text-cyan-400 font-bold"></span></div>
+                <div class="text-[11px] text-rose-400 font-sans mt-2">
+                    <i class="fa-solid fa-circle-info mr-1"></i>
+                    All associated products, leads, customer chats, WhatsApp sessions, and account credentials will be wiped immediately from Neon DB.
+                </div>
+            </div>
+
+            <div class="flex items-center justify-end gap-2.5 pt-2">
+                <button type="button" onclick="closeDeleteModal()" class="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" id="del-modal-confirm-btn" onclick="executeDeleteTenant()" class="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 shadow-lg shadow-rose-950 transition flex items-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-trash-can"></i>
+                    <span>Delete Permanently</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CLEAN VANILLA JAVASCRIPT (GOLANG API READY) -->
+    <script>
+        // --- 1. RESPONSIVE SIDEBAR MOBILE TOGGLE ---
+        function toggleSidebar() {
+            const drawer = document.getElementById('sidebar-drawer');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            const isClosed = drawer.classList.contains('-translate-x-full');
+
+            if (isClosed) {
+                drawer.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                drawer.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        // --- 2. AUTH GUARD ---
+        function getAdminHeaders() {
+            return {
+                'Content-Type': 'application/json',
+                'x-user-role': 'admin',
+                'x-username': 'admin'
+            };
+        }
+
+        // --- 2. AUTH GUARD ---
+        function checkAdminAuth() {
+            const token = localStorage.getItem('token');
+            const role = localStorage.getItem('role');
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            
+            if (!token || (role !== 'admin' && user.role !== 'admin' && user.user_type !== 'admin')) {
+                alert('Access Denied: Master Admin privileges required to access the Admin Portal.');
+                window.location.href = '/business-portal.html';
+                return false;
+            }
+            return true;
+        }
+
+        // --- 3. TAB CONTROLLER ---
+        function switchAdminTab(tabId) {
+            document.querySelectorAll('.admin-tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.admin-nav').forEach(el => {
+                el.classList.remove('bg-slate-900', 'text-white', 'border', 'border-slate-800');
+                el.classList.add('text-slate-400');
+            });
+
+            const target = document.getElementById('tab-' + tabId);
+            const navBtn = document.getElementById('nav-btn-' + tabId);
+            if (target) target.classList.remove('hidden');
+            if (navBtn) {
+                navBtn.classList.add('bg-slate-900', 'text-white', 'border', 'border-slate-800');
+                navBtn.classList.remove('text-slate-400');
+            }
+
+            const titles = {
+                'overview': 'Master Overview & Metrics',
+                'tenants': 'Categorized Tenants Management'
+            };
+            const titleEl = document.getElementById('admin-view-title');
+            if (titleEl) titleEl.innerText = titles[tabId] || 'Master Admin';
+
+            if (window.innerWidth < 768) {
+                const drawer = document.getElementById('sidebar-drawer');
+                const backdrop = document.getElementById('sidebar-backdrop');
+                drawer.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+
+            if (tabId === 'overview') fetchAdminStats();
+            if (tabId === 'tenants') fetchTenantAccounts();
+            if (tabId === 'gateway') setupGatewayEndpoints();
+        }
+
+        // --- 5. GATEWAY ENDPOINTS SETUP & COPY HELPERS ---
+        function setupGatewayEndpoints() {
+            const host = window.location.origin;
+            const bizUrl = `${host}/api/send`;
+            const libUrl = `${host}/api/send`;
+            const webhookUrl = `${host}/api/whatsapp/incoming`;
+
+            const bizUrlEl = document.getElementById('endpoint-url-biz');
+            if (bizUrlEl) bizUrlEl.innerText = bizUrl;
+
+            const libUrlEl = document.getElementById('endpoint-url-lib');
+            if (libUrlEl) libUrlEl.innerText = libUrl;
+
+            const webhookUrlEl = document.getElementById('inbound-webhook-url');
+            if (webhookUrlEl) webhookUrlEl.innerText = webhookUrl;
+
+            const bizCurlEl = document.getElementById('biz-curl-code');
+            if (bizCurlEl) {
+                bizCurlEl.innerText = `curl -X POST ${bizUrl} \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "username": "lead_business1",\n    "phone": "919876543210",\n    "message": "Hello from external CRM!"\n  }'`;
+            }
+
+            const libCurlEl = document.getElementById('lib-curl-code');
+            if (libCurlEl) {
+                libCurlEl.innerText = `curl -X POST ${libUrl} \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "username": "owner_library1",\n    "phone": "919876543201",\n    "message": "Notice: Shift timing update for Central Study Library."\n  }'`;
+            }
+        }
+
+        function copyBusinessCurl() {
+            const code = document.getElementById('biz-curl-code')?.innerText;
+            if (code) {
+                navigator.clipboard.writeText(code);
+                alert('Copied Business cURL command to clipboard!');
+            }
+        }
+
+        function copyLibraryCurl() {
+            const code = document.getElementById('lib-curl-code')?.innerText;
+            if (code) {
+                navigator.clipboard.writeText(code);
+                alert('Copied Library Partner cURL command to clipboard!');
+            }
+        }
+
+        function copyInboundWebhookUrl() {
+            const url = document.getElementById('inbound-webhook-url')?.innerText;
+            if (url) {
+                navigator.clipboard.writeText(url);
+                alert('Copied 24*7 Inbound Webhook URL to clipboard!');
+            }
+        }
+
+        // --- 4. CATEGORY VIEW SWITCHER (BUSINESS vs LIBRARY) ---
+        function switchCategoryView(category) {
+            const bizSection = document.getElementById('cat-view-business');
+            const libSection = document.getElementById('cat-view-library');
+            const bizBtn = document.getElementById('cat-btn-biz');
+            const libBtn = document.getElementById('cat-btn-lib');
+
+            if (category === 'business') {
+                bizSection.classList.remove('hidden');
+                libSection.classList.add('hidden');
+                bizBtn.className = "flex-1 sm:flex-none px-4 py-2 rounded-lg bg-slate-900 text-white transition flex items-center justify-center gap-2 cursor-pointer shadow-sm";
+                libBtn.className = "flex-1 sm:flex-none px-4 py-2 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer";
+            } else {
+                libSection.classList.remove('hidden');
+                bizSection.classList.add('hidden');
+                libBtn.className = "flex-1 sm:flex-none px-4 py-2 rounded-lg bg-slate-900 text-white transition flex items-center justify-center gap-2 cursor-pointer shadow-sm";
+                bizBtn.className = "flex-1 sm:flex-none px-4 py-2 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer";
+            }
+        }
+
+        function handleLogout() {
+            localStorage.clear();
+            window.location.href = '/index.html';
+        }
+
+        function manageTenant(username, accountName) {
+            localStorage.setItem('impersonating', username);
+            localStorage.setItem('impersonating_name', accountName || username);
+            window.location.href = '/business-portal.html';
+        }
+
+        // ==============================================================
+        // GOLANG API BINDINGS (ASYNC FETCH STUBS READY FOR BACKEND)
+        // ==============================================================
+
+        // 1. FETCH ADMIN HIGH-LEVEL STATS
+        async function fetchAdminStats() {
+            try {
+                const res = await fetch('/api/admin/dashboard', { headers: getAdminHeaders() });
+                if (res.ok) {
+                    const data = await res.json();
+                    const m = data.metrics || {};
+                    if (document.getElementById('stat-total-accounts')) document.getElementById('stat-total-accounts').innerText = m.totalUsers ?? 0;
+                    if (document.getElementById('stat-active-devices')) document.getElementById('stat-active-devices').innerText = m.connectedUsers ?? 0;
+                }
+
+                const dbRes = await fetch('/api/db-status');
+                if (dbRes.ok) {
+                    const dbData = await dbRes.json();
+                    const dbEl = document.getElementById('stat-db-status');
+                    if (dbEl) {
+                        dbEl.innerText = dbData.connected ? 'Active (Cloud DB)' : 'Embedded';
+                        dbEl.className = dbData.connected ? "text-2xl sm:text-3xl font-black text-emerald-400 font-mono" : "text-2xl sm:text-3xl font-black text-amber-400 font-mono";
+                    }
+                }
+            } catch (err) {
+                console.warn('Admin stats error:', err);
+            }
+        }
+
+        // Helper to copy user-specific WhatsApp Gateway API cURL
+        function copyUserGatewayCurl(username) {
+            const origin = window.location.origin;
+            const curlCode = `curl -X POST ${origin}/api/send \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "username": "${username}",\n    "phone": "919876543210",\n    "message": "Hello from WhatsMeow WhatsApp Gateway!"\n  }'`;
+            
+            navigator.clipboard.writeText(curlCode);
+            alert(`Copied WhatsApp Gateway API Endpoint cURL for user @${username}!\n\nEndpoint URL: ${origin}/api/send\nUsername: ${username}`);
+        }
+
+        // 2. FETCH TENANT ACCOUNTS TABLE (CATEGORIZED RENDERING WITH INDIVIDUAL GATEWAY ENDPOINTS)
+        async function fetchTenantAccounts() {
+            const bizTbody = document.getElementById('business-tenants-tbody');
+            const libTbody = document.getElementById('library-tenants-tbody');
+            try {
+                const res = await fetch('/api/admin/users', { headers: getAdminHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const users = data.users || [];
+
+                const bizUsers = users.filter(u => u.user_type === 'business_user' || u.user_type === 'business_marketing');
+                const libUsers = users.filter(u => u.user_type === 'library_owner' || u.user_type === 'library_partner');
+
+                document.getElementById('count-biz-badge').innerText = bizUsers.length;
+                document.getElementById('count-lib-badge').innerText = libUsers.length;
+
+                // Render Business Accounts
+                if (bizTbody) {
+                    bizTbody.innerHTML = '';
+                    if (bizUsers.length === 0) {
+                        bizTbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-500 font-mono">No business marketing tenants registered yet.</td></tr>`;
+                    } else {
+                        bizUsers.forEach(u => {
+                            const userEmail = u.email || (u.username + '@gmail.com');
+                            const tr = document.createElement('tr');
+                            tr.className = "hover:bg-slate-900/40 transition";
+                            tr.innerHTML = `
+                                <td class="p-3 text-slate-200 font-bold">
+                                    <div>${u.account_name || 'Business'}</div>
+                                    <div class="text-[10px] text-slate-400 font-mono font-normal">${userEmail}</div>
+                                </td>
+                                <td class="p-3 font-mono text-cyan-400 font-bold">${u.username}</td>
+                                <td class="p-3 font-mono text-slate-300">
+                                    ${u.wa_jid ? '<span class="text-emerald-400 font-bold"><i class="fa-brands fa-whatsapp mr-1"></i>+' + u.wa_jid + '</span>' : '<span class="text-slate-500">Not Linked</span>'}
+                                </td>
+                                <td class="p-3">
+                                    <div class="flex flex-col gap-1">
+                                        <code class="text-[10px] text-cyan-300 bg-slate-900 border border-slate-800 px-2 py-1 rounded font-mono break-all font-bold">/api/send?username=${u.username}</code>
+                                        <button onclick="copyUserGatewayCurl('${u.username}')" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/20 cursor-pointer flex items-center gap-1 w-fit transition" title="Copy WhatsMeow Gateway API cURL for @${u.username}">
+                                            <i class="fa-solid fa-code text-[10px]"></i>
+                                            <span>Copy cURL</span>
+                                        </button>
+                                    </div>
+                                </td>
+                                <td class="p-3">
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${u.automation_access ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}">
+                                        ${u.automation_access ? 'Active' : 'Disabled'}
+                                    </span>
+                                </td>
+                                <td class="p-3 text-right space-x-1.5 whitespace-nowrap">
+                                    <button onclick="manageTenant('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 cursor-pointer">Manage</button>
+                                    <button onclick="toggleTenantAccess('${u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 cursor-pointer">${u.automation_access ? 'Revoke' : 'Enable'}</button>
+                                    <button onclick="deleteTenantAccount('${u.username}', this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-950/40 text-rose-300 border border-rose-900/80 hover:bg-rose-900/60 active:scale-95 transition inline-flex items-center gap-1 cursor-pointer" title="Permanently Delete Tenant">
+                                        <i class="fa-solid fa-trash-can text-[10px]"></i>
+                                        <span>Delete</span>
+                                    </button>
+                                </td>
+                            `;
+                            bizTbody.appendChild(tr);
+                        });
+                    }
+                }
+
+                // Render Library Accounts
+                if (libTbody) {
+                    libTbody.innerHTML = '';
+                    if (libUsers.length === 0) {
+                        libTbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-500 font-mono">No library partner accounts registered yet.</td></tr>`;
+                    } else {
+                        libUsers.forEach(u => {
+                            const userEmail = u.email || (u.username + '@gmail.com');
+                            const tr = document.createElement('tr');
+                            tr.className = "hover:bg-slate-900/40 transition";
+                            tr.innerHTML = `
+                                <td class="p-3 text-slate-200 font-bold">
+                                    <div>${u.account_name || 'Library'}</div>
+                                    <div class="text-[10px] text-slate-400 font-mono font-normal">${userEmail}</div>
+                                </td>
+                                <td class="p-3 font-mono text-amber-400 font-bold">${u.username}</td>
+                                <td class="p-3 font-mono text-slate-300">
+                                    ${u.wa_jid ? '<span class="text-emerald-400 font-bold"><i class="fa-brands fa-whatsapp mr-1"></i>+' + u.wa_jid + '</span>' : '<span class="text-slate-500">Not Linked</span>'}
+                                </td>
+                                <td class="p-3">
+                                    <div class="flex flex-col gap-1">
+                                        <code class="text-[10px] text-amber-300 bg-slate-900 border border-slate-800 px-2 py-1 rounded font-mono break-all font-bold">/api/send?username=${u.username}</code>
+                                        <button onclick="copyUserGatewayCurl('${u.username}')" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 cursor-pointer flex items-center gap-1 w-fit transition" title="Copy WhatsMeow Gateway API cURL for @${u.username}">
+                                            <i class="fa-solid fa-code text-[10px]"></i>
+                                            <span>Copy cURL</span>
+                                        </button>
+                                    </div>
+                                </td>
+                                <td class="p-3">
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${u.automation_access ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}">
+                                        ${u.automation_access ? 'Active' : 'Disabled'}
+                                    </span>
+                                </td>
+                                <td class="p-3 text-right space-x-1.5 whitespace-nowrap">
+                                    <button onclick="manageTenant('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 cursor-pointer">Manage</button>
+                                    <button onclick="toggleTenantAccess('${u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 cursor-pointer">${u.automation_access ? 'Revoke' : 'Enable'}</button>
+                                    <button onclick="deleteTenantAccount('${u.username}', this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-950/40 text-rose-300 border border-rose-900/80 hover:bg-rose-900/60 active:scale-95 transition inline-flex items-center gap-1 cursor-pointer" title="Permanently Delete Tenant">
+                                        <i class="fa-solid fa-trash-can text-[10px]"></i>
+                                        <span>Delete</span>
+                                    </button>
+                                </td>
+                            `;
+                            libTbody.appendChild(tr);
+                        });
+                    }
+                }
+
+            } catch (err) {
+                console.warn('Golang tenant table API ready');
+            }
+        }
+
+        // 3. CREATE TENANT ACCOUNT (ACCEPT EMAIL e.g. @gmail.com AND DERIVE USERNAME)
+        async function createTenantAccount() {
+            const emailInput = document.getElementById('adm-tenant-email');
+            const email = emailInput ? emailInput.value.trim() : '';
+            const password = document.getElementById('adm-tenant-pass').value.trim();
+            const account_name = document.getElementById('adm-tenant-name').value.trim();
+            const category = document.getElementById('adm-tenant-category').value;
+            const user_type = category === 'library_partner' ? 'library_owner' : 'business_user';
+
+            if (!email || !password) return showToast('Email Address and Password required', 'error');
+
+            // Handle secret logic for @gmail.com / email inputs
+            const fullEmail = email.includes('@') ? email : `${email}@gmail.com`;
+            const username = fullEmail.split('@')[0].replace(/[^a-zA-Z0-9_.]/g, '_');
+
+            try {
+                const res = await fetch('/api/admin/create-user', {
+                    method: 'POST',
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({ email: fullEmail, username, password, account_name, user_type })
+                });
+                const data = await res.json();
+                if (data.status === 'success' || data.message) {
+                    showToast(data.message || 'Tenant account created successfully!', 'success');
+                    if (emailInput) emailInput.value = '';
+                    document.getElementById('adm-tenant-pass').value = '';
+                    document.getElementById('adm-tenant-name').value = '';
+                    await fetchTenantAccounts();
+                    await fetchAdminStats();
+                } else {
+                    showToast(data.error || 'Creation failed', 'error');
+                }
+            } catch (err) {
+                showToast('Creation request failed', 'error');
+            }
+        }
+
+        // 4. TOGGLE TENANT ACCESS
+        async function toggleTenantAccess(username) {
+            try {
+                const res = await fetch('/api/admin/toggle-automation', {
+                    method: 'POST',
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({ username })
+                });
+                const data = await res.json();
+                showToast(data.message || 'Access updated', 'success');
+                await fetchTenantAccounts();
+            } catch (err) {
+                showToast('Failed to toggle access', 'error');
+            }
+        }
+
+        // 5. TOAST NOTIFICATION HANDLER
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('admin-toast');
+            const icon = document.getElementById('toast-icon');
+            const text = document.getElementById('toast-msg');
+            if (!toast || !text) return;
+            text.innerText = msg;
+            if (type === 'success') {
+                toast.className = "fixed top-5 right-5 z-[100] max-w-sm px-4 py-3 rounded-2xl shadow-2xl border text-xs font-semibold flex items-center gap-3 bg-emerald-950/95 border-emerald-500/50 text-emerald-200 backdrop-blur-md transition-all duration-300";
+                icon.className = "fa-solid fa-circle-check text-emerald-400 text-base";
+            } else {
+                toast.className = "fixed top-5 right-5 z-[100] max-w-sm px-4 py-3 rounded-2xl shadow-2xl border text-xs font-semibold flex items-center gap-3 bg-rose-950/95 border-rose-500/50 text-rose-200 backdrop-blur-md transition-all duration-300";
+                icon.className = "fa-solid fa-circle-xmark text-rose-400 text-base";
+            }
+            toast.classList.remove('hidden');
+            clearTimeout(window._toastTimeout);
+            window._toastTimeout = setTimeout(() => {
+                toast.classList.add('hidden');
+            }, 4000);
+        }
+
+        // 6. DELETE TENANT MODAL & API HANDLERS (Zero browser alert/confirm blocks)
+        let pendingDeleteUser = '';
+        let pendingDeleteBtn = null;
+
+        function openDeleteModal(username, accountName, btn) {
+            pendingDeleteUser = username;
+            pendingDeleteBtn = btn;
+            const modal = document.getElementById('delete-tenant-modal');
+            const uEl = document.getElementById('del-modal-username');
+            const aEl = document.getElementById('del-modal-account');
+            if (uEl) uEl.innerText = `@${username}`;
+            if (aEl) aEl.innerText = accountName || username;
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeDeleteModal() {
+            pendingDeleteUser = '';
+            pendingDeleteBtn = null;
+            const modal = document.getElementById('delete-tenant-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        async function executeDeleteTenant() {
+            const username = pendingDeleteUser;
+            const btn = pendingDeleteBtn;
+            if (!username) return;
+
+            const confirmBtn = document.getElementById('del-modal-confirm-btn');
+            const originalHtml = confirmBtn ? confirmBtn.innerHTML : 'Delete';
+            if (confirmBtn) {
+                confirmBtn.disabled = true;
+                confirmBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Wiping DB...';
+            }
+
+            try {
+                const res = await fetch('/api/admin/delete-user', {
+                    method: 'POST',
+                    headers: getAdminHeaders(),
+                    body: JSON.stringify({ username })
+                });
+                const data = await res.json();
+                if (data.status === 'success' || data.message) {
+                    closeDeleteModal();
+                    if (btn && btn.closest('tr')) {
+                        btn.closest('tr').remove();
+                    }
+                    showToast(data.message || `Tenant @${username} completely wiped from Database!`, 'success');
+                    await fetchTenantAccounts();
+                    await fetchAdminStats();
+                } else {
+                    showToast(data.error || 'Failed to delete tenant', 'error');
+                }
+            } catch (err) {
+                showToast('Request failed while deleting tenant from DB', 'error');
+            } finally {
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    confirmBtn.innerHTML = originalHtml;
+                }
+            }
+        }
+
+        // Direct alias for backward-compatibility
+        function deleteTenantAccount(username, btn) {
+            openDeleteModal(username, username, btn);
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkAdminAuth();
+            setupGatewayEndpoints();
+            switchAdminTab('overview');
+        });
+    </script>
+</body>
+</html>

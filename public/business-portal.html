@@ -1,0 +1,2076 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Business Workspace | EduCloud SaaS</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- QRCode JS Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            500: '#10b981',
+                            600: '#059669',
+                            700: '#047857'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome, QRCode & Marked Markdown via CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
+        .glass-card { background: rgba(15, 23, 42, 0.82); backdrop-filter: blur(16px); border: 1px solid rgba(51, 65, 85, 0.45); }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-[#0f172a] text-slate-100 overflow-hidden selection:bg-emerald-500 selection:text-black">
+
+    <!-- Mobile Top Navigation Header -->
+    <header class="md:hidden h-14 px-4 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between shrink-0 z-30">
+        <div class="flex items-center gap-3">
+            <button type="button" onclick="toggleSidebar()" class="p-2 text-slate-400 hover:text-white rounded-lg focus:outline-none cursor-pointer" aria-label="Toggle Navigation">
+                <i class="fa-solid fa-bars text-lg"></i>
+            </button>
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20 text-xs">
+                    <i class="fa-brands fa-whatsapp"></i>
+                </div>
+                <span class="font-black text-sm tracking-tight text-white">Edu<span class="text-emerald-400">Cloud</span></span>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <div id="biz-mobile-neon-pill" class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                <i class="fa-solid fa-database text-[9px]"></i>
+                <span id="biz-mobile-neon-text">Cloud DB</span>
+            </div>
+            <div id="biz-mobile-wa-pill" class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Online</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden relative">
+        
+        <!-- Mobile Sidebar Backdrop -->
+        <div id="sidebar-backdrop" onclick="toggleSidebar()" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 md:hidden transition-opacity"></div>
+
+        <!-- Responsive Sidebar Navigation -->
+        <aside id="sidebar-drawer" class="fixed inset-y-0 left-0 z-50 md:static md:translate-x-0 -translate-x-full w-64 bg-slate-950 border-r border-slate-800/80 flex flex-col shrink-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none">
+            <!-- Brand -->
+            <div class="h-16 px-5 flex items-center justify-between border-b border-slate-800/80">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20 text-base shadow-sm">
+                        <i class="fa-brands fa-whatsapp"></i>
+                    </div>
+                    <div>
+                        <span class="font-black text-sm tracking-tight text-white">Edu<span class="text-emerald-400">Cloud</span></span>
+                        <div class="text-[9px] font-bold text-emerald-400 uppercase font-mono tracking-wider">BUSINESS PORTAL</div>
+                    </div>
+                </div>
+                <!-- Close Button on Mobile -->
+                <button type="button" onclick="toggleSidebar()" class="md:hidden text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+
+            <!-- Business Tenant Header Card -->
+            <div class="p-4 border-b border-slate-800/60 bg-slate-900/40">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-indigo-950 text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-800">
+                        <i class="fa-solid fa-briefcase"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div id="biz-tenant-name" class="text-xs font-bold text-white truncate">Business Client</div>
+                        <div id="biz-tenant-sub" class="text-[10px] text-slate-400 font-mono truncate">@tenant</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Preview Mode Banner (3rd div child in sidebar-drawer) -->
+            <div id="admin-preview-banner" class="hidden p-3 bg-amber-500/10 border-b border-amber-500/30 text-amber-300 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-1.5 font-bold text-[11px] truncate">
+                        <i class="fa-solid fa-shield-halved text-amber-400 shrink-0"></i>
+                        <span id="admin-preview-text" class="truncate">Admin Preview Mode</span>
+                    </div>
+                    <button type="button" onclick="exitAdminMode()" class="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded text-[10px] font-bold transition shrink-0 cursor-pointer">
+                        Exit
+                    </button>
+                </div>
+            </div>
+
+            <!-- Sidebar Tabs -->
+            <nav class="flex-1 p-3 space-y-1.5 overflow-y-auto">
+                <button type="button" onclick="switchTab('dashboard')" id="nav-tab-dashboard" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-white bg-slate-900 border border-slate-800 transition cursor-pointer">
+                    <i class="fa-solid fa-chart-line text-emerald-400 w-4"></i>
+                    <span>Dashboard & Leads</span>
+                </button>
+                <button type="button" onclick="switchTab('connect')" id="nav-tab-connect" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-qrcode text-indigo-400 w-4"></i>
+                    <span>WhatsApp Link Setup</span>
+                </button>
+                <button type="button" onclick="switchTab('bulk')" id="nav-tab-bulk" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-paper-plane text-cyan-400 w-4"></i>
+                    <span>Bulk Outreach</span>
+                </button>
+                <!-- NEW TAB: Product Catalog -->
+                <button type="button" onclick="switchTab('catalog')" id="nav-tab-catalog" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-boxes-stacked text-amber-400 w-4"></i>
+                    <span>Product Catalog</span>
+                </button>
+                <button type="button" onclick="switchTab('ai')" id="nav-tab-ai" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-robot text-purple-400 w-4"></i>
+                    <span>AI Lead Responder</span>
+                </button>
+                <button type="button" onclick="switchTab('profile')" id="nav-tab-profile" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-user-shield text-emerald-400 w-4"></i>
+                    <span>Profile & Security</span>
+                </button>
+            </nav>
+
+            <!-- Bottom Actions -->
+            <div class="p-3 border-t border-slate-800/80">
+                <button type="button" onclick="handleLogout()" class="w-full py-2 bg-slate-900 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-bold transition border border-slate-800 hover:border-rose-900 flex items-center justify-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                    <span>Logout Session</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col min-w-0 bg-[#0f172a] overflow-hidden">
+            <!-- Desktop Top App Bar -->
+            <header class="hidden md:flex h-16 px-6 border-b border-slate-800/80 bg-slate-950/70 items-center justify-between shrink-0">
+                <h2 id="biz-view-title" class="text-sm font-bold text-white tracking-wide">Business Dashboard & Leads</h2>
+                <div class="flex items-center gap-3">
+                    <div id="biz-neon-status-pill" class="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                        <i class="fa-solid fa-database text-emerald-400 text-xs"></i>
+                        <span id="biz-neon-status-text">Database Connected</span>
+                    </div>
+                    <div id="biz-wa-status-pill" class="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span id="biz-wa-status-text">Connected</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Views Container -->
+            <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+                
+                <!-- ========================================== -->
+                <!-- TAB 1: DASHBOARD & RECENT LEADS            -->
+                <!-- ========================================== -->
+                <div id="view-dashboard" class="biz-tab-content space-y-6">
+                    <!-- Metric Cards (Responsive Grid) -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Active Campaigns</div>
+                            <div id="biz-stat-campaigns" class="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">-</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Leads Captured</div>
+                            <div id="biz-stat-leads" class="text-2xl sm:text-3xl font-black text-indigo-400 font-mono">-</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Delivered Messages</div>
+                            <div id="biz-stat-delivered" class="text-2xl sm:text-3xl font-black text-cyan-400 font-mono">-</div>
+                        </div>
+                        <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">AI Automated Replies</div>
+                            <div id="biz-stat-ai" class="text-2xl sm:text-3xl font-black text-purple-400 font-mono">-</div>
+                        </div>
+                    </div>
+
+                    <!-- Table for "Recent Captured Leads" (Fully Responsive with overflow-x-auto) -->
+                    <div class="glass-card rounded-2xl border border-slate-800 overflow-hidden">
+                        <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                            <span class="text-xs font-bold text-white">Recent Captured Leads</span>
+                            <button type="button" onclick="fetchRecentLeads()" class="text-xs text-emerald-400 hover:underline cursor-pointer flex items-center gap-1">
+                                <i class="fa-solid fa-rotate"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs min-w-[580px]">
+                                <thead>
+                                    <tr class="text-[10px] uppercase text-slate-400 bg-slate-950/60 border-b border-slate-800 font-mono">
+                                        <th class="p-3">Customer Phone</th>
+                                        <th class="p-3">Inquiry / Lead Detail</th>
+                                        <th class="p-3">Lead Status</th>
+                                        <th class="p-3">Timestamp</th>
+                                        <th class="p-3 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <!-- Empty <tbody> Ready for Golang API (Zero Mock Data) -->
+                                <tbody id="lead-table" class="divide-y divide-slate-800/60 text-slate-300"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========================================== -->
+                <!-- TAB 2: WHATSAPP LINK SETUP (QR & 8-DIGIT)  -->
+                <!-- ========================================== -->
+                <div id="view-connect" class="biz-tab-content hidden max-w-4xl mx-auto space-y-6">
+                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 text-center">
+                        <h3 class="text-base font-bold text-white mb-1">WhatsApp Web Session Pairing</h3>
+                        <p class="text-xs text-slate-400 mb-6">Scan QR Code or enter your 8-digit code on WhatsApp to authorize automation.</p>
+                        
+                        <!-- 1. QR Code Scanner Box (Empty Container) -->
+                        <div class="w-56 h-56 sm:w-60 sm:h-60 mx-auto bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-center shadow-inner">
+                            <div id="biz-qrcode-box"></div>
+                        </div>
+
+                        <!-- 2. "Pair with 8-Digit Code" Input Box -->
+                        <div class="mt-8 pt-6 border-t border-slate-800/80 text-left">
+                            <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                                <span>Pair with 8-Digit Code</span>
+                                <span class="text-[10px] text-indigo-400 font-normal">Alternative to QR</span>
+                            </label>
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input type="text" id="biz-pair-phone-input" placeholder="Enter phone with country code (e.g. 919876543202)" class="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                                <button type="button" onclick="pairWithEightDigitCode()" class="w-full sm:w-auto px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer">
+                                    Get Code
+                                </button>
+                            </div>
+                            <!-- 8-Digit Code Output Box -->
+                            <div id="eight-digit-display-box" class="hidden mt-3 p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-center">
+                                <div class="text-[10px] uppercase text-emerald-400 font-bold tracking-wider mb-1">Your WhatsApp 8-Digit Pairing Code:</div>
+                                <div id="eight-digit-code" class="text-2xl font-black text-emerald-300 font-mono tracking-widest"></div>
+                            </div>
+                        </div>
+
+                        <!-- Session Buttons -->
+                        <div class="mt-6 flex flex-col sm:flex-row justify-center gap-3">
+                            <button type="button" onclick="fetchWhatsAppQR()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 cursor-pointer flex items-center justify-center gap-1.5">
+                                <i class="fa-solid fa-arrows-rotate text-emerald-400"></i> Refresh QR
+                            </button>
+                            <button type="button" onclick="unlinkWhatsAppDevice()" class="px-4 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-xl text-xs font-bold border border-rose-900 cursor-pointer flex items-center justify-center gap-1.5">
+                                <i class="fa-solid fa-link-slash"></i> Unpair WhatsApp
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Live Customer Chats & Contacts Card (Neon DB Real-time Memory) -->
+                    <div class="glass-card p-5 sm:p-6 rounded-3xl border border-slate-800 space-y-4 text-left">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                            <div>
+                                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-comments text-emerald-400"></i>
+                                    <span>WhatsApp Inbound Customer Chats</span>
+                                </h3>
+                                <p class="text-[11px] text-slate-400">Real-time DB chat memory (Strictly last recent 10 messages stored & displayed).</p>
+                            </div>
+                            <div class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5">
+                                <i class="fa-solid fa-clock-rotate-left"></i>
+                                <span>5-Day Inactivity Auto-Purge Active</span>
+                            </div>
+                        </div>
+
+                        <!-- Info Banner -->
+                        <div class="p-3 rounded-2xl bg-cyan-950/30 border border-cyan-800/50 text-[11px] text-cyan-200 leading-relaxed flex items-start gap-2">
+                            <i class="fa-solid fa-database text-cyan-400 mt-0.5 shrink-0"></i>
+                            <div>
+                                <span class="font-bold text-white">Database Context Memory:</span> Chats are saved directly in Neon PostgreSQL (zero RAM load). Only the last 10 messages per customer are retained to provide AI with real-time sliding context. Inactive chats with no messages for 5 days are automatically purged from DB.
+                            </div>
+                        </div>
+
+                        <!-- Active Contact Select & Messages Container -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <!-- Left Column: Customer Contacts List -->
+                            <div class="md:col-span-1 space-y-2">
+                                <div class="flex items-center justify-between">
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">Contacts / Chats</label>
+                                    <button type="button" onclick="loadCustomerConversationsList()" class="text-[10px] text-emerald-400 hover:underline font-mono cursor-pointer"><i class="fa-solid fa-rotate"></i> Reload</button>
+                                </div>
+                                <div id="chat-contact-list" class="space-y-1.5 max-h-[320px] overflow-y-auto pr-1">
+                                    <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-500 text-xs text-center">
+                                        Loading contacts...
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right Column: Last 10 Messages Box & Send Reply -->
+                            <div class="md:col-span-2 flex flex-col h-[360px] bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
+                                <!-- Chat Header -->
+                                <div class="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <i class="fa-brands fa-whatsapp text-emerald-400"></i>
+                                        <span id="chat-active-phone" class="text-xs font-bold font-mono text-white">Select a contact</span>
+                                    </div>
+                                    <button type="button" onclick="refreshActiveChatMessages()" class="text-[11px] text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 font-mono">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                    </button>
+                                </div>
+
+                                <!-- Messages Box (Last 10 Messages) -->
+                                <div id="chat-messages-box" class="flex-1 p-3.5 space-y-3 overflow-y-auto text-xs">
+                                    <div class="text-center text-slate-500 py-12">
+                                        Select a lead or customer from the left list to view their last 10 recent messages.
+                                    </div>
+                                </div>
+
+                                <!-- Send Reply Input -->
+                                <div class="p-2.5 bg-slate-900 border-t border-slate-800 flex items-center gap-2">
+                                    <input type="text" id="chat-reply-text" placeholder="Type WhatsApp reply..." class="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500" onkeydown="if(event.key==='Enter') sendDirectChatReply()">
+                                    <button type="button" onclick="sendDirectChatReply()" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1">
+                                        <i class="fa-solid fa-paper-plane"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========================================== -->
+                <!-- TAB 3: BULK OUTREACH                       -->
+                <!-- ========================================== -->
+                <div id="view-bulk" class="biz-tab-content hidden max-w-3xl mx-auto space-y-6">
+                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-bold text-white">Bulk WhatsApp Broadcast Campaign</h3>
+                            <span class="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded font-mono">Anti-Ban Engine</span>
+                        </div>
+
+                        <!-- Textarea for Target Numbers -->
+                        <div>
+                            <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Target Numbers (One per line)</label>
+                            <textarea id="bulk-phones" rows="4" placeholder="Enter phone numbers, one per line..." class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"></textarea>
+                        </div>
+
+                        <!-- Textarea for Message Text -->
+                        <div>
+                            <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Message Text (Supports {{name}} variables)</label>
+                            <textarea id="bulk-message" rows="3" placeholder="Enter message text..." class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600"></textarea>
+                        </div>
+
+                        <!-- Ephemeral Broadcast Image Attachment (Auto-deletes after sending) -->
+                        <div class="space-y-2">
+                            <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                <i class="fa-solid fa-paperclip text-emerald-400 mr-1"></i> Attach Broadcast Image <span class="text-slate-500 font-normal lowercase">(optional - auto-deletes immediately upon send)</span>
+                            </label>
+                            
+                            <!-- File Picker Button -->
+                            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                                <label class="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold border border-slate-700 hover:border-emerald-500/50 cursor-pointer flex items-center justify-center gap-2 transition shrink-0 shadow-sm">
+                                    <i class="fa-solid fa-cloud-arrow-up text-emerald-400"></i>
+                                    <span id="bulk-file-label-text">Select Image to Broadcast</span>
+                                    <input type="file" id="bulk-image-file" class="hidden" accept="image/*" onchange="handleBulkImageSelect(event)">
+                                </label>
+                                <span class="text-[11px] text-slate-500">Image is attached temporarily to this campaign and immediately auto-deleted from disk after sending.</span>
+                            </div>
+
+                            <!-- Image Preview Card (Shown when file selected) -->
+                            <div id="bulk-image-preview-card" class="hidden p-3 rounded-2xl bg-slate-900/90 border border-emerald-500/30 flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 overflow-hidden">
+                                    <img id="bulk-image-preview-thumb" src="" alt="Broadcast Preview" class="w-12 h-12 object-cover rounded-xl border border-slate-700 shrink-0">
+                                    <div class="truncate">
+                                        <p id="bulk-image-preview-name" class="text-xs font-bold text-white truncate">image.jpg</p>
+                                        <p id="bulk-image-preview-size" class="text-[10px] font-mono text-emerald-400">0 KB · Ephemeral</p>
+                                    </div>
+                                </div>
+                                <button type="button" onclick="clearBulkImageAttachment()" class="px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[11px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer" title="Remove attachment">
+                                    <i class="fa-solid fa-xmark"></i> Remove
+                                </button>
+                            </div>
+                            <input type="hidden" id="bulk-ephemeral-data-url">
+                        </div>
+
+                        <!-- Checkbox for "Humanized Anti-Ban Randomized Delay" -->
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                            <div class="flex items-center gap-2.5">
+                                <input type="checkbox" id="bulk-antiban-check" checked class="w-4 h-4 rounded accent-emerald-500">
+                                <label for="bulk-antiban-check" class="text-xs font-medium text-slate-300">Humanized Anti-Ban Randomized Delay</label>
+                            </div>
+                            <button type="button" onclick="launchBulkCampaign()" class="w-full sm:w-auto px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                <i class="fa-solid fa-paper-plane text-slate-950"></i>
+                                <span>Launch Bulk Campaign</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Delivery Logs Table Container (Responsive) -->
+                    <div class="glass-card p-5 rounded-2xl border border-slate-800">
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="text-xs font-bold text-white">Campaign Delivery Logs</h4>
+                            <button type="button" onclick="fetchCampaignLogs()" class="text-xs text-emerald-400 hover:underline cursor-pointer">Refresh Logs</button>
+                        </div>
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs min-w-[500px]">
+                                <thead>
+                                    <tr class="text-[10px] uppercase text-slate-400 border-b border-slate-800 font-mono">
+                                        <th class="p-2.5">Phone</th>
+                                        <th class="p-2.5">Status</th>
+                                        <th class="p-2.5">Time</th>
+                                    </tr>
+                                </thead>
+                                <!-- Empty logs tbody (Zero Mock Data) -->
+                                <tbody id="bulk-logs-body" class="divide-y divide-slate-800/60 font-mono text-slate-300"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ============================================================== -->
+                <!-- TAB 4: PRODUCT CATALOG (NEW DEDICATED TAB)                     -->
+                <!-- ============================================================== -->
+                <div id="view-catalog" class="biz-tab-content hidden max-w-4xl mx-auto space-y-6">
+                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-6">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
+                            <div>
+                                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-boxes-stacked text-amber-400"></i> Product Catalog & Knowledge Base
+                                </h3>
+                                <p class="text-xs text-slate-400 mt-0.5">Manage products and services stored in the cloud database. AI Auto-Responder automatically personalizes replies using these items and pricing.</p>
+                            </div>
+                            <button type="button" onclick="loadProductCatalog()" class="text-xs text-amber-400 hover:underline cursor-pointer flex items-center gap-1 self-end sm:self-auto">
+                                <i class="fa-solid fa-rotate"></i> Refresh Catalog
+                            </button>
+                        </div>
+
+                        <!-- Form for Users to Add a Product/Service -->
+                        <form id="product-form" onsubmit="event.preventDefault(); addProduct();" class="p-4 sm:p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 space-y-4">
+                            <div class="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+                                <span class="flex items-center gap-2">
+                                    <i class="fa-solid fa-plus text-amber-400"></i> Add Catalog Item
+                                </span>
+                                <span id="item-type-badge" class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                                    Product Mode
+                                </span>
+                            </div>
+
+                            <!-- Item Classification: Product vs Service Selection -->
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Select Item Classification</label>
+                                <div class="grid grid-cols-2 gap-2.5">
+                                    <button type="button" id="type-prod-btn" onclick="setCatalogType('product')" class="p-2.5 rounded-xl border border-amber-500 bg-amber-500/10 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm">
+                                        <i class="fa-solid fa-box text-amber-400"></i>
+                                        <span>Physical / Digital Product</span>
+                                    </button>
+                                    <button type="button" id="type-serv-btn" onclick="setCatalogType('service')" class="p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
+                                        <i class="fa-solid fa-bolt text-indigo-400"></i>
+                                        <span>Consultation / Service</span>
+                                    </button>
+                                </div>
+                                <input type="hidden" id="item-type-input" value="product">
+                            </div>
+
+                            <!-- Product Name & UNIT Selection -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label id="lbl-item-name" class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Product Name</label>
+                                    <input type="text" id="product-name" placeholder="e.g. Fresh Amul Milk" required class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">UNIT</label>
+                                    <select id="product-unit" onchange="handleUnitChange()" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 font-medium">
+                                        <option value="weight">Weight (1 kg, 500 gram, 250 gram)</option>
+                                        <option value="volume">Volume (1 Liter, 500 ml, 250 ml)</option>
+                                        <option value="size">Size (Full, Half, Quarter)</option>
+                                        <option value="quantity">Quantity (1 Piece, Pack of 6, Pack of 12)</option>
+                                        <option value="custom">Custom Variety / Custom Unit</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Dynamic Variants / Variety & Pricing (in ₹) -->
+                            <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                        <i class="fa-solid fa-tags"></i> Variants / Variety & Pricing (in ₹)
+                                    </label>
+                                    <button type="button" onclick="addVariantRow('', '')" class="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer">
+                                        <i class="fa-solid fa-plus text-xs"></i> Add Variety / Variant
+                                    </button>
+                                </div>
+
+                                <div id="variant-rows-container" class="space-y-2">
+                                    <!-- Dynamic Variant Rows render here -->
+                                </div>
+                            </div>
+
+                            <!-- Description -->
+                            <div>
+                                <label id="lbl-item-desc" class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
+                                <textarea id="product-desc" rows="2" placeholder="Enter product description, specifications, or notes..." required class="w-full p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"></textarea>
+                            </div>
+
+                            <div class="flex items-center justify-between gap-3 pt-2">
+                                <span class="text-[11px] text-slate-500 flex items-center gap-1.5">
+                                    <i class="fa-solid fa-database text-amber-400"></i> Saved directly in PostgreSQL DB
+                                </span>
+                                <!-- Add Item Submit Button -->
+                                <button type="submit" id="btn-add-item" class="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md">
+                                    <i class="fa-solid fa-plus text-slate-950"></i>
+                                    <span id="btn-add-item-text">Add Product</span>
+                                </button>
+                            </div>
+                        </form>
+
+                        <!-- Empty Grid Container for Golang Backend Dynamic Injection (Zero Mock Items) -->
+                        <div>
+                            <div class="text-xs font-bold text-white uppercase tracking-wider mb-3 flex items-center justify-between">
+                                <span>Catalog Items</span>
+                                <span class="text-[10px] text-slate-500 font-mono">Dynamic Catalog</span>
+                            </div>
+                            <div id="catalog-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ============================================================== -->
+                <!-- TAB 5: AI LEAD RESPONDER (UPDATED WITH MANUAL MODEL & TEMP)     -->
+                <!-- ============================================================== -->
+                <div id="view-ai" class="biz-tab-content hidden max-w-3xl mx-auto space-y-6">
+                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-5">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h3 class="text-sm font-bold text-white">AI Lead Responder Configurator</h3>
+                                <p class="text-xs text-slate-400 mt-0.5">Automate sales qualification and conversational outreach on WhatsApp.</p>
+                            </div>
+                            <span class="text-[10px] text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2.5 py-1 rounded-full font-mono font-bold">24/7 Autopilot</span>
+                        </div>
+
+                        <!-- AI Platform Select & Manual Model Input -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- AI Platform Select: Groq, Gemini, ChatGPT, DeepSeek, OpenRouter -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">AI Platform</label>
+                                <select id="ai-platform" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500">
+                                    <option value="Groq">Groq</option>
+                                    <option value="Gemini">Gemini</option>
+                                    <option value="ChatGPT">ChatGPT</option>
+                                    <option value="DeepSeek">DeepSeek</option>
+                                    <option value="OpenRouter">OpenRouter</option>
+                                </select>
+                            </div>
+
+                            <!-- Manual Model Input (NEW): Exact model name typed manually -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Model Name (Manual Input)</label>
+                                <input type="text" id="ai-model" placeholder="e.g. gemini-1.5-flash or llama3-70b-8192" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600">
+                            </div>
+                        </div>
+
+                        <!-- AI Temperature & API Key Input -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- AI Temperature (NEW): Slider / Number 0.0 to 2.0, step 0.1 -->
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">AI Temperature</label>
+                                    <span id="temp-display-val" class="text-xs font-mono font-bold text-purple-400">0.7</span>
+                                </div>
+                                <div class="flex items-center gap-3 h-[42px] px-3.5 bg-slate-950 border border-slate-800 rounded-xl">
+                                    <input type="range" id="ai-temperature" min="0.0" max="2.0" step="0.1" value="0.7" oninput="document.getElementById('temp-display-val').innerText = this.value" class="w-full accent-purple-500 cursor-pointer">
+                                </div>
+                            </div>
+
+                            <!-- Multiple API Key Input (Round-Robin Rotation) -->
+                            <div class="sm:col-span-2">
+                                <div class="flex items-center justify-between mb-1">
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">AI API Keys (Round-Robin Multi-Key Rotation)</label>
+                                    <span class="text-[10px] text-emerald-400 font-mono font-bold"><i class="fa-solid fa-arrows-rotate mr-1 animate-spin"></i>Auto Key Rotation Active</span>
+                                </div>
+                                <textarea id="ai-api-key" rows="2" placeholder="Enter single or multiple API keys separated by comma or newline (e.g. key_1, key_2, key_3)" class="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600 leading-relaxed"></textarea>
+                                <p class="text-[10px] text-slate-400 mt-1">
+                                    <span class="text-purple-400 font-bold">Round-Robin Request Rotation:</span> Add multiple API keys (separated by comma `,` or newline). Every incoming WhatsApp request will cycle to the next key sequentially (Key 1 → Key 2 → Key 3 → Key 1) to avoid rate limits!
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- System Prompt Textarea -->
+                        <div>
+                            <div class="flex items-center justify-between mb-1.5">
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">System Prompt (Lead Generation Persona)</label>
+                                <span class="text-[10px] text-purple-400 font-mono font-semibold"><i class="fa-solid fa-sparkles mr-1"></i>24/7 Autopilot</span>
+                            </div>
+                            <textarea id="ai-system-prompt" rows="4" placeholder="Enter system prompt for AI lead qualification..." class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500 leading-relaxed placeholder-slate-600"></textarea>
+                            
+                            <!-- HELPER TEXT FOR 24/7 AI PERSONALIZATION -->
+                            <div class="mt-2.5 p-3 rounded-xl bg-purple-950/30 border border-purple-900/60 text-purple-200 text-xs leading-relaxed flex items-start gap-2.5">
+                                <i class="fa-solid fa-robot text-purple-400 mt-0.5 text-sm shrink-0"></i>
+                                <div>
+                                    <span class="font-bold text-white">24/7 AI Personalization Active:</span> The AI Auto-Responder dynamically reads your Product & Service catalog items and quotes accurate prices, scope, and descriptions directly to prospects on WhatsApp.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- AUTOMATED LEAD GENERATION ALERT DISPATCH NUMBER -->
+                        <div class="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-900/60 space-y-3">
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                                <label class="block text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                                    <i class="fa-solid fa-bell text-emerald-400"></i> Lead Alert Notification Phone Number (WhatsApp)
+                                </label>
+                                <button type="button" onclick="testLeadAlertDispatch()" class="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[11px] font-bold transition flex items-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-paper-plane"></i> Test Alert Dispatch
+                                </button>
+                            </div>
+                            <div>
+                                <input type="text" id="ai-notif-phone" placeholder="Enter notification phone with country code (e.g. 919876543202)" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <p class="text-[11px] text-slate-400 leading-relaxed">
+                                <span class="font-bold text-emerald-400">Automated Lead Alert:</span> When a customer messages your hosted WhatsApp and a lead is captured/qualified, our Go engine automatically forwards full prospect details directly to this WhatsApp number!
+                            </p>
+                        <!-- INTERACTIVE AI RESPONDER TEST SANDBOX -->
+                        <div class="p-4 rounded-2xl bg-purple-950/20 border border-purple-900/60 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                                    <i class="fa-solid fa-flask text-purple-400"></i> Interactive AI Responder Test Sandbox
+                                </label>
+                                <span class="text-[10px] text-purple-400 font-mono font-bold">Instant Prompt & Catalog Test</span>
+                            </div>
+                            
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input type="text" id="ai-test-query" placeholder="Type a test customer question (e.g., 'What are your product prices?')" class="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500" onkeydown="if(event.key==='Enter') runAITestSimulation()">
+                                <button type="button" id="btn-test-ai" onclick="runAITestSimulation()" class="px-5 py-2.5 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0">
+                                    <i class="fa-solid fa-play text-xs"></i>
+                                    <span id="btn-test-ai-text">Test Reply</span>
+                                </button>
+                            </div>
+
+                            <div id="ai-test-result-box" class="hidden p-3.5 rounded-xl bg-slate-950 border border-purple-900/50 space-y-1.5">
+                                <div class="text-[10px] uppercase font-bold text-purple-400 font-mono flex items-center gap-1">
+                                    <i class="fa-solid fa-robot"></i> Generated AI Response:
+                                </div>
+                                <div id="ai-test-reply-content" class="text-xs text-slate-200 leading-relaxed font-sans prose prose-invert max-w-none"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" id="ai-autoreply-check" checked class="w-4 h-4 rounded accent-purple-500">
+                                <label for="ai-autoreply-check" class="text-xs font-medium text-slate-300">Enable 24/7 AI Inbound WhatsApp Auto-Replies</label>
+                            </div>
+                            <button type="button" onclick="saveAISettings()" class="w-full sm:w-auto px-6 py-2.5 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                <i class="fa-solid fa-floppy-disk"></i>
+                                <span>Save AI Settings</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========================================== -->
+                <!-- TAB 6: PROFILE & SECURITY (REAL DATA ONLY) -->
+                <!-- ========================================== -->
+                <div id="view-profile" class="biz-tab-content hidden max-w-3xl mx-auto space-y-6">
+                    <!-- User Profile Card -->
+                    <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-5 border-b border-slate-800 gap-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center text-xl shrink-0">
+                                    <i class="fa-solid fa-id-badge"></i>
+                                </div>
+                                <div>
+                                    <h2 class="text-base font-bold text-white flex items-center gap-2">
+                                        <span id="prof-display-name">Workspace Account</span>
+                                        <span id="prof-type-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">Business</span>
+                                    </h2>
+                                    <p class="text-xs text-slate-400">Authenticated Tenant Profile Details (Real Credentials)</p>
+                                </div>
+                            </div>
+                            <button type="button" onclick="loadUserProfile()" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold border border-slate-800 transition flex items-center gap-1.5 cursor-pointer">
+                                <i class="fa-solid fa-arrows-rotate text-emerald-400"></i>
+                                <span>Refresh</span>
+                            </button>
+                        </div>
+
+                        <!-- Real Details Grid -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Username Handle</div>
+                                <div id="prof-username" class="text-xs font-bold font-mono text-cyan-400">—</div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Email Address</div>
+                                <div id="prof-email" class="text-xs font-bold text-white break-all">—</div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">WhatsApp Phone</div>
+                                <div id="prof-phone" class="text-xs font-bold font-mono text-emerald-400 flex items-center gap-1.5">
+                                    <i class="fa-brands fa-whatsapp"></i>
+                                    <span id="prof-phone-text">Not Linked</span>
+                                </div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">WhatsApp Connection Status</div>
+                                <div>
+                                    <span id="prof-status-pill" class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700 font-mono">Disconnected</span>
+                                </div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">AI Automation Provider</div>
+                                <div id="prof-ai-provider" class="text-xs font-bold text-purple-400 uppercase font-mono">Gemini (Active)</div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Member Since</div>
+                                <div id="prof-created-at" class="text-xs font-mono text-slate-300 font-medium">—</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Change Password Card (2-Step Verification Flow) -->
+                    <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                        <div class="flex items-center gap-3 pb-4 border-b border-slate-800">
+                            <div class="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center text-lg shrink-0">
+                                <i class="fa-solid fa-key"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-sm font-bold text-white">Change Account Password</h3>
+                                <p class="text-xs text-slate-400">Purana password verify hone par naya password set karne ka option show hoga.</p>
+                            </div>
+                        </div>
+
+                        <!-- Feedback Banner -->
+                        <div id="pass-change-alert" class="hidden p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2.5 transition">
+                            <i id="pass-alert-icon" class="text-sm"></i>
+                            <span id="pass-alert-text"></span>
+                        </div>
+
+                        <!-- STEP 1: Verify Current Password (Purana Password) -->
+                        <div class="space-y-3">
+                            <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                                <span>1. Purana Password (Current Password)</span>
+                                <span id="current-pass-status" class="text-[10px] font-mono text-amber-400 font-bold">Step 1 of 2</span>
+                            </label>
+                            <div class="relative">
+                                <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                                <input type="password" id="current-password-input" placeholder="Enter your current password" class="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl focus:ring-2 focus:ring-amber-500 text-white outline-none text-xs font-semibold transition placeholder-slate-600">
+                                <button type="button" onclick="togglePasswordInput('current-password-input', this)" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer">
+                                    <i class="fa-solid fa-eye-slash"></i>
+                                </button>
+                            </div>
+                            <div class="flex items-center justify-end">
+                                <button type="button" id="btn-verify-current-pass" onclick="verifyCurrentPassword()" class="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shadow-lg">
+                                    <i class="fa-solid fa-shield-check"></i>
+                                    <span>Verify Current Password</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- STEP 2: New Password & Confirm (Revealed only after verification) -->
+                        <div id="new-password-step-container" class="hidden p-5 rounded-2xl bg-emerald-950/20 border border-emerald-900/60 space-y-4 transition-all duration-300">
+                            <div class="flex items-center gap-2 text-emerald-400 text-xs font-bold">
+                                <i class="fa-solid fa-circle-check"></i>
+                                <span>Purana password verify ho gaya! Ab naya password set karein:</span>
+                            </div>
+
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">New Password (Naya Password)</label>
+                                    <div class="relative">
+                                        <i class="fa-solid fa-lock-open absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                                        <input type="password" id="new-password-input" minlength="6" placeholder="Enter minimum 6 characters" class="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl focus:ring-2 focus:ring-emerald-500 text-white outline-none text-xs font-semibold transition placeholder-slate-600">
+                                        <button type="button" onclick="togglePasswordInput('new-password-input', this)" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer">
+                                            <i class="fa-solid fa-eye-slash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Confirm New Password</label>
+                                    <div class="relative">
+                                        <i class="fa-solid fa-check-double absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                                        <input type="password" id="confirm-password-input" minlength="6" placeholder="Re-enter your new password" class="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl focus:ring-2 focus:ring-emerald-500 text-white outline-none text-xs font-semibold transition placeholder-slate-600">
+                                        <button type="button" onclick="togglePasswordInput('confirm-password-input', this)" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer">
+                                            <i class="fa-solid fa-eye-slash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                                <span class="text-[11px] text-slate-400">Minimum 6 characters. Both fields must match.</span>
+                                <button type="button" id="btn-save-new-pass" onclick="saveNewPassword()" class="w-full sm:w-auto px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                    <i class="fa-solid fa-floppy-disk"></i>
+                                    <span>Save New Password</span>
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- CLEAN VANILLA JAVASCRIPT (GOLANG BACKEND API STUBS) -->
+    <script>
+        // --- 1. RESPONSIVE SIDEBAR MOBILE TOGGLE ---
+        function toggleSidebar() {
+            const drawer = document.getElementById('sidebar-drawer');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            const isClosed = drawer.classList.contains('-translate-x-full');
+
+            if (isClosed) {
+                drawer.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                drawer.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        // --- 2. AUTH GUARD & SESSION HELPER ---
+        function getActiveUsername() {
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            return localStorage.getItem('impersonating') || user.username || '';
+        }
+
+        function exitAdminMode() {
+            localStorage.removeItem('impersonating');
+            localStorage.removeItem('impersonating_name');
+            window.location.href = '/admin-portal.html';
+        }
+
+        function checkBusinessAuth() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/index.html';
+                return;
+            }
+
+            const role = localStorage.getItem('role');
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            
+            // Non-admins cannot impersonate
+            if (role !== 'admin' && user.role !== 'admin' && user.user_type !== 'admin') {
+                localStorage.removeItem('impersonating');
+                localStorage.removeItem('impersonating_name');
+            }
+
+            const activeImpersonating = localStorage.getItem('impersonating');
+            const impersonatingName = localStorage.getItem('impersonating_name');
+
+            const banner = document.getElementById('admin-preview-banner');
+            const bannerText = document.getElementById('admin-preview-text');
+
+            if (activeImpersonating && (role === 'admin' || user.role === 'admin' || user.user_type === 'admin')) {
+                if (banner) banner.classList.remove('hidden');
+                if (bannerText) bannerText.innerText = `Admin Managing: @${activeImpersonating}`;
+            } else {
+                if (banner) banner.classList.add('hidden');
+            }
+
+            const activeUser = activeImpersonating || user.username || 'business';
+            const activeName = (activeImpersonating ? impersonatingName : user.account_name) || activeUser;
+
+            const nameEl = document.getElementById('biz-tenant-name');
+            const subEl = document.getElementById('biz-tenant-sub');
+            if (nameEl) nameEl.innerText = activeName;
+            if (subEl) subEl.innerText = `@${activeUser}`;
+        }
+
+        // --- 3. TAB CONTROLLER ---
+        function switchTab(tabId) {
+            document.querySelectorAll('.biz-tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.biz-nav').forEach(el => {
+                el.classList.remove('bg-slate-900', 'text-white', 'border', 'border-slate-800');
+                el.classList.add('text-slate-400');
+            });
+
+            const target = document.getElementById('view-' + tabId);
+            const navBtn = document.getElementById('nav-tab-' + tabId);
+            if (target) target.classList.remove('hidden');
+            if (navBtn) {
+                navBtn.classList.add('bg-slate-900', 'text-white', 'border', 'border-slate-800');
+                navBtn.classList.remove('text-slate-400');
+            }
+
+            const titles = {
+                'dashboard': 'Business Dashboard & Leads',
+                'connect': 'WhatsApp Link Setup',
+                'bulk': 'Bulk WhatsApp Outreach',
+                'catalog': 'Product Catalog & Knowledge Base',
+                'ai': 'AI Lead Responder',
+                'profile': 'Profile & Security Settings'
+            };
+            const titleEl = document.getElementById('biz-view-title');
+            if (titleEl) titleEl.innerText = titles[tabId] || 'Workspace';
+
+            if (window.innerWidth < 768) {
+                const drawer = document.getElementById('sidebar-drawer');
+                const backdrop = document.getElementById('sidebar-backdrop');
+                drawer.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+
+            // Hook for Golang API loaders
+            if (tabId === 'dashboard') {
+                fetchBusinessStats();
+                fetchRecentLeads();
+            }
+            if (tabId === 'connect') {
+                fetchWhatsAppQR();
+                loadCustomerConversationsList();
+            }
+            if (tabId === 'bulk') fetchCampaignLogs();
+            if (tabId === 'catalog') loadProductCatalog();
+            if (tabId === 'ai') loadAISettings();
+            if (tabId === 'profile') loadUserProfile();
+        }
+
+        function handleLogout() {
+            localStorage.clear();
+            window.location.href = '/index.html';
+        }
+
+        // ==============================================================
+        // GOLANG BACKEND & NEON DB CONNECTORS
+        // ==============================================================
+
+        // 0. LIVE NEON DB CONNECTION CHECK
+        async function checkNeonStatus() {
+            try {
+                const res = await fetch('/api/db-status');
+                const data = await res.json();
+                const deskPill = document.getElementById('biz-neon-status-pill');
+                const deskText = document.getElementById('biz-neon-status-text');
+                const mobPill = document.getElementById('biz-mobile-neon-pill');
+                const mobText = document.getElementById('biz-mobile-neon-text');
+
+                if (data.connected) {
+                    if (deskPill) deskPill.className = "flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono";
+                    if (deskText) deskText.innerText = "Database Connected";
+                    if (mobPill) mobPill.className = "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono";
+                    if (mobText) mobText.innerText = "Cloud DB";
+                } else {
+                    if (deskPill) deskPill.className = "flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono";
+                    if (deskText) deskText.innerText = "Embedded Mode";
+                    if (mobPill) mobPill.className = "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono";
+                    if (mobText) mobText.innerText = "Local";
+                }
+            } catch (err) {
+                console.warn('DB check error:', err);
+            }
+        }
+
+        // 0B. CATALOG ITEM CLASSIFICATION (PRODUCT VS SERVICE TOGGLE)
+        function setCatalogType(type) {
+            const input = document.getElementById('item-type-input');
+            const badge = document.getElementById('item-type-badge');
+            const prodBtn = document.getElementById('type-prod-btn');
+            const servBtn = document.getElementById('type-serv-btn');
+            const lblName = document.getElementById('lbl-item-name');
+            const lblPrice = document.getElementById('lbl-item-price');
+            const lblDesc = document.getElementById('lbl-item-desc');
+            const btnAddItemText = document.getElementById('btn-add-item-text');
+            const btnAddItem = document.getElementById('btn-add-item');
+
+            if (input) input.value = type;
+
+            if (type === 'service') {
+                if (badge) {
+                    badge.innerText = 'Service Mode';
+                    badge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/30';
+                }
+                if (servBtn) {
+                    servBtn.className = 'p-2.5 rounded-xl border border-indigo-500 bg-indigo-500/10 text-indigo-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+                }
+                if (prodBtn) {
+                    prodBtn.className = 'p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer';
+                }
+                if (lblName) lblName.innerText = 'Service / Offering Name';
+                if (lblPrice) lblPrice.innerText = 'Service Fee / Hourly Rate';
+                if (lblDesc) lblDesc.innerText = 'Service Scope, Deliverables & Specifications';
+                if (btnAddItemText) btnAddItemText.innerText = 'Add Service';
+                if (btnAddItem) {
+                    btnAddItem.className = 'px-6 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md';
+                }
+            } else {
+                if (badge) {
+                    badge.innerText = 'Product Mode';
+                    badge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                }
+                if (prodBtn) {
+                    prodBtn.className = 'p-2.5 rounded-xl border border-amber-500 bg-amber-500/10 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+                }
+                if (servBtn) {
+                    servBtn.className = 'p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer';
+                }
+                if (lblName) lblName.innerText = 'Product Name';
+                if (lblPrice) lblPrice.innerText = 'Price / Fee';
+                if (lblDesc) lblDesc.innerText = 'Short Description & Details';
+                if (btnAddItemText) btnAddItemText.innerText = 'Add Product';
+                if (btnAddItem) {
+                    btnAddItem.className = 'px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md';
+                }
+            }
+        }
+
+        // 1. FETCH BUSINESS DASHBOARD STATS
+        async function fetchBusinessStats() {
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            try {
+                const res = await fetch(`/api/business/dashboard?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                if (document.getElementById('biz-stat-campaigns')) document.getElementById('biz-stat-campaigns').innerText = data.active_campaigns ?? 0;
+                if (document.getElementById('biz-stat-leads')) document.getElementById('biz-stat-leads').innerText = data.leads_captured ?? 0;
+                if (document.getElementById('biz-stat-delivered')) document.getElementById('biz-stat-delivered').innerText = (data.delivered_messages ?? 0).toLocaleString();
+                if (document.getElementById('biz-stat-ai')) document.getElementById('biz-stat-ai').innerText = (data.ai_replies ?? 0).toLocaleString();
+            } catch (err) {
+                console.warn('Stats fetch error:', err);
+            }
+        }
+
+        // 2. FETCH RECENT CAPTURED LEADS
+        async function fetchRecentLeads() {
+            const tbody = document.getElementById('lead-table');
+            if (!tbody) return;
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            try {
+                const res = await fetch(`/api/leads?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                const leads = data.leads || [];
+                if (leads.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-500">No leads captured yet. Your WhatsApp AI will automatically qualify inbound inquiries.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = leads.map(l => `
+                    <tr class="hover:bg-slate-900/40 transition">
+                        <td class="p-3 font-mono font-bold text-white flex items-center gap-2">
+                            <i class="fa-brands fa-whatsapp text-emerald-400"></i> ${l.phone || l.customer_phone}
+                        </td>
+                        <td class="p-3 text-slate-300 max-w-xs truncate">${l.inquiry || l.inquiry_text || 'Inquired about pricing'}</td>
+                        <td class="p-3">
+                            <span class="px-2 py-0.5 text-[10px] font-mono rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                ${l.status || 'Captured'}
+                            </span>
+                        </td>
+                        <td class="p-3 font-mono text-[11px] text-slate-500">${l.time || 'Today'}</td>
+                        <td class="p-3 text-right">
+                            <button type="button" onclick="openLeadChatInWhatsAppSection('${(l.phone || l.customer_phone).replace(/\D/g, '')}')" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition cursor-pointer">
+                                <i class="fa-solid fa-comments text-[10px]"></i> Open Chat (Last 10)
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.warn('Leads fetch error:', err);
+            }
+        }
+
+        // 3. FETCH WHATSAPP QR CODE
+        async function fetchWhatsAppQR() {
+            const box = document.getElementById('biz-qrcode-box');
+            if (!box) return;
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            box.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-2xl text-emerald-400"></i>`;
+            try {
+                const res = await fetch(`/api/whatsapp/qr?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                const deskPill = document.getElementById('biz-wa-status-text');
+
+                if (data.status === 'Connected' && data.jid) {
+                    box.innerHTML = `
+                        <div class="text-center p-4">
+                            <div class="w-16 h-16 mx-auto mb-2 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center justify-center text-2xl">
+                                <i class="fa-solid fa-circle-check"></i>
+                            </div>
+                            <div class="text-xs font-bold text-white">WhatsApp Linked</div>
+                            <div class="text-[10px] text-emerald-400 font-mono mt-0.5">+${data.jid}</div>
+                        </div>
+                    `;
+                    if (deskPill) deskPill.innerText = 'Connected';
+                } else if (data.qr) {
+                    box.innerHTML = '';
+                    if (data.qr.startsWith('data:image') || data.qr.startsWith('http')) {
+                        box.innerHTML = `<img src="${data.qr}" alt="WhatsApp QR Code" class="w-48 h-48 object-contain rounded-xl border border-slate-700 bg-white p-2 shadow-lg mx-auto">`;
+                    } else {
+                        const qrDiv = document.createElement('div');
+                        qrDiv.className = "p-2 bg-white rounded-xl shadow-lg border border-slate-700 flex items-center justify-center mx-auto";
+                        box.appendChild(qrDiv);
+                        if (window.QRCode) {
+                            new QRCode(qrDiv, {
+                                text: data.qr,
+                                width: 180,
+                                height: 180,
+                                colorDark: "#020617",
+                                colorLight: "#ffffff"
+                            });
+                        } else {
+                            qrDiv.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data.qr)}" alt="WhatsApp QR Code" class="w-44 h-44 object-contain">`;
+                        }
+                    }
+                    if (deskPill) deskPill.innerText = 'Scan QR';
+                } else {
+                    box.innerHTML = `
+                        <div class="text-center p-3">
+                            <div class="w-12 h-12 mx-auto mb-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 flex items-center justify-center text-xl">
+                                <i class="fa-brands fa-whatsapp"></i>
+                            </div>
+                            <div class="text-xs font-bold text-slate-300">WhatsMeow WhatsApp Session</div>
+                            <div class="text-[10px] text-slate-500 font-mono mt-1">Ready to pair via 8-digit code below or Go daemon.</div>
+                        </div>
+                    `;
+                    if (deskPill) deskPill.innerText = 'Disconnected';
+                }
+            } catch (err) {
+                box.innerHTML = `<span class="text-xs text-rose-400">Error connecting to WhatsApp service</span>`;
+            }
+        }
+
+        // 4. PAIR WITH 8-DIGIT CODE
+        async function pairWithEightDigitCode() {
+            const phoneInput = document.getElementById('biz-pair-phone-input');
+            const phone = phoneInput ? phoneInput.value.trim() : '';
+            if (!phone) {
+                alert('Please enter your phone number with country code (e.g. 917706070633)');
+                return;
+            }
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            
+            const btn = document.querySelector('button[onclick="pairWithEightDigitCode()"]');
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/whatsapp/pair', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, username })
+                });
+                const data = await res.json();
+                if (data.code) {
+                    const display = document.getElementById('eight-digit-display-box');
+                    const codeEl = document.getElementById('eight-digit-code');
+                    if (display) display.classList.remove('hidden');
+                    if (codeEl) codeEl.innerText = data.code;
+
+                    const deskPill = document.getElementById('biz-wa-status-text');
+                    if (deskPill) deskPill.innerText = 'Pairing Active';
+
+                    setTimeout(fetchWhatsAppQR, 800);
+                } else {
+                    const display = document.getElementById('eight-digit-display-box');
+                    if (display) display.classList.add('hidden');
+                    alert(data.message || data.error || 'Failed to generate pairing code.');
+                }
+            } catch (err) {
+                alert('Unable to generate pairing code. Please try again.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // 5. UNLINK WHATSAPP DEVICE
+        async function unlinkWhatsAppDevice() {
+            if (!confirm('Unlink this WhatsApp session?')) return;
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            try {
+                await fetch('/api/whatsapp/unlink', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username })
+                });
+                fetchWhatsAppQR();
+            } catch (err) {
+                alert('Failed to unlink');
+            }
+        }
+
+        // --- 5B. LIVE CUSTOMER CHATS & DB LAST 10 CHATS MANAGER ---
+        let currentActiveChatPhone = '';
+
+        async function loadCustomerConversationsList() {
+            const listEl = document.getElementById('chat-contact-list');
+            if (!listEl) return;
+            const username = getActiveUsername();
+            try {
+                const res = await fetch(`/api/chats?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                const conversations = data.conversations || [];
+
+                if (conversations.length === 0) {
+                    listEl.innerHTML = `<div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-slate-500 text-xs text-center">No active chats in DB.<br>When customers message your WhatsApp, chats show here!</div>`;
+                    return;
+                }
+
+                listEl.innerHTML = conversations.map(c => {
+                    const isSelected = currentActiveChatPhone === c.customer_phone;
+                    return `
+                        <button type="button" onclick="selectCustomerChat('${c.customer_phone}')" class="w-full p-2.5 rounded-xl text-left transition cursor-pointer flex items-center justify-between border ${isSelected ? 'bg-emerald-500/10 border-emerald-500/50 text-white' : 'bg-slate-950 hover:bg-slate-900 border-slate-800 text-slate-300'}">
+                            <div class="truncate pr-2">
+                                <div class="font-mono font-bold text-xs flex items-center gap-1.5 text-emerald-400">
+                                    <i class="fa-brands fa-whatsapp text-xs"></i> +${c.customer_phone}
+                                </div>
+                                <div class="text-[10px] text-slate-400 truncate mt-0.5">${c.last_message || 'Inbound message'}</div>
+                            </div>
+                            <span class="text-[9px] font-mono text-slate-500 shrink-0">${c.total_count} msgs</span>
+                        </button>
+                    `;
+                }).join('');
+
+                if (!currentActiveChatPhone && conversations.length > 0) {
+                    selectCustomerChat(conversations[0].customer_phone);
+                }
+            } catch (err) {
+                console.warn('Failed to fetch customer conversations:', err);
+            }
+        }
+
+        async function selectCustomerChat(phone) {
+            currentActiveChatPhone = phone;
+            const titleEl = document.getElementById('chat-active-phone');
+            if (titleEl) titleEl.innerText = `+${phone}`;
+            loadCustomerConversationsList();
+            loadCustomerChatHistory(phone);
+        }
+
+        async function loadCustomerChatHistory(phone) {
+            const box = document.getElementById('chat-messages-box');
+            if (!box) return;
+            if (!phone) {
+                box.innerHTML = `<div class="text-center text-slate-500 py-12">Select a lead or customer from the left list to view their last 10 recent messages.</div>`;
+                return;
+            }
+
+            const username = getActiveUsername();
+            box.innerHTML = `<div class="text-center text-emerald-400 py-12"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading last 10 DB chats...</div>`;
+
+            try {
+                const res = await fetch(`/api/chats/messages?username=${encodeURIComponent(username)}&phone=${encodeURIComponent(phone)}`);
+                const data = await res.json();
+                const messages = data.messages || [];
+
+                if (messages.length === 0) {
+                    box.innerHTML = `<div class="text-center text-slate-500 py-12">No chat history recorded yet for +${phone}.</div>`;
+                    return;
+                }
+
+                box.innerHTML = messages.map(m => {
+                    const isUser = m.role === 'customer' || m.role === 'user';
+                    const rawMsg = m.text || m.message_text || '';
+                    const parsedHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(rawMsg) : rawMsg.replace(/\n/g, '<br>');
+                    return `
+                        <div class="flex flex-col ${isUser ? 'items-start' : 'items-end'}">
+                            <div class="max-w-[85%] p-3.5 rounded-2xl text-xs ${isUser ? 'bg-slate-900 text-slate-200 border border-slate-800 rounded-tl-none' : 'bg-emerald-600 text-white rounded-tr-none shadow-md'}">
+                                <div class="prose prose-invert max-w-none text-xs leading-relaxed font-sans break-words">${parsedHtml}</div>
+                                <div class="text-[9px] font-mono mt-1 ${isUser ? 'text-slate-500' : 'text-emerald-200'} text-right">${m.time || 'Recent'}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                box.scrollTop = box.scrollHeight;
+            } catch (err) {
+                box.innerHTML = `<div class="text-center text-rose-400 py-12">Error loading chat history from database.</div>`;
+            }
+        }
+
+        function showChatTypingIndicator() {
+            const box = document.getElementById('chat-messages-box');
+            if (!box || document.getElementById('chat-typing-indicator')) return;
+            const typingDiv = document.createElement('div');
+            typingDiv.id = 'chat-typing-indicator';
+            typingDiv.className = 'flex items-center gap-2 p-3 rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 w-fit my-1.5';
+            typingDiv.innerHTML = `
+                <div class="flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.2s]"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.4s]"></span>
+                </div>
+                <span class="text-[10px] font-mono text-slate-400">Groq AI is thinking & formatting variants...</span>
+            `;
+            box.appendChild(typingDiv);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function hideChatTypingIndicator() {
+            const ind = document.getElementById('chat-typing-indicator');
+            if (ind) ind.remove();
+        }
+
+        function refreshActiveChatMessages() {
+            if (currentActiveChatPhone) {
+                loadCustomerChatHistory(currentActiveChatPhone);
+            } else {
+                loadCustomerConversationsList();
+            }
+        }
+
+        async function sendDirectChatReply() {
+            const input = document.getElementById('chat-reply-text');
+            const message = input ? input.value.trim() : '';
+            if (!message || !currentActiveChatPhone) return;
+
+            const username = getActiveUsername();
+            input.value = '';
+
+            showChatTypingIndicator();
+
+            try {
+                await fetch('/api/chats/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, phone: currentActiveChatPhone, message })
+                });
+                setTimeout(() => {
+                    hideChatTypingIndicator();
+                    loadCustomerChatHistory(currentActiveChatPhone);
+                }, 1000);
+            } catch (err) {
+                hideChatTypingIndicator();
+                alert('Failed to dispatch message');
+            }
+        }
+
+        function openLeadChatInWhatsAppSection(customerPhone) {
+            const clean = String(customerPhone).replace(/\D/g, '');
+            switchTab('connect');
+            selectCustomerChat(clean);
+        }
+
+        // 6. LAUNCH BULK CAMPAIGN (WITH EPHEMERAL IMAGE THAT AUTO-DELETES ON SEND)
+        async function launchBulkCampaign() {
+            const phones = document.getElementById('bulk-phones').value.trim();
+            const message = document.getElementById('bulk-message').value.trim();
+            const antiBan = document.getElementById('bulk-antiban-check').checked;
+            const dataUrl = document.getElementById('bulk-ephemeral-data-url')?.value || '';
+
+            if (!phones || (!message && !dataUrl)) {
+                alert('Please enter target phone numbers and a message or image');
+                return;
+            }
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+
+            let tempUrl = '';
+            let tempPath = '';
+
+            // If user attached an ephemeral image, upload to server's temporary expiring directory
+            if (dataUrl) {
+                try {
+                    const upRes = await fetch('/api/bulk/upload-temp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username,
+                            data_url: dataUrl,
+                            filename: document.getElementById('bulk-image-preview-name')?.innerText || 'broadcast.jpg'
+                        })
+                    });
+                    const upData = await upRes.json();
+                    if (upData.file_url) {
+                        tempUrl = upData.file_url;
+                        tempPath = upData.file_path || '';
+                    }
+                } catch (e) {
+                    console.warn('Temporary image upload error:', e);
+                }
+            }
+
+            try {
+                const res = await fetch('/api/bulk/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phones,
+                        message,
+                        image_url: tempUrl,
+                        temp_file_path: tempPath,
+                        anti_ban: antiBan,
+                        username
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    // IMMEDIATELY clear the attached image from UI ("turant hat jayega")
+                    clearBulkImageAttachment();
+
+                    alert(`Broadcast launched! ${data.message || ''}`);
+                    fetchCampaignLogs();
+                } else {
+                    alert(data.message || 'Campaign launch failed');
+                }
+            } catch (err) {
+                alert('Server error launching campaign');
+            }
+        }
+
+        // 6B. HANDLE BULK IMAGE SELECTION (EPHEMERAL)
+        function handleBulkImageSelect(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const dataUrl = e.target.result;
+                const hiddenInput = document.getElementById('bulk-ephemeral-data-url');
+                const previewCard = document.getElementById('bulk-image-preview-card');
+                const thumb = document.getElementById('bulk-image-preview-thumb');
+                const nameEl = document.getElementById('bulk-image-preview-name');
+                const sizeEl = document.getElementById('bulk-image-preview-size');
+                const labelText = document.getElementById('bulk-file-label-text');
+
+                if (hiddenInput) hiddenInput.value = dataUrl;
+                if (thumb) thumb.src = dataUrl;
+                if (nameEl) nameEl.innerText = file.name;
+                if (sizeEl) sizeEl.innerText = `${(file.size / 1024).toFixed(1)} KB · Auto-expires`;
+                if (previewCard) previewCard.classList.remove('hidden');
+                if (labelText) labelText.innerText = 'Change Image';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 6C. CLEAR BULK IMAGE ATTACHMENT
+        function clearBulkImageAttachment() {
+            const fileInput = document.getElementById('bulk-image-file');
+            const hiddenInput = document.getElementById('bulk-ephemeral-data-url');
+            const previewCard = document.getElementById('bulk-image-preview-card');
+            const thumb = document.getElementById('bulk-image-preview-thumb');
+            const labelText = document.getElementById('bulk-file-label-text');
+
+            if (fileInput) fileInput.value = '';
+            if (hiddenInput) hiddenInput.value = '';
+            if (thumb) thumb.src = '';
+            if (previewCard) previewCard.classList.add('hidden');
+            if (labelText) labelText.innerText = 'Select Image to Broadcast';
+        }
+
+        // 7. FETCH CAMPAIGN LOGS
+        async function fetchCampaignLogs() {
+            const tbody = document.getElementById('bulk-logs-body');
+            if (!tbody) return;
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            try {
+                const res = await fetch(`/api/bulk/status?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                const logs = data.campaign?.logs || data.recent_logs || [];
+                if (logs.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-slate-500">No active campaign logs yet. Launch a broadcast above.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = logs.map(l => `
+                    <tr class="hover:bg-slate-900/40">
+                        <td class="p-2.5 font-bold text-white">${l.phone}</td>
+                        <td class="p-2.5">
+                            <span class="px-2 py-0.5 rounded text-[10px] ${l.status === 'sent' || l.status === 'Delivered' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}">
+                                ${l.status === 'sent' ? 'Delivered' : l.status}
+                            </span>
+                        </td>
+                        <td class="p-2.5 text-slate-400 text-[11px]">${l.timestamp || l.time || 'Just now'}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.warn('Logs error:', err);
+            }
+        }
+
+        // 8. PRODUCT CATALOG VARIANT & UNIT MANAGER
+        const UNIT_PRESETS = {
+            weight: [
+                { name: '1 kg', price: '' },
+                { name: '500 gram', price: '' },
+                { name: '250 gram', price: '' }
+            ],
+            volume: [
+                { name: '1 Liter', price: '' },
+                { name: '500 ml', price: '' },
+                { name: '250 ml', price: '' }
+            ],
+            size: [
+                { name: 'Full', price: '' },
+                { name: 'Half', price: '' },
+                { name: 'Quarter', price: '' }
+            ],
+            quantity: [
+                { name: '1 Piece', price: '' },
+                { name: 'Pack of 6', price: '' },
+                { name: 'Pack of 12', price: '' }
+            ],
+            custom: [
+                { name: 'Standard / Custom Variety', price: '' }
+            ]
+        };
+
+        function handleUnitChange() {
+            const unitType = document.getElementById('product-unit')?.value || 'weight';
+            const presets = UNIT_PRESETS[unitType] || UNIT_PRESETS.custom;
+            const container = document.getElementById('variant-rows-container');
+            if (!container) return;
+            container.innerHTML = '';
+            presets.forEach(p => addVariantRow(p.name, p.price));
+        }
+
+        function addVariantRow(variantName = '', price = '') {
+            const container = document.getElementById('variant-rows-container');
+            if (!container) return;
+            const rowId = 'variant-row-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+            const div = document.createElement('div');
+            div.id = rowId;
+            div.className = 'variant-item-row flex items-center gap-2 font-mono';
+            div.innerHTML = `
+                <input type="text" placeholder="Variety / Variant (e.g. 1 kg)" value="${variantName}" class="variant-name-input flex-1 px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white outline-none focus:border-amber-500">
+                <div class="relative w-32 sm:w-40 shrink-0">
+                    <span class="absolute left-2.5 top-2 text-amber-400 font-bold text-xs">₹</span>
+                    <input type="text" placeholder="Price" value="${price}" class="variant-price-input w-full pl-6 pr-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-xs text-emerald-400 font-bold outline-none focus:border-amber-500">
+                </div>
+                <button type="button" onclick="document.getElementById('${rowId}').remove()" class="p-2 text-rose-400 hover:text-rose-300 transition cursor-pointer" title="Remove variant">
+                    <i class="fa-solid fa-trash-can text-xs"></i>
+                </button>
+            `;
+            container.appendChild(div);
+        }
+
+        async function addProduct() {
+            const name = document.getElementById('product-name').value.trim();
+            const unitType = document.getElementById('product-unit')?.value || 'weight';
+            const details = document.getElementById('product-desc').value.trim();
+            const itemType = document.getElementById('item-type-input')?.value || 'product';
+
+            const nameInputs = document.querySelectorAll('.variant-name-input');
+            const priceInputs = document.querySelectorAll('.variant-price-input');
+            const variants = [];
+
+            nameInputs.forEach((input, i) => {
+                const vName = input.value.trim();
+                let vPrice = priceInputs[i]?.value.trim() || '0';
+                if (vName) {
+                    if (!vPrice.startsWith('₹')) vPrice = '₹' + vPrice.replace(/^₹/, '');
+                    variants.push({ variant: vName, price: vPrice });
+                }
+            });
+
+            if (!name) {
+                alert('Please enter Product Name');
+                return;
+            }
+
+            if (variants.length === 0) {
+                alert('Please enter at least one Variant and Price in ₹');
+                return;
+            }
+
+            const username = getActiveUsername();
+            const btn = document.getElementById('btn-add-item');
+            if (btn) btn.disabled = true;
+
+            try {
+                const summaryPrice = variants.map(v => `${v.variant}: ${v.price}`).join(' | ');
+                const res = await fetch('/api/products', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        price: summaryPrice,
+                        unit_type: unitType,
+                        variants,
+                        details,
+                        item_type: itemType,
+                        username
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    document.getElementById('product-name').value = '';
+                    document.getElementById('product-desc').value = '';
+                    handleUnitChange();
+                    loadProductCatalog();
+                } else {
+                    alert(data.error || data.message || 'Failed to save item to catalog');
+                }
+            } catch (err) {
+                alert('Server error while saving catalog item');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // 9. DELETE PRODUCT FROM CATALOG
+        async function deleteProduct(productId) {
+            if (!confirm('Are you sure you want to remove this item from your catalog?')) return;
+            try {
+                const res = await fetch(`/api/products?id=${productId}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    loadProductCatalog();
+                } else {
+                    alert('Failed to delete item');
+                }
+            } catch (err) {
+                alert('Server error while deleting item');
+            }
+        }
+
+        // 10. LOAD PRODUCT CATALOG (CLEAN DISPLAY WITHOUT IMAGES)
+        async function loadProductCatalog() {
+            const grid = document.getElementById('catalog-grid');
+            if (!grid) return;
+
+            const username = getActiveUsername();
+
+            try {
+                const res = await fetch(`/api/products?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                const products = data.products || [];
+
+                if (products.length === 0) {
+                    grid.innerHTML = `
+                        <div class="col-span-full py-12 text-center text-slate-500 border border-dashed border-slate-800 rounded-2xl">
+                            <i class="fa-solid fa-boxes-packing text-3xl mb-2 text-slate-600"></i>
+                            <p class="text-xs font-bold text-slate-400">No Catalog Items Added Yet</p>
+                            <p class="text-[11px] text-slate-600 mt-1">Add your first Product or Service above to train your AI Responder.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                grid.innerHTML = products.map((item, idx) => {
+                    const isService = item.item_type === 'service';
+                    const badgeClass = isService 
+                        ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' 
+                        : 'bg-amber-500/10 text-amber-400 border-amber-500/30';
+                    const badgeIcon = isService ? 'fa-bolt' : 'fa-box';
+                    const badgeLabel = isService ? 'Service' : 'Product';
+                    const unitLabel = (item.unit_type || 'custom').toUpperCase();
+                    const tag = item.tag || ('<ITEM_' + (idx + 1) + '>');
+                    const vars = Array.isArray(item.variants) && item.variants.length > 0 ? item.variants : [];
+
+                    const variantBadges = vars.map(v => `
+                        <div class="flex items-center justify-between text-[11px] font-mono py-1 border-b border-slate-800/60 last:border-0">
+                            <span class="text-slate-300 font-medium">${v.variant}</span>
+                            <span class="font-bold text-emerald-400">${String(v.price).startsWith('₹') ? v.price : '₹' + v.price}</span>
+                        </div>
+                    `).join('');
+
+                    return `
+                        <div class="glass-card rounded-2xl border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition space-y-3">
+                            <div class="space-y-2">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold border flex items-center gap-1.5 ${badgeClass}">
+                                        <i class="fa-solid ${badgeIcon}"></i> ${badgeLabel}
+                                    </span>
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-900 border border-slate-800 text-amber-400 uppercase">
+                                        UNIT: ${unitLabel}
+                                    </span>
+                                </div>
+                                <h4 class="text-sm font-bold text-white line-clamp-1">${item.name}</h4>
+                                <p class="text-[11px] text-slate-400 leading-relaxed">${item.details || 'No description provided.'}</p>
+
+                                ${vars.length > 0 ? `
+                                    <div class="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-0.5 mt-2">
+                                        <div class="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono">Variants & Pricing (in ₹)</div>
+                                        ${variantBadges}
+                                    </div>
+                                ` : `
+                                    <div class="text-xs font-mono font-bold text-emerald-400 mt-1">${item.price}</div>
+                                `}
+                            </div>
+                            <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                                <span class="text-[10px] font-mono text-slate-500">AI Tag: <code class="text-cyan-400 font-bold cursor-pointer hover:underline" onclick="navigator.clipboard.writeText('${tag}'); alert('Copied tag ${tag} to clipboard!');" title="Click to copy tag">${tag}</code></span>
+                                <button type="button" onclick="deleteProduct(${item.id})" class="text-[11px] text-rose-400 hover:text-rose-300 transition cursor-pointer flex items-center gap-1">
+                                    <i class="fa-solid fa-trash-can text-xs"></i> Delete
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                console.error('Catalog fetch error:', err);
+            }
+        }
+
+        // 12. SAVE AI SETTINGS & LEAD NOTIFICATION PHONE
+        async function saveAISettings() {
+            const platform = document.getElementById('ai-platform').value;
+            const model = document.getElementById('ai-model').value.trim();
+            const temperature = parseFloat(document.getElementById('ai-temperature').value) || 0.7;
+            const notifPhone = document.getElementById('ai-notif-phone')?.value.trim() || '';
+            const apiKey = document.getElementById('ai-api-key').value.trim();
+            const systemPrompt = document.getElementById('ai-system-prompt').value.trim();
+            const autoReply = document.getElementById('ai-autoreply-check').checked;
+
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+
+            try {
+                const res = await fetch('/api/ai/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        platform,
+                        model,
+                        temperature,
+                        notification_phone: notifPhone,
+                        api_key: apiKey,
+                        system_prompt: systemPrompt,
+                        auto_reply: autoReply,
+                        username
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('AI Settings & Lead Notification Phone saved successfully!');
+                } else {
+                    alert(data.message || 'Failed to save AI settings');
+                }
+            } catch (err) {
+                alert('Server error saving AI settings');
+            }
+        }
+
+        // 12B. TEST LEAD ALERT DISPATCH
+        async function testLeadAlertDispatch() {
+            const notifPhone = document.getElementById('ai-notif-phone')?.value.trim();
+            if (!notifPhone) {
+                alert('Please enter a Lead Alert Notification WhatsApp Phone Number first.');
+                return;
+            }
+
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+
+            try {
+                const res = await fetch('/api/ai/test-lead-alert', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, notification_phone: notifPhone })
+                });
+                const data = await res.json();
+                alert(data.message || 'Test lead alert dispatched successfully');
+            } catch (err) {
+                alert('Server error sending test alert');
+            }
+        }
+
+        // 13. LOAD AI SETTINGS & LEAD NOTIFICATION PHONE
+        async function loadAISettings() {
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const username = getActiveUsername();
+            try {
+                const res = await fetch(`/api/ai/settings?username=${encodeURIComponent(username)}`);
+                const data = await res.json();
+                if (data.platform && document.getElementById('ai-platform')) document.getElementById('ai-platform').value = data.platform;
+                if (data.model && document.getElementById('ai-model')) document.getElementById('ai-model').value = data.model;
+                if (data.temperature !== undefined && document.getElementById('ai-temperature')) {
+                    document.getElementById('ai-temperature').value = data.temperature;
+                    const disp = document.getElementById('temp-display-val');
+                    if (disp) disp.innerText = data.temperature;
+                }
+                if (data.notification_phone !== undefined && document.getElementById('ai-notif-phone')) {
+                    document.getElementById('ai-notif-phone').value = data.notification_phone;
+                }
+                if (data.api_key !== undefined && document.getElementById('ai-api-key')) {
+                    document.getElementById('ai-api-key').value = data.api_key;
+                }
+                if (data.system_prompt && document.getElementById('ai-system-prompt')) document.getElementById('ai-system-prompt').value = data.system_prompt;
+                if (data.auto_reply !== undefined && document.getElementById('ai-autoreply-check')) document.getElementById('ai-autoreply-check').checked = data.auto_reply;
+            } catch (err) {
+                console.warn('AI settings load error:', err);
+            }
+        }
+
+        // 13B. RUN INTERACTIVE AI TEST SIMULATION
+        async function runAITestSimulation() {
+            const query = document.getElementById('ai-test-query')?.value.trim();
+            if (!query) {
+                alert('Please enter a test customer question.');
+                return;
+            }
+
+            const platform = document.getElementById('ai-platform')?.value || 'Groq';
+            const model = document.getElementById('ai-model')?.value.trim() || '';
+            const temperature = parseFloat(document.getElementById('ai-temperature')?.value) || 0.7;
+            const apiKey = document.getElementById('ai-api-key')?.value.trim() || '';
+            const systemPrompt = document.getElementById('ai-system-prompt')?.value.trim() || '';
+            const username = getActiveUsername();
+
+            const btn = document.getElementById('btn-test-ai');
+            const btnText = document.getElementById('btn-test-ai-text');
+            const resultBox = document.getElementById('ai-test-result-box');
+            const replyEl = document.getElementById('ai-test-reply-content');
+
+            if (btn) btn.disabled = true;
+            if (btnText) btnText.innerText = 'Generating...';
+
+            try {
+                const res = await fetch('/api/ai/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        query,
+                        provider: platform,
+                        model,
+                        temperature,
+                        api_key: apiKey,
+                        system_prompt: systemPrompt
+                    })
+                });
+                const data = await res.json();
+                if (resultBox) resultBox.classList.remove('hidden');
+                if (replyEl) {
+                    const rawReply = data.reply || data.response || 'No response generated.';
+                    if (window.marked && typeof window.marked.parse === 'function') {
+                        replyEl.innerHTML = window.marked.parse(rawReply);
+                    } else {
+                        replyEl.innerText = rawReply;
+                    }
+                }
+            } catch (err) {
+                alert('Error contacting AI test simulation endpoint.');
+            } finally {
+                if (btn) btn.disabled = false;
+                if (btnText) btnText.innerText = 'Test Reply';
+            }
+        }
+
+        // 14. REAL-TIME WHATSAPP SESSION & CHAT SSE LISTENER
+        function initLiveChatStream() {
+            const username = getActiveUsername();
+            if (!username) return;
+
+            if (window._chatEventSource) {
+                try { window._chatEventSource.close(); } catch {}
+            }
+
+            try {
+                const es = new EventSource(`/api/chat/stream?username=${encodeURIComponent(username)}`);
+                window._chatEventSource = es;
+
+                es.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        // User unlinked from their phone: Server auto-detected
+                        if (data.type === 'session_unlinked') {
+                            const deskPill = document.getElementById('biz-wa-status-text');
+                            if (deskPill) deskPill.innerText = 'Disconnected';
+                            const display = document.getElementById('eight-digit-display-box');
+                            if (display) display.classList.add('hidden');
+                            fetchWhatsAppQR();
+                            loadUserProfile();
+                        } else if (data.type === 'session_connected') {
+                            fetchWhatsAppQR();
+                            loadUserProfile();
+                        }
+                    } catch (e) {}
+                };
+            } catch (err) {}
+        }
+
+        // 15. PROFILE & PASSWORD CHANGE MANAGEMENT (ZERO FAKE DATA)
+        function togglePasswordInput(inputId, btn) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const isPassword = input.type === 'password';
+            input.type = isPassword ? 'text' : 'password';
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = isPassword ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+            }
+        }
+
+        function showPassAlert(msg, type = 'success') {
+            const banner = document.getElementById('pass-change-alert');
+            const icon = document.getElementById('pass-alert-icon');
+            const text = document.getElementById('pass-alert-text');
+            if (!banner || !text) return;
+            text.innerText = msg;
+            if (type === 'success') {
+                banner.className = "p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2.5 bg-emerald-950/80 border border-emerald-500/40 text-emerald-300";
+                icon.className = "fa-solid fa-circle-check text-emerald-400";
+            } else {
+                banner.className = "p-3.5 rounded-2xl text-xs font-semibold flex items-center gap-2.5 bg-rose-950/80 border border-rose-500/40 text-rose-300";
+                icon.className = "fa-solid fa-circle-exclamation text-rose-400";
+            }
+            banner.classList.remove('hidden');
+        }
+
+        async function loadUserProfile() {
+            const username = getActiveUsername();
+            if (!username) return;
+            try {
+                const res = await fetch(`/api/user/profile?username=${encodeURIComponent(username)}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                
+                const dispName = document.getElementById('prof-display-name');
+                const uName = document.getElementById('prof-username');
+                const email = document.getElementById('prof-email');
+                const phone = document.getElementById('prof-phone-text');
+                const statusPill = document.getElementById('prof-status-pill');
+                const aiProv = document.getElementById('prof-ai-provider');
+                const createdAt = document.getElementById('prof-created-at');
+                const typeBadge = document.getElementById('prof-type-badge');
+
+                if (dispName) dispName.innerText = data.account_name || `${data.username} Workspace`;
+                if (uName) uName.innerText = `@${data.username}`;
+                if (email) email.innerText = data.email || '—';
+                if (phone) phone.innerText = data.phone ? `+${data.phone}` : 'Not Linked';
+                if (typeBadge) typeBadge.innerText = data.user_type === 'library_owner' ? 'Library Partner' : 'Business Suite';
+                
+                if (statusPill) {
+                    const st = data.wa_status || data.status || 'Disconnected';
+                    statusPill.innerText = st;
+                    if (st === 'Connected') {
+                        statusPill.className = "px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono";
+                    } else if (st === 'Pairing' || st === 'QR_Ready') {
+                        statusPill.className = "px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono";
+                    } else {
+                        statusPill.className = "px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700 font-mono";
+                    }
+                }
+
+                if (aiProv) aiProv.innerText = `${data.ai_provider || 'Gemini'} (${data.ai_model || 'Active'})`;
+                if (createdAt) createdAt.innerText = data.created_at || 'Active';
+            } catch (err) {
+                console.warn('Failed to load profile details:', err);
+            }
+        }
+
+        async function verifyCurrentPassword() {
+            const username = getActiveUsername();
+            const currentPassInput = document.getElementById('current-password-input');
+            const verifyBtn = document.getElementById('btn-verify-current-pass');
+            const statusStep = document.getElementById('current-pass-status');
+            const currentPassword = currentPassInput ? currentPassInput.value.trim() : '';
+
+            if (!currentPassword) {
+                showPassAlert('Please enter your current password first.', 'error');
+                return;
+            }
+
+            const originalBtnHtml = verifyBtn ? verifyBtn.innerHTML : 'Verify';
+            if (verifyBtn) {
+                verifyBtn.disabled = true;
+                verifyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+            }
+
+            try {
+                const res = await fetch('/api/user/verify-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, current_password: currentPassword })
+                });
+                const data = await res.json();
+                if (res.ok && data.verified) {
+                    showPassAlert(data.message || 'Current password verified! You can now set your new password.', 'success');
+                    if (currentPassInput) currentPassInput.disabled = true;
+                    if (verifyBtn) {
+                        verifyBtn.className = "px-5 py-2.5 bg-emerald-500/20 text-emerald-300 font-bold rounded-xl text-xs border border-emerald-500/40 flex items-center gap-2";
+                        verifyBtn.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i> Verified';
+                    }
+                    if (statusStep) {
+                        statusStep.innerText = 'Step 1 Complete ✓';
+                        statusStep.className = 'text-[10px] font-mono text-emerald-400 font-bold';
+                    }
+                    const step2 = document.getElementById('new-password-step-container');
+                    if (step2) {
+                        step2.classList.remove('hidden');
+                        document.getElementById('new-password-input')?.focus();
+                    }
+                } else {
+                    showPassAlert(data.message || data.error || 'Current password is incorrect. Please try again.', 'error');
+                }
+            } catch (err) {
+                showPassAlert('Verification failed. Please check network connection.', 'error');
+            } finally {
+                if (verifyBtn && !document.getElementById('current-password-input')?.disabled) {
+                    verifyBtn.disabled = false;
+                    verifyBtn.innerHTML = originalBtnHtml;
+                }
+            }
+        }
+
+        async function saveNewPassword() {
+            const username = getActiveUsername();
+            const currentPass = document.getElementById('current-password-input')?.value.trim();
+            const newPass = document.getElementById('new-password-input')?.value.trim();
+            const confirmPass = document.getElementById('confirm-password-input')?.value.trim();
+            const saveBtn = document.getElementById('btn-save-new-pass');
+
+            if (!newPass || !confirmPass) {
+                showPassAlert('Please enter and confirm your new password.', 'error');
+                return;
+            }
+            if (newPass.length < 6) {
+                showPassAlert('New password must be at least 6 characters long.', 'error');
+                return;
+            }
+            if (newPass !== confirmPass) {
+                showPassAlert('New password and Confirm password do not match!', 'error');
+                return;
+            }
+
+            const originalBtnHtml = saveBtn ? saveBtn.innerHTML : 'Save';
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+            }
+
+            try {
+                const res = await fetch('/api/user/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        current_password: currentPass,
+                        new_password: newPass
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showPassAlert(data.message || 'Password changed successfully! Next time please use your new password.', 'success');
+                    // Reset inputs
+                    document.getElementById('new-password-input').value = '';
+                    document.getElementById('confirm-password-input').value = '';
+                    const step2 = document.getElementById('new-password-step-container');
+                    if (step2) step2.classList.add('hidden');
+                    
+                    const curInput = document.getElementById('current-password-input');
+                    if (curInput) {
+                        curInput.value = '';
+                        curInput.disabled = false;
+                    }
+                    const vBtn = document.getElementById('btn-verify-current-pass');
+                    if (vBtn) {
+                        vBtn.disabled = false;
+                        vBtn.className = "px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shadow-lg";
+                        vBtn.innerHTML = '<i class="fa-solid fa-shield-check"></i><span>Verify Current Password</span>';
+                    }
+                    const statusStep = document.getElementById('current-pass-status');
+                    if (statusStep) {
+                        statusStep.innerText = 'Step 1 of 2';
+                        statusStep.className = 'text-[10px] font-mono text-amber-400 font-bold';
+                    }
+                } else {
+                    showPassAlert(data.message || data.error || 'Failed to update password.', 'error');
+                }
+            } catch (err) {
+                showPassAlert('Network error while saving new password.', 'error');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = originalBtnHtml;
+                }
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkBusinessAuth();
+            checkNeonStatus();
+            initLiveChatStream();
+            handleUnitChange();
+            switchTab('dashboard');
+        });
+    </script>
+</body>
+</html>

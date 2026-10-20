@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for restoring the Go and whatsmeow production architecture alongside the active Node.js preview gateway, supporting Neon PostgreSQL persistence and AI auto-reply bot.",
+  "updatedAt": "2026-10-18T02:07:04.069283904Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

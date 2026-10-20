@@ -1,0 +1,8 @@
+{
+  "name": "EduCloud",
+  "description": "EduCloud - Multi-Tenant WhatsApp Marketing & Automation Gateway with Live Bulk Campaign Tracker, Smart Multi-Number Import, Anti-Ban Protection, and Auto-Expiring Media.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

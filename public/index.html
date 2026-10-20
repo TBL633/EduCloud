@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduCloud | WhatsApp Marketing & AI Automation Portal</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome CDN for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Inter & JetBrains Mono Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .glass-card {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-input {
+            background: rgba(2, 6, 23, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-input:focus {
+            border-color: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+        }
+    </style>
+</head>
+<body class="h-full bg-slate-950 flex items-center justify-center p-4 relative overflow-x-hidden">
+
+    <!-- Subtle Ambient Glow Background Effects -->
+    <div class="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[140px] pointer-events-none"></div>
+    <div class="fixed bottom-10 right-10 w-[400px] h-[400px] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+
+    <!-- Auth Container Card -->
+    <div class="w-full max-w-md glass-card rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 my-auto text-white">
+        
+        <!-- SaaS Brand Header -->
+        <div class="text-center mb-6">
+            <div class="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/20 mb-3 border border-emerald-400/30">
+                <i class="fa-brands fa-whatsapp text-2xl text-slate-950 font-black"></i>
+            </div>
+            <h1 class="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
+                <span>EduCloud</span>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">AI SaaS</span>
+            </h1>
+            <p class="text-xs text-slate-400 mt-1 font-medium">WhatsApp Marketing & Automated Business Engine</p>
+            <div id="index-db-badge" class="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span id="index-db-text">Neon Auth Service Connected</span>
+            </div>
+        </div>
+
+        <!-- Auth Navigation Tabs (Sign In vs Sign Up) -->
+        <div class="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-bold mb-6">
+            <button type="button" id="tab-btn-signin" onclick="setAuthTab('signin')" class="flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-right-to-bracket text-xs"></i>
+                <span>Sign In</span>
+            </button>
+            <button type="button" id="tab-btn-signup" onclick="setAuthTab('signup')" class="flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-user-plus text-xs"></i>
+                <span>Create Account</span>
+            </button>
+        </div>
+
+        <!-- Alert Notification Box -->
+        <div id="auth-alert" class="hidden mb-5 p-3.5 rounded-xl bg-rose-950/60 border border-rose-900/80 text-rose-300 text-xs font-medium text-center flex items-center justify-center gap-2">
+            <i id="auth-alert-icon" class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
+            <span id="auth-alert-text">Error message</span>
+        </div>
+
+        <!-- 1. SIGN IN FORM -->
+        <form id="form-signin" onsubmit="event.preventDefault(); handleLogin();" class="space-y-4">
+            <div>
+                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Email or Username</label>
+                <div class="relative">
+                    <i class="fa-solid fa-envelope absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="text" id="login-identifier" placeholder="admin@example.com" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                </div>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-1.5">
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Password</label>
+                </div>
+                <div class="relative">
+                    <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="password" id="login-password" placeholder="Enter your account password" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                    <button type="button" onclick="togglePasswordVisibility('login-password', 'pass-eye-icon')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
+                        <i id="pass-eye-icon" class="fa-solid fa-eye-slash"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" id="btn-login-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs mt-3 active:scale-[0.99]">
+                <i class="fa-solid fa-right-to-bracket text-slate-950"></i>
+                <span id="login-btn-text">Sign In to Dashboard</span>
+            </button>
+        </form>
+
+        <!-- 2. PROFESSIONAL SIGN UP FORM (STEP 1: ENTER CREDENTIALS) -->
+        <div id="form-signup" class="hidden space-y-4">
+            <!-- Step Progress Indicator -->
+            <div class="p-3 rounded-2xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-[11px] font-semibold text-slate-400">
+                <span class="flex items-center gap-2">
+                    <span class="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">1</span>
+                    <span class="text-white font-bold">Business Details</span>
+                </span>
+                <span class="text-slate-500">Next: OTP Email Verification</span>
+            </div>
+
+            <form onsubmit="event.preventDefault(); handleSendOtp();" class="space-y-3.5">
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Full Name / Business Name</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-user absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                        <input type="text" id="reg-full-name" placeholder="John Doe" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Email Address</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-envelope absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                        <input type="email" id="reg-email" placeholder="john@company.com" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Password (Min 6 chars, 1 Uppercase, 1 Number, 1 Special Char)</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                        <input type="password" id="reg-password" placeholder="••••••••" minlength="6" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                        <button type="button" onclick="togglePasswordVisibility('reg-password', 'reg-pass-eye')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
+                            <i id="reg-pass-eye" class="fa-solid fa-eye-slash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Re-enter Password</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-shield-check absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
+                        <input type="password" id="reg-confirm-password" placeholder="••••••••" minlength="6" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                        <button type="button" onclick="togglePasswordVisibility('reg-confirm-password', 'reg-confirm-eye')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
+                            <i id="reg-confirm-eye" class="fa-solid fa-eye-slash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" id="btn-signup-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs mt-2 active:scale-[0.99]">
+                    <i class="fa-solid fa-paper-plane text-slate-950"></i>
+                    <span id="signup-btn-text">Send Email Verification Code</span>
+                </button>
+            </form>
+        </div>
+
+        <!-- 3. VERIFY OTP STEP (STEP 2: ENTER OTP CODE) -->
+        <div id="section-verify-otp" class="hidden space-y-4">
+            <!-- Step Progress Indicator -->
+            <div class="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between text-[11px] font-semibold">
+                <span class="flex items-center gap-2">
+                    <span class="w-5 h-5 rounded-full bg-emerald-400 text-slate-950 text-[10px] font-black flex items-center justify-center">2</span>
+                    <span class="text-emerald-300 font-bold">Email Verification</span>
+                </span>
+                <span class="text-emerald-400 font-mono">6-Digit Code</span>
+            </div>
+
+            <div class="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center space-y-2">
+                <div class="w-10 h-10 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center mx-auto text-lg">
+                    <i class="fa-solid fa-envelope-open-text"></i>
+                </div>
+                <p class="text-xs text-slate-300">We dispatched a 6-digit verification code to:</p>
+                <p id="otp-target-email" class="font-bold text-emerald-400 font-mono text-xs break-all bg-emerald-950/50 py-1 px-3 rounded-lg border border-emerald-800/40 inline-block"></p>
+            </div>
+
+            <form onsubmit="event.preventDefault(); handleVerifyOtp();" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 text-center">Enter 6-Digit OTP Code</label>
+                    <input type="text" id="otp-input-code" maxlength="6" pattern="[0-9]*" placeholder="123456" required class="w-full py-3.5 bg-slate-950 border border-emerald-500/60 rounded-xl focus:ring-2 focus:ring-emerald-400 text-center text-2xl font-mono tracking-[0.5em] text-emerald-400 font-black outline-none placeholder-slate-700">
+                </div>
+
+                <button type="submit" id="btn-verify-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs active:scale-[0.99]">
+                    <i class="fa-solid fa-circle-check text-slate-950"></i>
+                    <span>Verify Code & Complete Registration</span>
+                </button>
+
+                <div class="flex items-center justify-between text-xs pt-1">
+                    <button type="button" onclick="handleSendOtp(true)" class="text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer flex items-center gap-1 transition">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        <span>Resend OTP</span>
+                    </button>
+                    <button type="button" onclick="backToSignupForm()" class="text-slate-400 hover:text-white font-semibold cursor-pointer transition">
+                        Edit Details
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Footer Info -->
+        <div class="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 font-mono">
+            <span>EduCloud SaaS Engine</span>
+            <span class="text-emerald-400 flex items-center gap-1">
+                <i class="fa-solid fa-shield-halved text-[10px]"></i>
+                Neon Auth Verified
+            </span>
+        </div>
+    </div>
+
+    <!-- VANILLA JAVASCRIPT AUTH CONTROLLER -->
+    <script>
+        function togglePasswordVisibility(inputId, iconId) {
+            const passInput = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (!passInput || !icon) return;
+            if (passInput.type === 'password') {
+                passInput.type = 'text';
+                icon.className = 'fa-solid fa-eye';
+            } else {
+                passInput.type = 'password';
+                icon.className = 'fa-solid fa-eye-slash';
+            }
+        }
+
+        function setAuthTab(tab) {
+            const formSignin = document.getElementById('form-signin');
+            const formSignup = document.getElementById('form-signup');
+            const sectionOtp = document.getElementById('section-verify-otp');
+            const btnSignin = document.getElementById('tab-btn-signin');
+            const btnSignup = document.getElementById('tab-btn-signup');
+
+            hideAlert();
+
+            if (tab === 'signin') {
+                formSignin.classList.remove('hidden');
+                formSignup.classList.add('hidden');
+                sectionOtp.classList.add('hidden');
+                btnSignin.className = "flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5";
+                btnSignup.className = "flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5";
+            } else {
+                formSignup.classList.remove('hidden');
+                formSignin.classList.add('hidden');
+                sectionOtp.classList.add('hidden');
+                btnSignup.className = "flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5";
+                btnSignin.className = "flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5";
+            }
+        }
+
+        function showAlert(msg, isSuccess = false) {
+            const alertBox = document.getElementById('auth-alert');
+            const alertText = document.getElementById('auth-alert-text');
+            const alertIcon = document.getElementById('auth-alert-icon');
+            if (alertBox && alertText) {
+                alertText.innerText = msg;
+                if (isSuccess) {
+                    alertBox.className = "mb-5 p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-semibold text-center flex items-center justify-center gap-2";
+                    if (alertIcon) alertIcon.className = "fa-solid fa-circle-check text-emerald-400 text-sm";
+                } else {
+                    alertBox.className = "mb-5 p-3.5 rounded-xl bg-rose-950/60 border border-rose-900 text-rose-300 text-xs font-semibold text-center flex items-center justify-center gap-2";
+                    if (alertIcon) alertIcon.className = "fa-solid fa-circle-exclamation text-rose-400 text-sm";
+                }
+                alertBox.classList.remove('hidden');
+            }
+        }
+
+        function hideAlert() {
+            const alertBox = document.getElementById('auth-alert');
+            if (alertBox) alertBox.classList.add('hidden');
+        }
+
+        function backToSignupForm() {
+            document.getElementById('form-signup').classList.remove('hidden');
+            document.getElementById('section-verify-otp').classList.add('hidden');
+            hideAlert();
+        }
+
+        // --- AUTH API INTEGRATIONS ---
+
+        // 1. LOGIN USER (Auto Detect Role -> Redirect to appropriate portal)
+        async function handleLogin() {
+            const identifier = document.getElementById('login-identifier').value.trim();
+            const password = document.getElementById('login-password').value.trim();
+            const btn = document.getElementById('btn-login-submit');
+
+            if (!identifier || !password) {
+                showAlert('Please enter your email/username and password.');
+                return;
+            }
+
+            hideAlert();
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier, password })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showAlert('Authentication successful! Opening dashboard...', true);
+                    localStorage.setItem('token', data.token || ('token-' + (data.username || 'user')));
+                    localStorage.setItem('role', data.role || (data.portal === 'admin_portal' ? 'admin' : 'business_user'));
+                    localStorage.setItem('user_data', JSON.stringify(data));
+
+                    setTimeout(() => {
+                        if (data.role === 'admin' || data.portal === 'admin_portal') {
+                            window.location.href = '/admin-portal.html';
+                        } else {
+                            window.location.href = '/business-portal.html';
+                        }
+                    }, 500);
+                } else {
+                    showAlert(data.message || 'Invalid credentials. Please try again.');
+                }
+            } catch (err) {
+                showAlert('Unable to connect to authentication server.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // 2. STEP 1 SIGNUP: REQUEST VERIFICATION OTP VIA NEON AUTH / EMAIL
+        async function handleSendOtp(isResend = false) {
+            const full_name = document.getElementById('reg-full-name').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const password = document.getElementById('reg-password').value.trim();
+            const confirm_password = document.getElementById('reg-confirm-password').value.trim();
+            const btn = document.getElementById('btn-signup-submit');
+
+            if (!full_name || !email || !password || !confirm_password) {
+                showAlert('Please complete all sign-up fields.');
+                return;
+            }
+
+            if (password !== confirm_password) {
+                showAlert('Password and Re-enter Password do not match!');
+                return;
+            }
+
+            if (password.length < 6) {
+                showAlert('Password must be at least 6 characters long.');
+                return;
+            }
+
+            if (!/[A-Z]/.test(password)) {
+                showAlert('Password must contain at least 1 capital letter (A-Z).');
+                return;
+            }
+
+            if (!/[0-9]/.test(password)) {
+                showAlert('Password must contain at least 1 number (0-9).');
+                return;
+            }
+
+            if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+                showAlert('Password must contain at least 1 special character (!@#$%^&* etc.).');
+                return;
+            }
+
+            hideAlert();
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/auth/send-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name, email, password, confirm_password })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showAlert(data.message || 'Verification code sent to your email!', true);
+                    document.getElementById('form-signup').classList.add('hidden');
+                    document.getElementById('section-verify-otp').classList.remove('hidden');
+                    document.getElementById('otp-target-email').innerText = email;
+                } else {
+                    showAlert(data.message || 'Failed to dispatch verification email.');
+                }
+            } catch (err) {
+                showAlert('Error contacting OTP dispatch server.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // 3. STEP 2 SIGNUP: VERIFY OTP CODE & CREATE USER ACCOUNT
+        async function handleVerifyOtp() {
+            const email = document.getElementById('reg-email').value.trim();
+            const full_name = document.getElementById('reg-full-name').value.trim();
+            const password = document.getElementById('reg-password').value.trim();
+            const otp_code = document.getElementById('otp-input-code').value.trim();
+            const btn = document.getElementById('btn-verify-submit');
+
+            if (!otp_code || otp_code.length !== 6) {
+                showAlert('Please enter a valid 6-digit OTP verification code.');
+                return;
+            }
+
+            hideAlert();
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/auth/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, otp_code, full_name, password })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showAlert('Account created & verified successfully! Opening workspace...', true);
+                    localStorage.setItem('token', data.token || ('token-' + (data.username || 'user')));
+                    localStorage.setItem('role', data.role || 'business_user');
+                    localStorage.setItem('user_data', JSON.stringify(data));
+
+                    setTimeout(() => {
+                        window.location.href = '/business-portal.html';
+                    }, 800);
+                } else {
+                    showAlert(data.message || 'Invalid or expired OTP code. Please check your email.');
+                }
+            } catch (err) {
+                showAlert('Connection error verifying OTP code.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        async function checkNeonStatus() {
+            try {
+                const res = await fetch('/api/db-status');
+                const data = await res.json();
+                const badge = document.getElementById('index-db-badge');
+                const text = document.getElementById('index-db-text');
+                if (data.connected) {
+                    if (badge) badge.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono";
+                    if (text) text.innerText = "Neon Database Active";
+                } else {
+                    if (badge) badge.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono";
+                    if (text) text.innerText = "Embedded System Storage";
+                }
+            } catch (err) {}
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkNeonStatus();
+            const token = localStorage.getItem('token');
+            const role = localStorage.getItem('role');
+            if (token && role) {
+                if (role === 'admin') {
+                    window.location.href = '/admin-portal.html';
+                } else {
+                    window.location.href = '/business-portal.html';
+                }
+            }
+        });
+    </script>
+</body>
+</html>

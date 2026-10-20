@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: whatsmeow-gateway
+    env: go
+    plan: free
+    region: singapore
+    buildCommand: "go mod tidy && go build -ldflags=\"-s -w\" -o main ."
+    startCommand: "./main"
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: GOGC
+        value: "50"
