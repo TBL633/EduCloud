@@ -160,7 +160,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		if client != nil {
 			client.Disconnect()
 			if client.Store != nil {
-				_ = client.Store.Delete()
+				_ = client.Store.Delete(context.Background())
 			}
 		}
 

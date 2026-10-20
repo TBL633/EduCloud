@@ -176,7 +176,7 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	if c, ok := whatsapp.ActiveClients[req.Username]; ok {
 		c.Disconnect()
 		if c.Store != nil {
-			_ = c.Store.Delete()
+			_ = c.Store.Delete(context.Background())
 		}
 		delete(whatsapp.ActiveClients, req.Username)
 		delete(whatsapp.QRChannelMap, req.Username)
@@ -274,7 +274,7 @@ func LogoutWAHandler(w http.ResponseWriter, r *http.Request) {
 		_ = c.Logout(context.Background())
 		c.Disconnect()
 		if c.Store != nil {
-			_ = c.Store.Delete()
+			_ = c.Store.Delete(context.Background())
 		}
 		delete(whatsapp.ActiveClients, req.Username)
 		delete(whatsapp.QRChannelMap, req.Username)
