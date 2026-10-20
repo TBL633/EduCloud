@@ -1033,8 +1033,6 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, 200, map[string]string{"status": "success", "message": "Product deleted"})
 		return
 	}
-		return
-	}
 }
 
 // 16. BUSINESS DASHBOARD STATS (ZERO FAKE DATA)
