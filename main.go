@@ -77,7 +77,7 @@ func main() {
 	http.HandleFunc("/api/bulk/upload-temp", corsMiddleware(api.BulkUploadTempHandler))
 
 	// AI Responder Endpoints & Interactive Testing
-	http.HandleFunc("/api/ai/settings", corsMiddleware(api.SaveAISettingsHandler))
+	http.HandleFunc("/api/ai/settings", corsMiddleware(api.AISettingsHandler))
 	http.HandleFunc("/api/ai/test", corsMiddleware(api.AITestHandler))
 	http.HandleFunc("/api/ai/test-lead-alert", corsMiddleware(api.TestLeadAlertHandler))
 
