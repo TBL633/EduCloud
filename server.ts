@@ -5,7 +5,6 @@ import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import QRCode from 'qrcode';
-import nodemailer from 'nodemailer';
 import type { User } from './src/db/neon.js';
 import {
   initNeonDatabase,
@@ -31,8 +30,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-// Default port: 3000 (No environment variables required)
-const PORT = 3000;
+// Port: Render assigns dynamic process.env.PORT, defaults to 3000 for preview
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Temp upload directory for expiring bulk media
 const tempUploadsDir = path.join(__dirname, 'public', 'temp_uploads');
@@ -493,9 +492,20 @@ async function generateAIReply(
     }
   }
 
+  let matchedImageUrl: string | undefined = undefined;
+  const imgTagMatch = aiResponse.match(/<IMG_(\d+)>/i);
+  if (imgTagMatch) {
+    const itemIndex = parseInt(imgTagMatch[1], 10) - 1;
+    if (catalog[itemIndex]) {
+      const item = catalog[itemIndex];
+      // Replace tag with product mention if desired
+      aiResponse = aiResponse.replace(/<IMG_\d+>/gi, `[Product Image: ${item.name}]`);
+    }
+  }
+
   updateSlidingWindow(sessionKey, 'assistant', aiResponse);
   await recordCustomerChat(username, customerPhone, 'assistant', aiResponse);
-  return { replyText: aiResponse.trim() };
+  return { replyText: aiResponse.trim(), imageURL: matchedImageUrl };
 }
 
 // --- API ROUTES ---
@@ -549,48 +559,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
 // In-Memory OTP Store: email -> { otp, expiresAt, fullName, password }
 const memoryOtps: Map<string, { otp: string; expiresAt: number; fullName: string; password: string }> = new Map();
 
-// Helper to send email via Nodemailer if SMTP credentials exist
-async function sendEmailViaNodemailer(email: string, name: string, otpCode: string): Promise<boolean> {
-  const host = process.env.SMTP_HOST || process.env.EMAIL_HOST;
-  const user = process.env.SMTP_USER || process.env.EMAIL_USER || process.env.GMAIL_USER;
-  const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS || process.env.GMAIL_APP_PASSWORD;
-  const port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || '587', 10);
 
-  if (!host || !user || !pass) {
-    return false;
-  }
-
-  try {
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: { user, pass }
-    });
-
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME || 'EduCloud SaaS'}" <${user}>`,
-      to: email,
-      subject: `Your EduCloud Email Verification Code: ${otpCode}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 30px; border-radius: 16px; max-width: 500px; margin: 0 auto; border: 1px solid #1e293b;">
-          <h2 style="color: #10b981; margin-top: 0; text-align: center;">EduCloud SaaS</h2>
-          <p>Hello <strong>${name}</strong>,</p>
-          <p>Thank you for signing up for EduCloud. Use the 6-digit OTP verification code below to complete your registration:</p>
-          <div style="background-color: #020617; padding: 16px; border-radius: 12px; text-align: center; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #34d399; border: 1px solid #059669; margin: 20px 0;">
-            ${otpCode}
-          </div>
-          <p style="font-size: 12px; color: #94a3b8; text-align: center;">This code expires in 10 minutes. If you did not request this code, please ignore this email.</p>
-        </div>
-      `
-    });
-    console.log(`✉️ [Nodemailer] Successfully sent verification email to ${email}`);
-    return true;
-  } catch (err: any) {
-    console.error(`❌ [Nodemailer] Failed to send verification email to ${email}:`, err.message);
-    return false;
-  }
-}
 
 function validatePasswordComplexity(password: string): { valid: boolean; message?: string } {
   if (!password || password.length < 6) {
@@ -654,10 +623,7 @@ app.post(['/api/auth/send-otp', '/api/auth/neon/send-otp'], async (req: Request,
 
   await saveOtpToNeon(emailInput, otpCode, new Date(expiresAtMs));
 
-  // 1. Try sending via Nodemailer if SMTP configured
-  const nodemailerSent = await sendEmailViaNodemailer(emailInput, nameInput, otpCode);
-
-  // 2. Determine Neon Inbuilt Auth Service URL from environment variable or request body
+  // Dispatch verification email directly via Neon Inbuilt Auth Service API
   const neonAuthUrl = (neon_auth_url || process.env.NEON_AUTH_URL || process.env.NEON_AUTH_BASE_URL || '').trim().replace(/\/+$/, '');
 
   let neonAuthSent = false;
@@ -672,7 +638,7 @@ app.post(['/api/auth/send-otp', '/api/auth/neon/send-otp'], async (req: Request,
       'User-Agent': 'EduCloud-SaaS/1.0'
     };
 
-    // Specific Better Auth endpoints with exact required schemas
+    // Better Auth endpoints with exact required schemas
     const attemptsToTry = [
       {
         url: `${neonAuthUrl}/email-otp/send-verification-otp`,
@@ -725,17 +691,16 @@ app.post(['/api/auth/send-otp', '/api/auth/neon/send-otp'], async (req: Request,
     }
   }
 
-  const isEmailDelivered = nodemailerSent || neonAuthSent;
-  console.log(`✉️ [Neon Auth] 6-digit OTP verification code dispatched for ${emailInput} (Email Delivered: ${isEmailDelivered})`);
+  console.log(`✉️ [Neon Auth] Verification code dispatched for ${emailInput} (Neon Auth Delivered: ${neonAuthSent})`);
 
   return res.json({
     status: 'success',
-    message: isEmailDelivered
-      ? (neonAuthMsg || `Verification email dispatched to ${emailInput}! Check your inbox.`)
-      : `Verification code sent to ${emailInput}. Please check your email inbox to enter the code.`,
+    message: neonAuthSent
+      ? (neonAuthMsg || `Verification email dispatched via Neon Auth to ${emailInput}! Check your inbox.`)
+      : `Verification Code: ${otpCode} (Neon Auth verification code generated for ${emailInput}).`,
     email: emailInput,
-    neon_auth_sent: neonAuthSent,
-    nodemailer_sent: nodemailerSent
+    otp_code: neonAuthSent ? undefined : otpCode,
+    neon_auth_sent: neonAuthSent
   });
 });
 

@@ -9,8 +9,10 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"golang.org/x/crypto/bcrypt"
@@ -23,6 +25,161 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
+}
+
+// DB Status Endpoint for Frontend Badge & Health Check
+func DBStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if DB == nil {
+		respondJSON(w, 200, map[string]interface{}{
+			"connected": false,
+			"message":   "Running in In-Memory / Standalone Mode",
+		})
+		return
+	}
+	err := DB.Ping()
+	if err != nil {
+		respondJSON(w, 200, map[string]interface{}{
+			"connected": false,
+			"error":     err.Error(),
+		})
+		return
+	}
+	respondJSON(w, 200, map[string]interface{}{
+		"connected": true,
+		"message":   "Neon Serverless PostgreSQL Active",
+	})
+}
+
+// Helper to request verification email via Neon Inbuilt Auth (Better Auth service)
+func sendNeonAuthOTP(email, fullName, password string) (bool, string) {
+	neonAuthURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NEON_AUTH_URL")), "/")
+	if neonAuthURL == "" {
+		neonAuthURL = strings.TrimRight(strings.TrimSpace(os.Getenv("NEON_AUTH_BASE_URL")), "/")
+	}
+
+	if neonAuthURL == "" {
+		log.Printf("ℹ️ [Neon Auth] NEON_AUTH_URL not set in environment.")
+		return false, "NEON_AUTH_URL environment variable is missing."
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	type endpointAttempt struct {
+		path    string
+		payload map[string]interface{}
+	}
+
+	attempts := []endpointAttempt{
+		{
+			path:    "/email-otp/send-verification-otp",
+			payload: map[string]interface{}{"email": email, "type": "email-verification"},
+		},
+		{
+			path:    "/email-otp/send-verification-otp",
+			payload: map[string]interface{}{"email": email, "type": "sign-in"},
+		},
+		{
+			path:    "/sign-up/email",
+			payload: map[string]interface{}{"email": email, "password": password, "name": fullName},
+		},
+		{
+			path:    "/api/auth/email-otp/send-verification-otp",
+			payload: map[string]interface{}{"email": email, "type": "email-verification"},
+		},
+		{
+			path:    "/api/auth/sign-up/email",
+			payload: map[string]interface{}{"email": email, "password": password, "name": fullName},
+		},
+		{
+			path:    "/send-verification-email",
+			payload: map[string]interface{}{"email": email, "type": "email-verification"},
+		},
+	}
+
+	for _, att := range attempts {
+		fullURL := neonAuthURL + att.path
+		bodyBytes, _ := json.Marshal(att.payload)
+
+		req, err := http.NewRequest("POST", fullURL, strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "EduCloud-SaaS/1.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("⚠️ [Neon Auth] Attempt to %s error: %v", fullURL, err)
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		log.Printf("⚡ [Neon Inbuilt Auth API] %s -> Status %d: %s", fullURL, resp.StatusCode, string(respBody))
+
+		if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			var resData map[string]interface{}
+			_ = json.Unmarshal(respBody, &resData)
+			msg := "Verification email dispatched via Neon Auth!"
+			if m, ok := resData["message"].(string); ok && m != "" {
+				msg = m
+			}
+			return true, msg
+		}
+	}
+
+	return false, "Neon Auth endpoints could not be reached."
+}
+
+// Helper to verify code via Neon Inbuilt Auth API
+func verifyNeonAuthOTP(email, code string) bool {
+	neonAuthURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NEON_AUTH_URL")), "/")
+	if neonAuthURL == "" {
+		neonAuthURL = strings.TrimRight(strings.TrimSpace(os.Getenv("NEON_AUTH_BASE_URL")), "/")
+	}
+	if neonAuthURL == "" {
+		return false
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	endpoints := []struct {
+		path    string
+		payload map[string]interface{}
+	}{
+		{path: "/email-otp/verify-email", payload: map[string]interface{}{"email": email, "otp": code}},
+		{path: "/email-otp/verify-email", payload: map[string]interface{}{"email": email, "otp": code, "type": "email-verification"}},
+		{path: "/api/auth/email-otp/verify-email", payload: map[string]interface{}{"email": email, "otp": code}},
+		{path: "/api/auth/email-otp/verify-email", payload: map[string]interface{}{"email": email, "otp": code, "type": "email-verification"}},
+		{path: "/email-otp/verify-otp", payload: map[string]interface{}{"email": email, "otp": code}},
+		{path: "/verify-email", payload: map[string]interface{}{"email": email, "otp": code}},
+		{path: "/api/auth/verify-email", payload: map[string]interface{}{"email": email, "otp": code}},
+	}
+
+	for _, ep := range endpoints {
+		fullURL := neonAuthURL + ep.path
+		bodyBytes, _ := json.Marshal(ep.payload)
+
+		req, err := http.NewRequest("POST", fullURL, strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "EduCloud-SaaS/1.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			return true
+		}
+	}
+
+	return false
 }
 
 // 1. UNIFIED LOGIN API (Admin & SaaS Users)
@@ -185,12 +342,23 @@ func SendOTPHandler(w http.ResponseWriter, r *http.Request) {
 			ON CONFLICT (email) DO UPDATE SET code=$2, created_at=CURRENT_TIMESTAMP`, emailInput, otpCode)
 	}
 
-	log.Printf("✉️ [Neon Auth] 6-digit OTP verification code %s generated for %s (%s)", otpCode, emailInput, fullNameInput)
+	neonSent, neonMsg := sendNeonAuthOTP(emailInput, fullNameInput, passInput)
+	if neonSent {
+		respondJSON(w, 200, map[string]interface{}{
+			"status":         "success",
+			"message":        neonMsg,
+			"email":          emailInput,
+			"neon_auth_sent": true,
+		})
+		return
+	}
 
 	respondJSON(w, 200, map[string]interface{}{
-		"status":  "success",
-		"message": fmt.Sprintf("Verification code sent to %s!", emailInput),
-		"email":   emailInput,
+		"status":         "success",
+		"message":        fmt.Sprintf("Verification code sent to %s! (Code: %s)", emailInput, otpCode),
+		"email":          emailInput,
+		"otp_code":       otpCode,
+		"neon_auth_sent": false,
 	})
 }
 
@@ -214,7 +382,7 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify OTP Code against database
+	// 1. Verify OTP Code against database
 	isValid := false
 	if DB != nil {
 		var dbCode string
@@ -225,6 +393,11 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Fallback for memory mode
 		isValid = true
+	}
+
+	// 2. Verify via Neon Auth API if not matched locally
+	if !isValid {
+		isValid = verifyNeonAuthOTP(emailInput, codeInput)
 	}
 
 	if !isValid {
@@ -734,7 +907,7 @@ func ServeNeonMediaHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// 15. PRODUCT CATALOG HANDLER (GET, POST, DELETE)
+// 15. PRODUCT CATALOG HANDLER (GET, POST, DELETE - ZERO IMAGES, UNIT & VARIANTS)
 func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	if username == "" {
@@ -747,8 +920,8 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := DB.Query(`SELECT id, name, price, description, ai_tag, COALESCE(item_type, 'product') 
-			FROM products WHERE username=$1 ORDER BY id ASC`, username)
+		rows, err := DB.Query(`SELECT id, name, price, description, COALESCE(item_type, 'product'), COALESCE(unit_type, 'custom'), COALESCE(variants, '[]'::jsonb)::text 
+			FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, username)
 		if err != nil {
 			respondJSON(w, 500, map[string]string{"error": err.Error()})
 			return
@@ -756,26 +929,23 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 
 		var products []map[string]interface{}
-		idx := 1
 		for rows.Next() {
 			var id int
-			var name, price, desc, tag, itemType string
-			rows.Scan(&id, &name, &price, &desc, &tag, &itemType)
-			if tag == "" {
-				tag = fmt.Sprintf("<ITEM_%d>", idx)
-			}
-			if itemType == "" {
-				itemType = "product"
-			}
+			var name, price, desc, itemType, unitType, variantsJSON string
+			rows.Scan(&id, &name, &price, &desc, &itemType, &unitType, &variantsJSON)
+
+			var parsedVariants []map[string]interface{}
+			_ = json.Unmarshal([]byte(variantsJSON), &parsedVariants)
+
 			products = append(products, map[string]interface{}{
 				"id":        id,
 				"name":      name,
 				"price":     price,
 				"details":   desc,
-				"tag":       tag,
 				"item_type": itemType,
+				"unit_type": unitType,
+				"variants":  parsedVariants,
 			})
-			idx++
 		}
 		respondJSON(w, 200, map[string]interface{}{"products": products})
 		return
@@ -783,12 +953,14 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "POST" {
 		var req struct {
-			Username    string `json:"username"`
-			Name        string `json:"name"`
-			Price       string `json:"price"`
-			Description string `json:"description"`
-			Details     string `json:"details"`
-			ItemType    string `json:"item_type"`
+			Username    string                   `json:"username"`
+			Name        string                   `json:"name"`
+			Price       string                   `json:"price"`
+			Description string                   `json:"description"`
+			Details     string                   `json:"details"`
+			ItemType    string                   `json:"item_type"`
+			UnitType    string                   `json:"unit_type"`
+			Variants    []map[string]interface{} `json:"variants"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Username == "" {
@@ -800,10 +972,19 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		if req.ItemType == "" {
 			req.ItemType = "product"
 		}
+		if req.UnitType == "" {
+			req.UnitType = "custom"
+		}
 
-		if req.Name == "" || req.Price == "" {
-			respondJSON(w, 400, map[string]string{"error": "Name and Price are required"})
+		if req.Name == "" {
+			respondJSON(w, 400, map[string]string{"error": "Product Name is required"})
 			return
+		}
+
+		variantsBytes, _ := json.Marshal(req.Variants)
+		variantsStr := string(variantsBytes)
+		if variantsStr == "" || variantsStr == "null" {
+			variantsStr = "[]"
 		}
 
 		if DB == nil {
@@ -814,14 +995,10 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var count int
-		_ = DB.QueryRow("SELECT COUNT(*) FROM products WHERE username=$1", req.Username).Scan(&count)
-		aiTag := fmt.Sprintf("<ITEM_%d>", count+1)
-
 		var newID int
-		err := DB.QueryRow(`INSERT INTO products (username, name, price, description, ai_tag, item_type)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			req.Username, req.Name, req.Price, req.Description, aiTag, req.ItemType).Scan(&newID)
+		err := DB.QueryRow(`INSERT INTO products (username, name, price, description, item_type, unit_type, variants)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) RETURNING id`,
+			req.Username, req.Name, req.Price, req.Description, req.ItemType, req.UnitType, variantsStr).Scan(&newID)
 
 		if err != nil {
 			respondJSON(w, 500, map[string]string{"error": "Database error: " + err.Error()})
@@ -836,8 +1013,9 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 				"name":      req.Name,
 				"price":     req.Price,
 				"details":   req.Description,
-				"tag":       aiTag,
 				"item_type": req.ItemType,
+				"unit_type": req.UnitType,
+				"variants":  req.Variants,
 			},
 		})
 		return
@@ -850,9 +1028,11 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if DB != nil {
-			DB.Exec("DELETE FROM products WHERE id=$1 AND username=$2", idStr, username)
+			DB.Exec("DELETE FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username)
 		}
 		respondJSON(w, 200, map[string]string{"status": "success", "message": "Product deleted"})
+		return
+	}
 		return
 	}
 }

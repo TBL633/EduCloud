@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 
 	"wa-server/api"
 	"wa-server/database"
@@ -26,6 +27,10 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func main() {
 	log.Println("🚀 Starting EdutaAI Multi-Tenant SaaS & Marketing Gateway...")
 
+	// Aggressive GC tuning for Render Free Tier (512MB RAM constraint)
+	// Triggers GC when heap expands by 20% to keep memory < 25MB
+	debug.SetGCPercent(20)
+
 	// 1. Initialize Neon Postgres Database
 	database.InitDB()
 	api.DB = database.DB
@@ -46,6 +51,7 @@ func main() {
 	})
 
 	// 4. API Routes
+	http.HandleFunc("/api/db-status", corsMiddleware(api.DBStatusHandler))
 	http.HandleFunc("/api/login", corsMiddleware(api.LoginHandler))
 	http.HandleFunc("/api/auth/send-otp", corsMiddleware(api.SendOTPHandler))
 	http.HandleFunc("/api/auth/verify-otp", corsMiddleware(api.VerifyOTPHandler))

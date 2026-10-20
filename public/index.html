@@ -181,6 +181,7 @@
                 </div>
                 <p class="text-xs text-slate-300">We dispatched a 6-digit verification code to:</p>
                 <p id="otp-target-email" class="font-bold text-emerald-400 font-mono text-xs break-all bg-emerald-950/50 py-1 px-3 rounded-lg border border-emerald-800/40 inline-block"></p>
+                <div id="otp-dev-hint" class="hidden p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-center font-mono font-bold"></div>
             </div>
 
             <form onsubmit="event.preventDefault(); handleVerifyOtp();" class="space-y-4">
@@ -384,6 +385,13 @@
                     document.getElementById('form-signup').classList.add('hidden');
                     document.getElementById('section-verify-otp').classList.remove('hidden');
                     document.getElementById('otp-target-email').innerText = email;
+                    const hintEl = document.getElementById('otp-dev-hint');
+                    if (data.otp_code && hintEl) {
+                        hintEl.innerText = 'Test / Fallback OTP Code: ' + data.otp_code;
+                        hintEl.classList.remove('hidden');
+                    } else if (hintEl) {
+                        hintEl.classList.add('hidden');
+                    }
                 } else {
                     showAlert(data.message || 'Failed to dispatch verification email.');
                 }

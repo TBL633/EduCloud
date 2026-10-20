@@ -12,6 +12,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -36,7 +37,7 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 	if dbURL == "" {
 		return
 	}
-	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", true)
+	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", false)
 	var err error
 	StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
 	if err != nil {
@@ -44,7 +45,7 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 	}
 }
 
-// Har User/Account ke liye alag WhatsApp Client banana ya load karna
+// Multi-tenant WhatsApp Client: Load from Neon Postgres using saved wa_jid or create new
 func GetOrCreateClient(username string) *whatsmeow.Client {
 	ClientsLock.Lock()
 	defer ClientsLock.Unlock()
@@ -57,21 +58,40 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		return nil
 	}
 
-	deviceStore, err := StoreContainer.GetFirstDevice(context.Background())
-	if err != nil || deviceStore == nil {
-		deviceStore = StoreContainer.NewDevice()
+	var deviceStore *store.Device
+	var savedJID string
+	if DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(wa_jid, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID)
 	}
 
-	// Agar dusra user hai aur pehla device kisi aur ka hai, to naya device banao
-	if username != "admin" && deviceStore.ID != nil && DB != nil {
-		var savedJID string
-		_ = DB.QueryRow("SELECT wa_jid FROM users WHERE username=$1", username).Scan(&savedJID)
-		if savedJID == "" {
-			deviceStore = StoreContainer.NewDevice()
+	// 1. If user previously paired, retrieve their exact session from Neon PostgreSQL sqlstore
+	if savedJID != "" {
+		allDevices, err := StoreContainer.GetAllDevices(context.Background())
+		if err == nil {
+			for _, dev := range allDevices {
+				if dev.ID != nil && (dev.ID.User == savedJID || dev.ID.String() == savedJID) {
+					deviceStore = dev
+					break
+				}
+			}
 		}
 	}
 
-	clientLog := waLog.Stdout("Client-"+username, "ERROR", true)
+	// 2. Admin fallback if first device exists
+	if deviceStore == nil && username == "admin" {
+		dev, err := StoreContainer.GetFirstDevice(context.Background())
+		if err == nil && dev != nil {
+			deviceStore = dev
+		}
+	}
+
+	// 3. New device allocation
+	if deviceStore == nil {
+		deviceStore = StoreContainer.NewDevice()
+	}
+
+	// Low-RAM logger: suppresses noisy traces (<2MB RAM per WhatsApp instance)
+	clientLog := waLog.Stdout("Client-"+username, "ERROR", false)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	// Incoming Messages & Events Listener
@@ -91,13 +111,17 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 				} else if evt.Event == "success" {
 					QRChannelMap[username] = ""
 					if client.Store.ID != nil && DB != nil {
-						DB.Exec("UPDATE users SET wa_jid=$1 WHERE username=$2", client.Store.ID.String(), username)
+						jidUser := client.Store.ID.User
+						_, _ = DB.Exec("UPDATE users SET wa_jid=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
 					}
 				}
 			}
 		}()
 	} else {
 		_ = client.Connect()
+		if DB != nil && client.Store.ID != nil {
+			_, _ = DB.Exec("UPDATE users SET status='Connected' WHERE LOWER(username)=LOWER($1)", username)
+		}
 	}
 
 	return client

@@ -1675,7 +1675,9 @@
                                 `}
                             </div>
                             <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                                <span class="text-[10px] font-mono text-slate-500">AI Tag: <code class="text-cyan-400 font-bold cursor-pointer hover:underline" onclick="navigator.clipboard.writeText('${tag}'); alert('Copied tag ${tag} to clipboard!');" title="Click to copy tag">${tag}</code></span>
+                                <span class="text-[10px] font-mono text-emerald-400 font-semibold flex items-center gap-1">
+                                    <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i> Saved in Neon DB
+                                </span>
                                 <button type="button" onclick="deleteProduct(${item.id})" class="text-[11px] text-rose-400 hover:text-rose-300 transition cursor-pointer flex items-center gap-1">
                                     <i class="fa-solid fa-trash-can text-xs"></i> Delete
                                 </button>
