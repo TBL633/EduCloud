@@ -36,7 +36,7 @@ func main() {
 	api.DB = database.DB
 
 	// 2. Initialize Whatsmeow Multi-Device Store
-	dbURL := os.Getenv("DATABASE_URL")
+	dbURL := database.GetDBURL()
 	whatsapp.InitStore(dbURL, database.DB)
 
 	// 3. Frontend UI Routes (Multi-file Architecture)
@@ -56,18 +56,25 @@ func main() {
 	http.HandleFunc("/api/auth/send-otp", corsMiddleware(api.SendOTPHandler))
 	http.HandleFunc("/api/auth/verify-otp", corsMiddleware(api.VerifyOTPHandler))
 	http.HandleFunc("/api/create-account", corsMiddleware(api.VerifyOTPHandler))
+
+	// WhatsApp Web Session & Pairing Endpoints
+	http.HandleFunc("/api/whatsapp/qr", corsMiddleware(api.StatusHandler))
+	http.HandleFunc("/api/whatsapp/status", corsMiddleware(api.StatusHandler))
 	http.HandleFunc("/api/status", corsMiddleware(api.StatusHandler))
+
+	http.HandleFunc("/api/whatsapp/pair", corsMiddleware(api.PairPhoneHandler))
 	http.HandleFunc("/api/pair", corsMiddleware(api.PairPhoneHandler))
+
+	http.HandleFunc("/api/whatsapp/logout", corsMiddleware(api.LogoutWAHandler))
+	http.HandleFunc("/api/whatsapp/unpair", corsMiddleware(api.LogoutWAHandler))
+	http.HandleFunc("/api/whatsapp/unlink", corsMiddleware(api.LogoutWAHandler))
 	http.HandleFunc("/api/logout-wa", corsMiddleware(api.LogoutWAHandler))
+
 	http.HandleFunc("/api/send", corsMiddleware(api.SendHandler))
 	http.HandleFunc("/api/bulk", corsMiddleware(api.BulkSendHandler))
 	http.HandleFunc("/api/ai/settings", corsMiddleware(api.SaveAISettingsHandler))
 	http.HandleFunc("/api/media", corsMiddleware(api.MediaCatalogHandler))
 	http.HandleFunc("/api/chat/stream", api.LiveChatSSEHandler)
-
-	// Neon Object Database & Storage Routes
-	http.HandleFunc("/api/storage/neon/upload", corsMiddleware(api.UploadNeonMediaHandler))
-	http.HandleFunc("/api/storage/neon/file/", corsMiddleware(api.ServeNeonMediaHandler))
 
 	// Business Workspace Endpoints (Zero Fake Data)
 	http.HandleFunc("/api/products", corsMiddleware(api.ProductsHandler))
@@ -76,9 +83,11 @@ func main() {
 	http.HandleFunc("/api/user/config", corsMiddleware(api.UserConfigHandler))
 
 	// 5. Admin Multi-Account Routes
+	http.HandleFunc("/api/admin/dashboard", corsMiddleware(api.AdminDashboardHandler))
 	http.HandleFunc("/api/admin/users", corsMiddleware(api.ListUsersHandler))
 	http.HandleFunc("/api/admin/create-user", corsMiddleware(api.CreateUserHandler))
 	http.HandleFunc("/api/admin/delete-user", corsMiddleware(api.DeleteUserHandler))
+	http.HandleFunc("/api/admin/toggle-automation", corsMiddleware(api.ToggleAutomationHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

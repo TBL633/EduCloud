@@ -624,14 +624,23 @@
             try {
                 const res = await fetch('/api/admin/users', { headers: getAdminHeaders() });
                 if (!res.ok) return;
-                const data = await res.json();
                 const users = data.users || [];
 
-                const bizUsers = users.filter(u => u.user_type === 'business_user' || u.user_type === 'business_marketing');
-                const libUsers = users.filter(u => u.user_type === 'library_owner' || u.user_type === 'library_partner');
+                // Filter out master admin account from tenant listings
+                const tenantUsers = users.filter(u => u.username !== 'admin');
 
-                document.getElementById('count-biz-badge').innerText = bizUsers.length;
-                document.getElementById('count-lib-badge').innerText = libUsers.length;
+                // Categorize into Library vs Business
+                const libUsers = tenantUsers.filter(u => 
+                    u.user_type === 'library_owner' || 
+                    u.user_type === 'library_partner' || 
+                    u.user_type === 'library' || 
+                    u.role === 'library'
+                );
+                // All other tenant accounts belong to Business / Marketing
+                const bizUsers = tenantUsers.filter(u => !libUsers.includes(u));
+
+                if (document.getElementById('count-biz-badge')) document.getElementById('count-biz-badge').innerText = bizUsers.length;
+                if (document.getElementById('count-lib-badge')) document.getElementById('count-lib-badge').innerText = libUsers.length;
 
                 // Render Business Accounts
                 if (bizTbody) {

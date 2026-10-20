@@ -13,26 +13,36 @@ import (
 
 var DB *sql.DB
 
-// InitDB initializes a memory-optimized Neon PostgreSQL connection pool
-// Specifically configured for Render 512MB RAM free tier hosting 100+ WhatsApp accounts
-func InitDB() {
-	dbURL := os.Getenv("DATABASE_URL")
+// GetDBURL returns the resolved Neon/PostgreSQL connection string with sslmode=require
+func GetDBURL() string {
+	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dbURL == "" {
-		dbURL = os.Getenv("NEON_DATABASE_URL")
+		dbURL = strings.TrimSpace(os.Getenv("NEON_DATABASE_URL"))
 	}
-
 	if dbURL == "" {
-		log.Println("⚡ Running in Zero-Config Embedded Mode (Awaiting DATABASE_URL for Neon DB)")
-		return
+		dbURL = strings.TrimSpace(os.Getenv("POSTGRES_URL"))
 	}
-
-	// Ensure sslmode=require for secure Neon Cloud connections
-	if !strings.Contains(dbURL, "sslmode=") {
+	if dbURL == "" {
+		dbURL = strings.TrimSpace(os.Getenv("DATABASE_PUBLIC_URL"))
+	}
+	if dbURL != "" && !strings.Contains(dbURL, "sslmode=") {
 		if strings.Contains(dbURL, "?") {
 			dbURL += "&sslmode=require"
 		} else {
 			dbURL += "?sslmode=require"
 		}
+	}
+	return dbURL
+}
+
+// InitDB initializes a memory-optimized Neon PostgreSQL connection pool
+// Specifically configured for Render 512MB RAM free tier hosting 100+ WhatsApp accounts
+func InitDB() {
+	dbURL := GetDBURL()
+
+	if dbURL == "" {
+		log.Println("⚡ Running in Zero-Config Embedded Mode (Awaiting DATABASE_URL for Neon DB)")
+		return
 	}
 
 	var err error

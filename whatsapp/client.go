@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,14 +38,50 @@ var (
 func InitStore(dbURL string, dbConn *sql.DB) {
 	DB = dbConn
 	if dbURL == "" {
-		return
+		dbURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+		if dbURL == "" {
+			dbURL = strings.TrimSpace(os.Getenv("NEON_DATABASE_URL"))
+		}
+		if dbURL == "" {
+			dbURL = strings.TrimSpace(os.Getenv("POSTGRES_URL"))
+		}
 	}
+	if dbURL != "" && !strings.Contains(dbURL, "sslmode=") {
+		if strings.Contains(dbURL, "?") {
+			dbURL += "&sslmode=require"
+		} else {
+			dbURL += "?sslmode=require"
+		}
+	}
+
 	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", false)
 	var err error
-	StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
-	if err != nil {
-		fmt.Println("WhatsApp Store Error:", err.Error())
+
+	// 1. Primary: Use existing pooled connection if available
+	if dbConn != nil {
+		StoreContainer = sqlstore.NewWithDB(dbConn, "postgres", dbLog)
+		if StoreContainer != nil {
+			err = StoreContainer.Upgrade(context.Background())
+			if err == nil {
+				log.Println("✅ Whatsmeow Store initialized with active PostgreSQL pool!")
+				return
+			}
+			log.Printf("⚠️ StoreContainer.Upgrade notice: %v. Falling back to dedicated connection...", err)
+		}
 	}
+
+	// 2. Secondary: Open dedicated sqlstore connection with sanitized dbURL
+	if dbURL != "" {
+		StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
+		if err != nil {
+			log.Printf("⚠️ Whatsmeow Store connection error: %v", err)
+		} else {
+			log.Println("✅ Whatsmeow Store initialized with dedicated connection!")
+			return
+		}
+	}
+
+	log.Println("⚠️ Whatsmeow Store: No database URL available.")
 }
 
 // Multi-tenant WhatsApp Client: Load from Neon Postgres using saved wa_jid or create new
@@ -54,7 +93,13 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		return c
 	}
 
+	// Lazy initialize StoreContainer if not yet ready
 	if StoreContainer == nil {
+		InitStore("", DB)
+	}
+
+	if StoreContainer == nil {
+		log.Printf("⚠️ StoreContainer is nil; cannot create WhatsApp client for @%s", username)
 		return nil
 	}
 
@@ -103,7 +148,11 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 
 	if client.Store.ID == nil {
 		qrChan, _ := client.GetQRChannel(context.Background())
-		_ = client.Connect()
+		go func() {
+			if err := client.Connect(); err != nil {
+				log.Printf("⚠️ Client connect error for @%s: %v", username, err)
+			}
+		}()
 		go func() {
 			for evt := range qrChan {
 				if evt.Event == "code" {
@@ -112,16 +161,21 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 					QRChannelMap[username] = ""
 					if client.Store.ID != nil && DB != nil {
 						jidUser := client.Store.ID.User
-						_, _ = DB.Exec("UPDATE users SET wa_jid=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+						_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
 					}
 				}
 			}
 		}()
 	} else {
-		_ = client.Connect()
-		if DB != nil && client.Store.ID != nil {
-			_, _ = DB.Exec("UPDATE users SET status='Connected' WHERE LOWER(username)=LOWER($1)", username)
-		}
+		go func() {
+			if err := client.Connect(); err != nil {
+				log.Printf("⚠️ Client reconnect error for @%s: %v", username, err)
+			}
+			if DB != nil && client.Store.ID != nil {
+				jidUser := client.Store.ID.User
+				_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+			}
+		}()
 	}
 
 	return client
@@ -198,9 +252,17 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 	case *events.Connected:
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, status='Connected' WHERE username=$2", jidStr, username)
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidStr, username)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
+		}
+
+	case *events.PairSuccess:
+		if client != nil && client.Store.ID != nil && DB != nil {
+			jidStr := client.Store.ID.User
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidStr, username)
+			QRChannelMap[username] = ""
+			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
 	}
 }

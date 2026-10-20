@@ -455,14 +455,32 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 // 2. ADMIN: CREATE USER / LIBRARY ACCOUNT
 func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Email       string `json:"email"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		AccountName string `json:"account_name"`
+		UserType    string `json:"user_type"`
+		Role        string `json:"role"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	if req.Username == "" && req.Email != "" {
+		req.Username = strings.Split(req.Email, "@")[0]
+	}
+
 	if req.Username == "" || req.Password == "" {
-		respondJSON(w, 400, map[string]string{"error": "Username aur Password dono zaroori hain"})
+		respondJSON(w, 400, map[string]string{"error": "Username/Email and Password are required!"})
 		return
+	}
+
+	if req.UserType == "" {
+		req.UserType = "business_user"
+	}
+	if req.Role == "" {
+		req.Role = "user"
+	}
+	if req.AccountName == "" {
+		req.AccountName = req.Username
 	}
 
 	if DB == nil {
@@ -470,14 +488,28 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hashedPass, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	_, err := DB.Exec("INSERT INTO users (username, password, role) VALUES ($1, $2, 'user')", req.Username, string(hashedPass))
+	// Ensure unique username if already exists
+	finalUsername := req.Username
+	var exists bool
+	_ = DB.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(username)=$1)", finalUsername).Scan(&exists)
+	if exists {
+		finalUsername = fmt.Sprintf("%s_%d", req.Username, rand.Intn(900)+100)
+	}
+
+	hashedPass, _ := bcrypt.GenerateFromPassword([]byte(req.Password), 10)
+	_, err := DB.Exec(`INSERT INTO users (username, email, password, role, user_type, account_name, automation_access, auto_reply, created_at) 
+		VALUES ($1, $2, $3, $4, $5, $6, true, true, NOW())`,
+		finalUsername, req.Email, string(hashedPass), req.Role, req.UserType, req.AccountName)
 	if err != nil {
-		respondJSON(w, 500, map[string]string{"error": "Username pehle se maujood hai!"})
+		respondJSON(w, 500, map[string]string{"error": "Database error creating tenant: " + err.Error()})
 		return
 	}
 
-	respondJSON(w, 200, map[string]string{"status": "success", "message": "Account Created Successfully!"})
+	respondJSON(w, 200, map[string]interface{}{
+		"status":   "success",
+		"message":  "Tenant Account Created Successfully!",
+		"username": finalUsername,
+	})
 }
 
 // 3. ADMIN: LIST ALL ACCOUNTS
@@ -485,14 +517,18 @@ func ListUsersHandler(w http.ResponseWriter, r *http.Request) {
 	if DB == nil {
 		respondJSON(w, 200, map[string]interface{}{
 			"users": []map[string]interface{}{
-				{"id": 1, "username": "admin", "role": "admin", "wa_jid": "", "auto_reply": false, "status": "Disconnected"},
+				{"id": 1, "username": "admin", "email": "admin@eduta.ai", "account_name": "Admin", "role": "admin", "user_type": "admin", "wa_jid": "", "auto_reply": false, "automation_access": true, "status": "Disconnected"},
 			},
 		})
 		return
 	}
 
-	rows, err := DB.Query("SELECT id, username, role, wa_jid, auto_reply FROM users ORDER BY id ASC")
+	rows, err := DB.Query(`SELECT id, username, COALESCE(email, ''), COALESCE(account_name, username), COALESCE(role, 'user'), 
+		COALESCE(user_type, 'business_user'), COALESCE(phone, ''), COALESCE(wa_jid, ''), 
+		COALESCE(automation_access, true), COALESCE(auto_reply, true), COALESCE(status, 'Disconnected') 
+		FROM users ORDER BY id ASC`)
 	if err != nil {
+		log.Printf("⚠️ ListUsersHandler query error: %v", err)
 		respondJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
@@ -501,25 +537,76 @@ func ListUsersHandler(w http.ResponseWriter, r *http.Request) {
 	var users []map[string]interface{}
 	for rows.Next() {
 		var id int
-		var u, role, jid string
-		var auto bool
-		rows.Scan(&id, &u, &role, &jid, &auto)
+		var u, email, accName, role, userType, phone, jid, status string
+		var autoAccess, autoReply bool
+		scanErr := rows.Scan(&id, &u, &email, &accName, &role, &userType, &phone, &jid, &autoAccess, &autoReply, &status)
+		if scanErr != nil {
+			log.Printf("⚠️ ListUsersHandler scan error: %v", scanErr)
+			continue
+		}
 
-		connStatus := "Offline"
+		connStatus := status
 		if c, ok := whatsapp.ActiveClients[u]; ok && c.IsConnected() && c.IsLoggedIn() {
 			connStatus = "Connected"
 		}
 
 		users = append(users, map[string]interface{}{
-			"id":         id,
-			"username":   u,
-			"role":       role,
-			"wa_jid":     jid,
-			"auto_reply": auto,
-			"status":     connStatus,
+			"id":                id,
+			"username":          u,
+			"email":             email,
+			"account_name":      accName,
+			"role":              role,
+			"user_type":         userType,
+			"phone":             phone,
+			"wa_jid":            jid,
+			"automation_access": autoAccess,
+			"auto_reply":        autoReply,
+			"status":            connStatus,
 		})
 	}
 	respondJSON(w, 200, map[string]interface{}{"users": users})
+}
+
+// 3B. ADMIN DASHBOARD OVERVIEW METRICS
+func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
+	if DB == nil {
+		respondJSON(w, 200, map[string]interface{}{
+			"metrics": map[string]interface{}{
+				"totalUsers":     1,
+				"connectedUsers": 0,
+			},
+		})
+		return
+	}
+
+	var totalUsers, connectedUsers int
+	_ = DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&totalUsers)
+	_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE status='Connected' OR (wa_jid != '' AND wa_jid IS NOT NULL)").Scan(&connectedUsers)
+
+	respondJSON(w, 200, map[string]interface{}{
+		"metrics": map[string]interface{}{
+			"totalUsers":     totalUsers,
+			"connectedUsers": connectedUsers,
+		},
+	})
+}
+
+// 3C. ADMIN: TOGGLE USER AUTOMATION ACCESS
+func ToggleAutomationHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.Username == "" {
+		respondJSON(w, 400, map[string]string{"error": "Username required"})
+		return
+	}
+
+	if DB != nil {
+		_, _ = DB.Exec(`UPDATE users SET automation_access = NOT COALESCE(automation_access, true) WHERE LOWER(username)=LOWER($1)`, req.Username)
+	}
+
+	respondJSON(w, 200, map[string]string{"status": "success", "message": "Automation access toggled"})
 }
 
 // 4. ADMIN: DELETE USER
@@ -576,17 +663,29 @@ func StatusHandler(w http.ResponseWriter, r *http.Request) {
 		status = "QR_Ready"
 	}
 
+	// Also check DB if client was connected previously
+	if status == "Disconnected" && DB != nil {
+		var savedJID, savedStatus string
+		_ = DB.QueryRow("SELECT COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID, &savedStatus)
+		if savedJID != "" && (savedStatus == "Connected" || savedStatus == "Ready") {
+			status = "Connected"
+			jid = savedJID
+		}
+	}
+
+	qrCode := whatsapp.QRChannelMap[username]
 	endpoint := "https://" + r.Host + "/api/send"
-	respondJSON(w, 200, map[string]string{
-		"status":   status,
-		"qr":       whatsapp.QRChannelMap[username],
-		"jid":      jid,
-		"endpoint": endpoint,
-		"username": username,
+	respondJSON(w, 200, map[string]interface{}{
+		"status":    status,
+		"qr":        qrCode,
+		"jid":       jid,
+		"connected": status == "Connected",
+		"endpoint":  endpoint,
+		"username":  username,
 	})
 }
 
-// 6. PHONE PAIRING CODE API
+// 6. PHONE PAIRING CODE API (8-DIGIT PAIRING CODE)
 func PairPhoneHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -594,7 +693,19 @@ func PairPhoneHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Username == "" {
+		req.Username = r.URL.Query().Get("username")
+	}
+	if req.Username == "" {
 		req.Username = "admin"
+	}
+
+	cleanPhone := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(req.Phone), "+", ""), " ", "")
+	if cleanPhone == "" {
+		respondJSON(w, 400, map[string]string{
+			"status":  "error",
+			"message": "Phone number is required",
+		})
+		return
 	}
 
 	client := whatsapp.GetOrCreateClient(req.Username)
@@ -613,12 +724,29 @@ func PairPhoneHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code, err := client.PairPhone(context.Background(), req.Phone, true, whatsmeow.PairClientChrome, "Chrome (Windows)")
+	// Ensure client is connected to WhatsApp WebSocket before calling PairPhone
+	if !client.IsConnected() {
+		_ = client.Connect()
+		for i := 0; i < 25; i++ {
+			if client.IsConnected() {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
+	code, err := client.PairPhone(context.Background(), cleanPhone, true, whatsmeow.PairClientChrome, "Chrome (Windows)")
 	if err != nil {
-		respondJSON(w, 500, map[string]string{"error": err.Error()})
+		log.Printf("⚠️ [Pair Error for %s]: %v", req.Username, err)
+		respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to generate pairing code: " + err.Error()})
 		return
 	}
-	respondJSON(w, 200, map[string]string{"code": code})
+	respondJSON(w, 200, map[string]interface{}{
+		"status":  "success",
+		"code":    code,
+		"phone":   cleanPhone,
+		"message": "Pairing code generated! Enter this code in WhatsApp -> Linked Devices -> Link with phone number.",
+	})
 }
 
 // 7. LOGOUT / UNPAIR WHATSAPP DEVICE
