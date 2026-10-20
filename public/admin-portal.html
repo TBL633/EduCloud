@@ -624,6 +624,7 @@
             try {
                 const res = await fetch('/api/admin/users', { headers: getAdminHeaders() });
                 if (!res.ok) return;
+                const data = await res.json();
                 const users = data.users || [];
 
                 // Filter out master admin account from tenant listings

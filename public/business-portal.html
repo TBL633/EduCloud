@@ -507,6 +507,35 @@
                                 <textarea id="product-desc" rows="2" placeholder="Enter product description, specifications, or notes..." required class="w-full p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"></textarea>
                             </div>
 
+                            <!-- Product Image Upload to Neon DB (BYTEA Binary) with Auto-Tag Preview -->
+                            <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload Image to Neon DB (Binary)
+                                    </label>
+                                    <span class="text-[10px] font-mono text-emerald-400 font-semibold" id="product-tag-preview-hint">Auto Tag: &lt;IMG_N&gt;</span>
+                                </div>
+                                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                                    <label class="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold border border-slate-700 hover:border-amber-500/50 cursor-pointer flex items-center justify-center gap-2 transition shrink-0 shadow-sm">
+                                        <i class="fa-solid fa-file-image text-amber-400"></i>
+                                        <span id="product-file-label-text">Select Image File</span>
+                                        <input type="file" id="product-img-file" class="hidden" accept="image/*" onchange="handleProductImgSelect(event)">
+                                    </label>
+                                    <div id="product-img-preview-card" class="hidden flex items-center gap-3 bg-slate-900 p-2 rounded-xl border border-amber-500/30 overflow-hidden">
+                                        <img id="product-img-thumb" src="" alt="Thumbnail" class="w-9 h-9 rounded-lg object-cover border border-slate-700 shrink-0">
+                                        <div class="truncate">
+                                            <p id="product-img-name" class="text-xs font-bold text-white truncate max-w-[150px]">image.jpg</p>
+                                            <p id="product-img-size" class="text-[9px] font-mono text-emerald-400">0 KB · Neon Binary</p>
+                                        </div>
+                                        <button type="button" onclick="clearProductImgUpload()" class="p-1 rounded text-rose-400 hover:text-rose-300 transition cursor-pointer ml-1" title="Remove image">
+                                            <i class="fa-solid fa-xmark text-sm"></i>
+                                        </button>
+                                    </div>
+                                    <span class="text-[10px] text-slate-500">Binary BYTEA storage in PostgreSQL. The AI Auto-Responder replaces tags like &lt;IMG_1&gt; with this image.</span>
+                                </div>
+                                <input type="hidden" id="product-img-data">
+                            </div>
+
                             <div class="flex items-center justify-between gap-3 pt-2">
                                 <span class="text-[11px] text-slate-500 flex items-center gap-1.5">
                                     <i class="fa-solid fa-database text-amber-400"></i> Saved directly in PostgreSQL DB
@@ -623,28 +652,85 @@
                             <p class="text-[11px] text-slate-400 leading-relaxed">
                                 <span class="font-bold text-emerald-400">Automated Lead Alert:</span> When a customer messages your hosted WhatsApp and a lead is captured/qualified, our Go engine automatically forwards full prospect details directly to this WhatsApp number!
                             </p>
+                        </div>
+
                         <!-- INTERACTIVE AI RESPONDER TEST SANDBOX -->
-                        <div class="p-4 rounded-2xl bg-purple-950/20 border border-purple-900/60 space-y-3">
-                            <div class="flex items-center justify-between">
-                                <label class="block text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
-                                    <i class="fa-solid fa-flask text-purple-400"></i> Interactive AI Responder Test Sandbox
-                                </label>
-                                <span class="text-[10px] text-purple-400 font-mono font-bold">Instant Prompt & Catalog Test</span>
+                        <div class="p-4 sm:p-5 rounded-2xl bg-gradient-to-b from-purple-950/30 to-slate-950/80 border border-purple-500/30 space-y-4 shadow-xl">
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-purple-900/40 pb-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                                        <i class="fa-solid fa-flask-vial text-purple-400 text-sm"></i> Interactive AI Lead Responder Testing Sandbox
+                                    </label>
+                                    <p class="text-[11px] text-slate-400 mt-0.5">Test how your AI agent answers customer questions using your live catalog & prompt rules.</p>
+                                </div>
+                                <span id="test-sandbox-model-badge" class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                                    <i class="fa-solid fa-microchip text-xs"></i> Live Engine
+                                </span>
+                            </div>
+
+                            <!-- Quick Preset Prompts -->
+                            <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                <span class="text-slate-400 font-bold uppercase mr-1">Quick Test:</span>
+                                <button type="button" onclick="setQuickTestQuery('Hello, what products or services do you offer and what are the prices?')" class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-purple-500/40 transition cursor-pointer">
+                                    💰 Product & Pricing
+                                </button>
+                                <button type="button" onclick="setQuickTestQuery('Can you send me a picture or image of your product?')" class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-purple-500/40 transition cursor-pointer">
+                                    🖼️ Request Image (&lt;IMG_1&gt;)
+                                </button>
+                                <button type="button" onclick="setQuickTestQuery('I want to place an order right now. How can I pay?')" class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-purple-500/40 transition cursor-pointer">
+                                    🛒 Place Order
+                                </button>
                             </div>
                             
+                            <!-- Test Query Input Box -->
                             <div class="flex flex-col sm:flex-row gap-2">
-                                <input type="text" id="ai-test-query" placeholder="Type a test customer question (e.g., 'What are your product prices?')" class="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500" onkeydown="if(event.key==='Enter') runAITestSimulation()">
-                                <button type="button" id="btn-test-ai" onclick="runAITestSimulation()" class="px-5 py-2.5 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0">
+                                <input type="text" id="ai-test-query" placeholder="Type a simulated customer message (e.g. 'What is the price of 1kg milk?')" class="flex-1 px-3.5 py-2.5 bg-slate-950 border border-purple-900/60 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600" onkeydown="if(event.key==='Enter') runAITestSimulation()">
+                                <button type="button" id="btn-test-ai" onclick="runAITestSimulation()" class="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shrink-0 shadow-lg shadow-purple-900/30">
                                     <i class="fa-solid fa-play text-xs"></i>
-                                    <span id="btn-test-ai-text">Test Reply</span>
+                                    <span id="btn-test-ai-text">Simulate AI Reply</span>
                                 </button>
                             </div>
 
-                            <div id="ai-test-result-box" class="hidden p-3.5 rounded-xl bg-slate-950 border border-purple-900/50 space-y-1.5">
-                                <div class="text-[10px] uppercase font-bold text-purple-400 font-mono flex items-center gap-1">
-                                    <i class="fa-solid fa-robot"></i> Generated AI Response:
+                            <!-- Live WhatsApp Simulation Bubble -->
+                            <div id="ai-test-result-box" class="hidden rounded-2xl bg-[#0b141a] border border-emerald-900/60 p-4 space-y-3 shadow-inner">
+                                <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs">
+                                            <i class="fa-brands fa-whatsapp"></i>
+                                        </div>
+                                        <span class="text-xs font-bold text-white">WhatsApp Client Simulator</span>
+                                        <span id="ai-test-meta-badge" class="text-[10px] font-mono text-emerald-400"></span>
+                                    </div>
+                                    <span id="ai-test-latency" class="text-[10px] font-mono text-slate-400"></span>
                                 </div>
-                                <div id="ai-test-reply-content" class="text-xs text-slate-200 leading-relaxed font-sans prose prose-invert max-w-none"></div>
+
+                                <!-- WhatsApp Outgoing Message Bubble -->
+                                <div class="flex justify-end">
+                                    <div class="max-w-[85%] bg-[#005c4b] text-white p-3 rounded-2xl rounded-tr-none text-xs leading-relaxed shadow space-y-2">
+                                        <!-- Replaced Product Image Preview if <IMG_N> was referenced -->
+                                        <div id="ai-test-img-preview" class="hidden">
+                                            <img id="ai-test-img-thumb" src="" alt="Product Image" class="w-full max-h-48 object-cover rounded-xl border border-emerald-400/30">
+                                            <div id="ai-test-img-tag" class="text-[10px] font-mono font-bold text-emerald-200 mt-1"></div>
+                                        </div>
+                                        <div id="ai-test-reply-content" class="whitespace-pre-wrap"></div>
+                                        <div class="text-[9px] font-mono text-emerald-200/70 text-right flex items-center justify-end gap-1">
+                                            <span id="ai-test-timestamp">Now</span>
+                                            <i class="fa-solid fa-check-double text-sky-300"></i>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Information Bar -->
+                                <div class="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400 font-mono">
+                                    <span id="ai-test-catalog-status"><i class="fa-solid fa-database text-emerald-400 mr-1"></i>Catalog Context Fed</span>
+                                    <span id="ai-test-model-info"></span>
+                                </div>
+                            </div>
+
+                            <!-- Error Message Banner -->
+                            <div id="ai-test-error-box" class="hidden p-3 rounded-xl bg-rose-950/80 border border-rose-500/40 text-xs text-rose-200 flex items-start gap-2">
+                                <i class="fa-solid fa-circle-exclamation text-rose-400 mt-0.5 shrink-0"></i>
+                                <div id="ai-test-error-text" class="leading-relaxed"></div>
                             </div>
                         </div>
 
@@ -826,7 +912,8 @@
         // --- 2. AUTH GUARD & SESSION HELPER ---
         function getActiveUsername() {
             const user = JSON.parse(localStorage.getItem('user_data') || '{}');
-            return localStorage.getItem('impersonating') || user.username || '';
+            let raw = localStorage.getItem('impersonating') || user.username || '';
+            return String(raw).replace(/^@/, '').trim();
         }
 
         function exitAdminMode() {
@@ -1553,11 +1640,51 @@
             container.appendChild(div);
         }
 
+        // 8B. PRODUCT IMAGE UPLOAD HANDLERS (BYTEA BINARY IN NEON DB)
+        function handleProductImgSelect(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const dataUrl = e.target.result;
+                const hiddenInput = document.getElementById('product-img-data');
+                const previewCard = document.getElementById('product-img-preview-card');
+                const thumb = document.getElementById('product-img-thumb');
+                const nameEl = document.getElementById('product-img-name');
+                const sizeEl = document.getElementById('product-img-size');
+                const labelText = document.getElementById('product-file-label-text');
+
+                if (hiddenInput) hiddenInput.value = dataUrl;
+                if (thumb) thumb.src = dataUrl;
+                if (nameEl) nameEl.innerText = file.name;
+                if (sizeEl) sizeEl.innerText = `${(file.size / 1024).toFixed(1)} KB · Neon BYTEA`;
+                if (previewCard) previewCard.classList.remove('hidden');
+                if (labelText) labelText.innerText = 'Change Image';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function clearProductImgUpload() {
+            const fileInput = document.getElementById('product-img-file');
+            const hiddenInput = document.getElementById('product-img-data');
+            const previewCard = document.getElementById('product-img-preview-card');
+            const thumb = document.getElementById('product-img-thumb');
+            const labelText = document.getElementById('product-file-label-text');
+
+            if (fileInput) fileInput.value = '';
+            if (hiddenInput) hiddenInput.value = '';
+            if (thumb) thumb.src = '';
+            if (previewCard) previewCard.classList.add('hidden');
+            if (labelText) labelText.innerText = 'Select Image File';
+        }
+
         async function addProduct() {
             const name = document.getElementById('product-name').value.trim();
             const unitType = document.getElementById('product-unit')?.value || 'weight';
             const details = document.getElementById('product-desc').value.trim();
             const itemType = document.getElementById('item-type-input')?.value || 'product';
+            const imageData = document.getElementById('product-img-data')?.value || '';
 
             const nameInputs = document.querySelectorAll('.variant-name-input');
             const priceInputs = document.querySelectorAll('.variant-price-input');
@@ -1598,6 +1725,7 @@
                         variants,
                         details,
                         item_type: itemType,
+                        image_data: imageData,
                         username
                     })
                 });
@@ -1605,6 +1733,7 @@
                 if (data.status === 'success') {
                     document.getElementById('product-name').value = '';
                     document.getElementById('product-desc').value = '';
+                    clearProductImgUpload();
                     handleUnitChange();
                     loadProductCatalog();
                 } else {
@@ -1620,8 +1749,9 @@
         // 9. DELETE PRODUCT FROM CATALOG
         async function deleteProduct(productId) {
             if (!confirm('Are you sure you want to remove this item from your catalog?')) return;
+            const username = getActiveUsername();
             try {
-                const res = await fetch(`/api/products?id=${productId}`, { method: 'DELETE' });
+                const res = await fetch(`/api/products?id=${productId}&username=${encodeURIComponent(username)}`, { method: 'DELETE' });
                 const data = await res.json();
                 if (data.status === 'success') {
                     loadProductCatalog();
@@ -1633,7 +1763,7 @@
             }
         }
 
-        // 10. LOAD PRODUCT CATALOG (CLEAN DISPLAY WITHOUT IMAGES)
+        // 10. LOAD PRODUCT CATALOG (WITH AUTO-TAGS <IMG_N> & IMAGES)
         async function loadProductCatalog() {
             const grid = document.getElementById('catalog-grid');
             if (!grid) return;
@@ -1642,8 +1772,16 @@
 
             try {
                 const res = await fetch(`/api/products?username=${encodeURIComponent(username)}`);
+                if (!res.ok) return;
                 const data = await res.json();
                 const products = data.products || [];
+
+                // Store in window cache for instant fast recall
+                window._loadedProducts = products;
+
+                // Update auto-tag counter hint
+                const tagHint = document.getElementById('product-tag-preview-hint');
+                if (tagHint) tagHint.innerText = `Next Auto Tag: <IMG_${products.length + 1}>`;
 
                 if (products.length === 0) {
                     grid.innerHTML = `
@@ -1664,8 +1802,9 @@
                     const badgeIcon = isService ? 'fa-bolt' : 'fa-box';
                     const badgeLabel = isService ? 'Service' : 'Product';
                     const unitLabel = (item.unit_type || 'custom').toUpperCase();
-                    const tag = item.tag || ('<ITEM_' + (idx + 1) + '>');
+                    const tag = item.ai_tag || ('<IMG_' + (idx + 1) + '>');
                     const vars = Array.isArray(item.variants) && item.variants.length > 0 ? item.variants : [];
+                    const img = item.image_url || item.image_data || '';
 
                     const variantBadges = vars.map(v => `
                         <div class="flex items-center justify-between text-[11px] font-mono py-1 border-b border-slate-800/60 last:border-0">
@@ -1676,17 +1815,34 @@
 
                     return `
                         <div class="glass-card rounded-2xl border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition space-y-3">
-                            <div class="space-y-2">
+                            <div class="space-y-2.5">
                                 <div class="flex items-center justify-between gap-2">
                                     <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold border flex items-center gap-1.5 ${badgeClass}">
                                         <i class="fa-solid ${badgeIcon}"></i> ${badgeLabel}
                                     </span>
-                                    <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-900 border border-slate-800 text-amber-400 uppercase">
-                                        UNIT: ${unitLabel}
+                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30" title="Use this tag in your AI System Prompt">
+                                        ${tag}
                                     </span>
                                 </div>
-                                <h4 class="text-sm font-bold text-white line-clamp-1">${item.name}</h4>
-                                <p class="text-[11px] text-slate-400 leading-relaxed">${item.details || 'No description provided.'}</p>
+
+                                ${img ? `
+                                    <div class="relative w-full h-32 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
+                                        <img src="${img}" alt="${item.name}" class="w-full h-full object-cover">
+                                        <span class="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-950/80 backdrop-blur text-[9px] font-mono font-bold text-amber-300 border border-slate-700">
+                                            BYTEA Binary
+                                        </span>
+                                    </div>
+                                ` : ''}
+
+                                <div>
+                                    <div class="flex items-center justify-between">
+                                        <h4 class="text-sm font-bold text-white line-clamp-1">${item.name}</h4>
+                                        <span class="text-[10px] font-mono font-bold text-slate-400 uppercase">
+                                            ${unitLabel}
+                                        </span>
+                                    </div>
+                                    <p class="text-[11px] text-slate-400 leading-relaxed mt-1 line-clamp-2">${item.details || 'No description provided.'}</p>
+                                </div>
 
                                 ${vars.length > 0 ? `
                                     <div class="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-0.5 mt-2">
@@ -1803,11 +1959,22 @@
             }
         }
 
-        // 13B. RUN INTERACTIVE AI TEST SIMULATION
+        // 13B. QUICK TEST QUERY HELPER
+        function setQuickTestQuery(text) {
+            const input = document.getElementById('ai-test-query');
+            if (input) {
+                input.value = text;
+                runAITestSimulation();
+            }
+        }
+
+        // 13C. RUN INTERACTIVE AI TEST SIMULATION
         async function runAITestSimulation() {
-            const query = document.getElementById('ai-test-query')?.value.trim();
+            const queryInput = document.getElementById('ai-test-query');
+            const query = queryInput ? queryInput.value.trim() : '';
             if (!query) {
                 alert('Please enter a test customer question.');
+                queryInput?.focus();
                 return;
             }
 
@@ -1822,9 +1989,22 @@
             const btnText = document.getElementById('btn-test-ai-text');
             const resultBox = document.getElementById('ai-test-result-box');
             const replyEl = document.getElementById('ai-test-reply-content');
+            const errorBox = document.getElementById('ai-test-error-box');
+            const errorText = document.getElementById('ai-test-error-text');
+            const latencyEl = document.getElementById('ai-test-latency');
+            const metaBadge = document.getElementById('ai-test-meta-badge');
+            const modelInfo = document.getElementById('ai-test-model-info');
+            const imgPreview = document.getElementById('ai-test-img-preview');
+            const imgThumb = document.getElementById('ai-test-img-thumb');
+            const imgTag = document.getElementById('ai-test-img-tag');
+            const tsEl = document.getElementById('ai-test-timestamp');
 
+            if (errorBox) errorBox.classList.add('hidden');
+            if (imgPreview) imgPreview.classList.add('hidden');
             if (btn) btn.disabled = true;
-            if (btnText) btnText.innerText = 'Generating...';
+            if (btnText) btnText.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-xs"></i> Generating...';
+
+            const startTime = performance.now();
 
             try {
                 const res = await fetch('/api/ai/test', {
@@ -1833,28 +2013,58 @@
                     body: JSON.stringify({
                         username,
                         query,
-                        provider: platform,
+                        prompt: query,
+                        platform,
+                        ai_provider: platform,
                         model,
                         temperature,
                         api_key: apiKey,
                         system_prompt: systemPrompt
                     })
                 });
+
                 const data = await res.json();
+                const latency = Math.round(performance.now() - startTime);
+
+                if (!res.ok || data.error) {
+                    if (errorBox && errorText) {
+                        errorText.innerText = data.error || `Server responded with status ${res.status}`;
+                        errorBox.classList.remove('hidden');
+                    }
+                    if (resultBox) resultBox.classList.add('hidden');
+                    return;
+                }
+
                 if (resultBox) resultBox.classList.remove('hidden');
+                if (latencyEl) latencyEl.innerText = `${latency}ms`;
+                if (metaBadge) metaBadge.innerText = `· ${data.provider || platform}`;
+                if (modelInfo) modelInfo.innerText = `Model: ${data.model_used || model || 'Default'} (${temperature} temp)`;
+                if (tsEl) tsEl.innerText = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                const rawReply = data.reply || data.response || 'No response generated.';
                 if (replyEl) {
-                    const rawReply = data.reply || data.response || 'No response generated.';
-                    if (window.marked && typeof window.marked.parse === 'function') {
-                        replyEl.innerHTML = window.marked.parse(rawReply);
-                    } else {
-                        replyEl.innerText = rawReply;
+                    replyEl.innerText = rawReply;
+                }
+
+                // Check if reply references an image tag <IMG_N> or [IMAGE: url]
+                const tagMatch = rawReply.match(/<IMG_(\d+)>/i);
+                if (tagMatch && window._loadedProducts) {
+                    const tagStr = `<IMG_${tagMatch[1]}>`;
+                    const matchedProd = window._loadedProducts.find(p => p.ai_tag === tagStr || String(p.id) === tagMatch[1]);
+                    if (matchedProd && (matchedProd.image_url || matchedProd.image_data)) {
+                        if (imgThumb) imgThumb.src = matchedProd.image_url || matchedProd.image_data;
+                        if (imgTag) imgTag.innerText = `📸 Product Image attached: ${matchedProd.name} (${matchedProd.price})`;
+                        if (imgPreview) imgPreview.classList.remove('hidden');
                     }
                 }
             } catch (err) {
-                alert('Error contacting AI test simulation endpoint.');
+                if (errorBox && errorText) {
+                    errorText.innerText = 'Network error contacting AI simulation engine. Please check connection.';
+                    errorBox.classList.remove('hidden');
+                }
             } finally {
                 if (btn) btn.disabled = false;
-                if (btnText) btnText.innerText = 'Test Reply';
+                if (btnText) btnText.innerHTML = '<i class="fa-solid fa-play text-xs"></i> Simulate AI Reply';
             }
         }
 
@@ -1922,19 +2132,29 @@
         async function loadUserProfile() {
             const username = getActiveUsername();
             if (!username) return;
+
+            // Instant prefill from local session cache
+            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            const dispName = document.getElementById('prof-display-name');
+            const uName = document.getElementById('prof-username');
+            const email = document.getElementById('prof-email');
+            const phone = document.getElementById('prof-phone-text');
+            const typeBadge = document.getElementById('prof-type-badge');
+
+            if (dispName) dispName.innerText = user.account_name || `${username} Workspace`;
+            if (uName) uName.innerText = `@${username}`;
+            if (email && user.email) email.innerText = user.email;
+            if (phone && user.phone) phone.innerText = `+${user.phone}`;
+            if (typeBadge) typeBadge.innerText = (user.user_type === 'library_owner' || user.user_type === 'library_partner') ? 'Library Partner' : 'Business Suite';
+
             try {
                 const res = await fetch(`/api/user/profile?username=${encodeURIComponent(username)}`);
                 if (!res.ok) return;
                 const data = await res.json();
                 
-                const dispName = document.getElementById('prof-display-name');
-                const uName = document.getElementById('prof-username');
-                const email = document.getElementById('prof-email');
-                const phone = document.getElementById('prof-phone-text');
                 const statusPill = document.getElementById('prof-status-pill');
                 const aiProv = document.getElementById('prof-ai-provider');
                 const createdAt = document.getElementById('prof-created-at');
-                const typeBadge = document.getElementById('prof-type-badge');
 
                 if (dispName) dispName.innerText = data.account_name || `${data.username} Workspace`;
                 if (uName) uName.innerText = `@${data.username}`;

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,12 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
+}
+
+func cleanUsername(u string) string {
+	u = strings.TrimSpace(u)
+	u = strings.TrimPrefix(u, "@")
+	return u
 }
 
 // DB Status Endpoint for Frontend Badge & Health Check
@@ -200,6 +207,8 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		loginId = strings.TrimSpace(req.Email)
 	}
 
+	cleanId := cleanUsername(loginId)
+
 	if loginId == "" || req.Password == "" {
 		respondJSON(w, 400, map[string]string{"status": "error", "message": "Please enter Email / Username and Password."})
 		return
@@ -207,7 +216,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	if DB == nil {
 		// Fallback for Zero-Config Embedded Mode
-		if (strings.EqualFold(loginId, "admin") || strings.EqualFold(loginId, "admin@example.com") || strings.EqualFold(loginId, "admin@eduta.ai")) && req.Password == "admin123" {
+		if (strings.EqualFold(cleanId, "admin") || strings.EqualFold(loginId, "admin@example.com") || strings.EqualFold(loginId, "admin@eduta.ai")) && req.Password == "admin123" {
 			respondJSON(w, 200, map[string]interface{}{
 				"status":        "success",
 				"token":         "eduta-token-admin",
@@ -232,7 +241,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var autoReply bool
 
 	err := DB.QueryRow(`SELECT id, username, COALESCE(account_name, username), password, COALESCE(role, 'business_user'), COALESCE(user_type, 'business_user'), COALESCE(ai_provider, 'Groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true) 
-		FROM users WHERE LOWER(username)=$1 OR LOWER(email)=$1`, strings.ToLower(loginId)).
+		FROM users WHERE LOWER(username)=$1 OR LOWER(email)=$2`, strings.ToLower(cleanId), strings.ToLower(loginId)).
 		Scan(&id, &fetchedUsername, &accountName, &hashPass, &role, &userType, &aiProvider, &apiKey, &sysPrompt, &autoReply)
 
 	if err != nil {
@@ -645,7 +654,7 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // 5. WHATSAPP STATUS & QR GENERATOR PER USER
 func StatusHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.URL.Query().Get("username")
+	username := cleanUsername(r.URL.Query().Get("username"))
 	if username == "" {
 		username = "admin"
 	}
@@ -654,20 +663,27 @@ func StatusHandler(w http.ResponseWriter, r *http.Request) {
 	status := "Disconnected"
 	jid := ""
 
-	if client != nil && client.IsConnected() && client.IsLoggedIn() {
+	if client != nil && client.IsLoggedIn() {
 		status = "Connected"
 		if client.Store.ID != nil {
 			jid = client.Store.ID.User
 		}
-	} else if whatsapp.QRChannelMap[username] != "" {
-		status = "QR_Ready"
+	} else {
+		// Not logged in: provide QR code
+		qrCode := whatsapp.QRChannelMap[username]
+		if qrCode == "" {
+			qrCode = whatsapp.GetOrGenerateQR(username)
+		}
+		if qrCode != "" {
+			status = "QR_Ready"
+		}
 	}
 
-	// Also check DB if client was connected previously
-	if status == "Disconnected" && DB != nil {
+	// Only fallback to DB if client has a persistent device store ID
+	if status == "Disconnected" && client != nil && client.Store.ID != nil && DB != nil {
 		var savedJID, savedStatus string
 		_ = DB.QueryRow("SELECT COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID, &savedStatus)
-		if savedJID != "" && (savedStatus == "Connected" || savedStatus == "Ready") {
+		if savedJID != "" && savedStatus == "Connected" {
 			status = "Connected"
 			jid = savedJID
 		}
@@ -695,11 +711,12 @@ func PairPhoneHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Username == "" {
 		req.Username = r.URL.Query().Get("username")
 	}
+	req.Username = cleanUsername(req.Username)
 	if req.Username == "" {
 		req.Username = "admin"
 	}
 
-	cleanPhone := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(req.Phone), "+", ""), " ", "")
+	cleanPhone := whatsapp.FormatPhone(req.Phone)
 	if cleanPhone == "" {
 		respondJSON(w, 400, map[string]string{
 			"status":  "error",
@@ -809,69 +826,553 @@ func SendHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, map[string]string{"status": "success", "message": "Message Sent!"})
 }
 
-// 9. BULK CAMPAIGN SENDER (With Anti-Ban & Image Support)
+// 9. BULK CAMPAIGN SENDER (Handles /api/bulk and /api/bulk/send)
 func BulkSendHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username   string   `json:"username"`
-		Phones     []string `json:"phones"`
-		Message    string   `json:"message"`
-		ImageURL   string   `json:"image_url"`
-		UseAntiBan bool     `json:"use_anti_ban"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.Username == "" {
-		req.Username = "admin"
-	}
-
-	client := whatsapp.GetOrCreateClient(req.Username)
-	if client != nil && !client.IsLoggedIn() {
-		respondJSON(w, 400, map[string]string{"status": "error", "message": "WhatsApp connected nahi hai!"})
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Background goroutine
+	var rawBody map[string]interface{}
+	bodyBytes, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(bodyBytes, &rawBody)
+
+	username, _ := rawBody["username"].(string)
+	if username == "" {
+		username = r.URL.Query().Get("username")
+	}
+	username = cleanUsername(username)
+	if username == "" {
+		username = "admin"
+	}
+
+	message, _ := rawBody["message"].(string)
+	imageURL, _ := rawBody["image_url"].(string)
+	useAntiBan := true
+	if ab, ok := rawBody["anti_ban"].(bool); ok {
+		useAntiBan = ab
+	} else if ab, ok := rawBody["use_anti_ban"].(bool); ok {
+		useAntiBan = ab
+	}
+
+	// Extract phones from rawBody["phones"] which could be string or array
+	var phoneList []string
+	if phoneStr, ok := rawBody["phones"].(string); ok {
+		re := regexp.MustCompile(`[\r\n,;]+`)
+		tokens := re.Split(phoneStr, -1)
+		for _, t := range tokens {
+			clean := whatsapp.FormatPhone(t)
+			if len(clean) >= 8 {
+				phoneList = append(phoneList, clean)
+			}
+		}
+	} else if phoneArr, ok := rawBody["phones"].([]interface{}); ok {
+		for _, item := range phoneArr {
+			if s, ok := item.(string); ok {
+				clean := whatsapp.FormatPhone(s)
+				if len(clean) >= 8 {
+					phoneList = append(phoneList, clean)
+				}
+			}
+		}
+	}
+
+	if len(phoneList) == 0 {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "No valid recipient phone numbers provided!"})
+		return
+	}
+
+	client := whatsapp.GetOrCreateClient(username)
+	if client == nil || !client.IsLoggedIn() {
+		respondJSON(w, 400, map[string]string{
+			"status":  "error",
+			"message": "WhatsApp device is not linked for @" + username + ". Please scan the QR code or pair via 8-digit code first.",
+		})
+		return
+	}
+
+	campaignID := fmt.Sprintf("camp_%s_%d", username, time.Now().Unix())
+	if DB != nil {
+		_, _ = DB.Exec(`INSERT INTO campaigns (id, username, message, image_url, use_anti_ban, status, total_count, sent_count, failed_count, start_time)
+			VALUES ($1, $2, $3, $4, $5, 'running', $6, 0, 0, NOW())`,
+			campaignID, username, message, imageURL, useAntiBan, len(phoneList))
+	}
+
+	// Dispatch in background goroutine
 	go func() {
-		if client != nil {
-			results := whatsapp.SendBulkMessages(client, req.Phones, req.Message, req.ImageURL, req.UseAntiBan)
-			for _, res := range results {
-				p, _ := res["phone"].(string)
-				st, _ := res["status"].(string)
-				whatsapp.PushToLiveChat(req.Username, p, "[Bulk "+st+"] "+req.Message, "outgoing_manual")
+		sentCount := 0
+		failedCount := 0
+		for idx, p := range phoneList {
+			if useAntiBan && idx > 0 {
+				delay := time.Duration(rand.Intn(5)+4) * time.Second
+				time.Sleep(delay)
 			}
-		} else {
-			for _, p := range req.Phones {
-				whatsapp.PushToLiveChat(req.Username, p, "[Bulk Sent] "+req.Message, "outgoing_manual")
+			var sendErr error
+			if imageURL != "" {
+				sendErr = whatsapp.SendImageFromURL(client, p, imageURL, message)
+			} else {
+				sendErr = whatsapp.SendMessage(client, p, message)
 			}
+			st := "sent"
+			if sendErr != nil {
+				st = "failed"
+				failedCount++
+			} else {
+				sentCount++
+			}
+			if DB != nil {
+				_, _ = DB.Exec(`INSERT INTO campaign_logs (campaign_id, phone, status, note, created_at) VALUES ($1, $2, $3, $4, NOW())`,
+					campaignID, p, st, message)
+			}
+			whatsapp.PushToLiveChat(username, p, fmt.Sprintf("[Bulk %s] %s", st, message), "outgoing_manual")
+		}
+		if DB != nil {
+			_, _ = DB.Exec(`UPDATE campaigns SET status='completed', sent_count=$1, failed_count=$2, end_time=NOW() WHERE id=$3`,
+				sentCount, failedCount, campaignID)
 		}
 	}()
 
-	respondJSON(w, 200, map[string]string{
-		"status":  "success",
-		"message": fmt.Sprintf("Bulk campaign started for %d numbers in background!", len(req.Phones)),
+	respondJSON(w, 200, map[string]interface{}{
+		"status":      "success",
+		"message":     fmt.Sprintf("Bulk campaign launched for %d contacts in background!", len(phoneList)),
+		"campaign_id": campaignID,
+		"count":       len(phoneList),
 	})
 }
 
-// 10. SAVE AI AUTO-REPLY SETTINGS
-func SaveAISettingsHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username     string `json:"username"`
-		AIProvider   string `json:"ai_provider"`
-		APIKey       string `json:"api_key"`
-		SystemPrompt string `json:"system_prompt"`
-		AutoReply    bool   `json:"auto_reply"`
+// 9B. BULK CAMPAIGN LOGS & STATUS (GET /api/bulk/status)
+func BulkStatusHandler(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		username = "admin"
 	}
-	json.NewDecoder(r.Body).Decode(&req)
 
+	var logs []map[string]interface{}
 	if DB != nil {
-		_, err := DB.Exec(`UPDATE users SET ai_provider=$1, api_key=$2, system_prompt=$3, auto_reply=$4 WHERE username=$5`,
-			req.AIProvider, req.APIKey, req.SystemPrompt, req.AutoReply, req.Username)
-
-		if err != nil {
-			respondJSON(w, 500, map[string]string{"status": "error", "message": err.Error()})
-			return
+		rows, err := DB.Query(`SELECT l.phone, l.status, COALESCE(TO_CHAR(l.created_at, 'HH24:MI:SS'), 'Just now')
+			FROM campaign_logs l
+			JOIN campaigns c ON l.campaign_id = c.id
+			WHERE LOWER(c.username)=LOWER($1)
+			ORDER BY l.id DESC LIMIT 50`, username)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var phone, status, ts string
+				if err := rows.Scan(&phone, &status, &ts); err == nil {
+					logs = append(logs, map[string]interface{}{
+						"phone":     phone,
+						"status":    status,
+						"timestamp": ts,
+					})
+				}
+			}
 		}
 	}
-	respondJSON(w, 200, map[string]string{"status": "success", "message": "AI Bot Settings Saved!"})
+	respondJSON(w, 200, map[string]interface{}{
+		"status":      "success",
+		"recent_logs": logs,
+		"campaign":    map[string]interface{}{"logs": logs},
+	})
+}
+
+// 10. AI SETTINGS HANDLER (GET & POST /api/ai/settings)
+func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		username = "admin"
+	}
+
+	if r.Method == "GET" {
+		if DB == nil {
+			respondJSON(w, 200, map[string]interface{}{
+				"platform":           "Groq",
+				"model":              "llama-3.3-70b-versatile",
+				"temperature":        0.7,
+				"api_key":            "",
+				"system_prompt":      "You are a helpful WhatsApp AI assistant for our business.",
+				"notification_phone": "",
+				"auto_reply":         true,
+			})
+			return
+		}
+
+		var provider, model, apiKey, prompt, notifPhone string
+		var temp float64
+		var autoReply bool
+
+		err := DB.QueryRow(`SELECT COALESCE(ai_provider, 'Groq'), COALESCE(ai_model, 'llama-3.3-70b-versatile'),
+			COALESCE(ai_temperature, 0.7), COALESCE(api_key, ''), COALESCE(system_prompt, ''),
+			COALESCE(notification_phone, ''), COALESCE(auto_reply, true)
+			FROM users WHERE LOWER(username)=LOWER($1)`, username).
+			Scan(&provider, &model, &temp, &apiKey, &prompt, &notifPhone, &autoReply)
+
+		if err != nil {
+			respondJSON(w, 200, map[string]interface{}{
+				"platform":           "Groq",
+				"model":              "llama-3.3-70b-versatile",
+				"temperature":        0.7,
+				"api_key":            "",
+				"system_prompt":      "You are a helpful WhatsApp AI assistant.",
+				"notification_phone": "",
+				"auto_reply":         true,
+			})
+			return
+		}
+
+		respondJSON(w, 200, map[string]interface{}{
+			"platform":           provider,
+			"ai_provider":        provider,
+			"model":              model,
+			"ai_model":           model,
+			"temperature":        temp,
+			"ai_temperature":    temp,
+			"api_key":            apiKey,
+			"system_prompt":      prompt,
+			"notification_phone": notifPhone,
+			"auto_reply":         autoReply,
+		})
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			Username          string   `json:"username"`
+			Platform          string   `json:"platform"`
+			AIProvider        string   `json:"ai_provider"`
+			Model             string   `json:"model"`
+			AIModel           string   `json:"ai_model"`
+			Temperature       *float64 `json:"temperature"`
+			AITemperature     *float64 `json:"ai_temperature"`
+			APIKey            string   `json:"api_key"`
+			SystemPrompt      string   `json:"system_prompt"`
+			NotificationPhone string   `json:"notification_phone"`
+			AutoReply         *bool    `json:"auto_reply"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		targetUser := req.Username
+		if targetUser == "" {
+			targetUser = username
+		}
+
+		prov := req.Platform
+		if prov == "" {
+			prov = req.AIProvider
+		}
+		if prov == "" {
+			prov = "Groq"
+		}
+
+		mdl := req.Model
+		if mdl == "" {
+			mdl = req.AIModel
+		}
+		if mdl == "" {
+			mdl = "llama-3.3-70b-versatile"
+		}
+
+		tempVal := 0.7
+		if req.Temperature != nil {
+			tempVal = *req.Temperature
+		} else if req.AITemperature != nil {
+			tempVal = *req.AITemperature
+		}
+
+		autoReplyVal := true
+		if req.AutoReply != nil {
+			autoReplyVal = *req.AutoReply
+		}
+
+		if DB != nil {
+			_, err := DB.Exec(`UPDATE users SET ai_provider=$1, ai_model=$2, ai_temperature=$3, api_key=$4, system_prompt=$5, notification_phone=$6, auto_reply=$7 WHERE LOWER(username)=LOWER($8)`,
+				prov, mdl, tempVal, req.APIKey, req.SystemPrompt, req.NotificationPhone, autoReplyVal, targetUser)
+			if err != nil {
+				respondJSON(w, 500, map[string]string{"error": "Database error saving AI settings: " + err.Error()})
+				return
+			}
+		}
+
+		respondJSON(w, 200, map[string]string{
+			"status":  "success",
+			"message": "AI Lead Responder configuration saved successfully in Neon DB!",
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// 10B. AI TEST SIMULATION HANDLER (POST /api/ai/test)
+func AITestHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username     string   `json:"username"`
+		Query        string   `json:"query"`
+		Prompt       string   `json:"prompt"`
+		Platform     string   `json:"platform"`
+		AIProvider   string   `json:"ai_provider"`
+		Model        string   `json:"model"`
+		Temperature  *float64 `json:"temperature"`
+		APIKey       string   `json:"api_key"`
+		SystemPrompt string   `json:"system_prompt"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	userQuery := strings.TrimSpace(req.Query)
+	if userQuery == "" {
+		userQuery = strings.TrimSpace(req.Prompt)
+	}
+	if userQuery == "" {
+		respondJSON(w, 400, map[string]string{"error": "Please provide a customer question to test."})
+		return
+	}
+
+	username := cleanUsername(req.Username)
+	if username == "" {
+		username = "admin"
+	}
+
+	provider := req.Platform
+	if provider == "" {
+		provider = req.AIProvider
+	}
+	model := req.Model
+	apiKey := strings.TrimSpace(req.APIKey)
+	sysPrompt := req.SystemPrompt
+	tempVal := 0.7
+	if req.Temperature != nil {
+		tempVal = *req.Temperature
+	}
+
+	// Fallback to DB if apiKey or settings not passed from form
+	if (apiKey == "" || provider == "") && DB != nil {
+		var dbProv, dbModel, dbKey, dbPrompt string
+		var dbTemp float64
+		_ = DB.QueryRow("SELECT COALESCE(ai_provider, 'Groq'), COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7), COALESCE(api_key, ''), COALESCE(system_prompt, '') FROM users WHERE LOWER(username)=LOWER($1)", username).
+			Scan(&dbProv, &dbModel, &dbTemp, &dbKey, &dbPrompt)
+		if provider == "" {
+			provider = dbProv
+		}
+		if model == "" {
+			model = dbModel
+		}
+		if apiKey == "" {
+			apiKey = dbKey
+		}
+		if sysPrompt == "" {
+			sysPrompt = dbPrompt
+		}
+		if req.Temperature == nil {
+			tempVal = dbTemp
+		}
+	}
+
+	if apiKey == "" {
+		respondJSON(w, 400, map[string]string{
+			"error": "No API key configured! Please enter your " + provider + " API key above and click Save Configuration.",
+		})
+		return
+	}
+
+	// Inject Live Catalog & Knowledge base into prompt
+	catalogContext := whatsapp.GetCatalogContext(username)
+	fullSystemPrompt := sysPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
+
+	reply, err := whatsapp.CallAIModel(provider, model, tempVal, apiKey, fullSystemPrompt, userQuery)
+	if err != nil {
+		respondJSON(w, 500, map[string]string{"error": "AI Provider Error: " + err.Error()})
+		return
+	}
+
+	// Check if reply references an image tag <IMG_N> or [IMAGE: url]
+	imageURL := ""
+	reTag := regexp.MustCompile(`<IMG_\d+>`)
+	matchTag := reTag.FindString(reply)
+	if matchTag != "" && DB != nil {
+		var imgUrl, imgData string
+		_ = DB.QueryRow("SELECT COALESCE(image_url, ''), COALESCE(image_data, '') FROM products WHERE LOWER(username)=LOWER($1) AND ai_tag=$2 LIMIT 1", username, matchTag).Scan(&imgUrl, &imgData)
+		if imgUrl != "" {
+			imageURL = imgUrl
+		} else if imgData != "" {
+			imageURL = imgData
+		}
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":      "success",
+		"reply":       reply,
+		"image_url":   imageURL,
+		"model_used":  model,
+		"provider":    provider,
+		"catalog_fed": catalogContext != "",
+	})
+}
+
+// 10C. USER PROFILE HANDLER (GET /api/user/profile)
+func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
+	username := cleanUsername(r.URL.Query().Get("username"))
+	if username == "" {
+		username = "admin"
+	}
+
+	if DB == nil {
+		respondJSON(w, 200, map[string]interface{}{
+			"username":     username,
+			"account_name": username + " Workspace",
+			"email":        username + "@eduta.ai",
+			"phone":        "",
+			"role":         "business_user",
+			"user_type":    "business_user",
+			"status":       "Disconnected",
+			"ai_provider":  "gemini",
+			"ai_model":     "gemini-1.5-flash",
+			"created_at":   time.Now().Format("02 Jan 2006"),
+		})
+		return
+	}
+
+	var id int
+	var u, email, accName, role, userType, phone, jid, aiProvider, aiModel, status, createdAt string
+	var autoReply, autoAccess bool
+
+	err := DB.QueryRow(`SELECT id, username, COALESCE(email, ''), COALESCE(account_name, username),
+		COALESCE(role, 'business_user'), COALESCE(user_type, 'business_user'), COALESCE(phone, ''),
+		COALESCE(wa_jid, ''), COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, 'gemini-1.5-flash'),
+		COALESCE(auto_reply, true), COALESCE(automation_access, true), COALESCE(status, 'Disconnected'),
+		COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active')
+		FROM users WHERE LOWER(username)=LOWER($1)`, username).
+		Scan(&id, &u, &email, &accName, &role, &userType, &phone, &jid, &aiProvider, &aiModel, &autoReply, &autoAccess, &status, &createdAt)
+
+	if err != nil {
+		respondJSON(w, 404, map[string]string{"error": "User profile not found"})
+		return
+	}
+
+	// Check live connection state
+	if c, ok := whatsapp.ActiveClients[u]; ok && c.IsConnected() && c.IsLoggedIn() {
+		status = "Connected"
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"id":                id,
+		"username":          u,
+		"account_name":      accName,
+		"email":             email,
+		"phone":             phone,
+		"wa_jid":            jid,
+		"role":              role,
+		"user_type":         userType,
+		"status":            status,
+		"wa_status":         status,
+		"ai_provider":       aiProvider,
+		"ai_model":          aiModel,
+		"auto_reply":        autoReply,
+		"automation_access": autoAccess,
+		"created_at":        createdAt,
+	})
+}
+
+// 10D. VERIFY CURRENT PASSWORD HANDLER (POST /api/user/verify-password)
+func VerifyPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username        string `json:"username"`
+		CurrentPassword string `json:"current_password"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Username == "" || req.CurrentPassword == "" {
+		respondJSON(w, 400, map[string]string{"error": "Username and current password required"})
+		return
+	}
+
+	if DB == nil {
+		if req.CurrentPassword == "admin123" {
+			respondJSON(w, 200, map[string]interface{}{"status": "success", "valid": true, "message": "Password verified"})
+			return
+		}
+		respondJSON(w, 401, map[string]string{"error": "Incorrect password"})
+		return
+	}
+
+	var hashedPass string
+	err := DB.QueryRow("SELECT password FROM users WHERE LOWER(username)=LOWER($1)", req.Username).Scan(&hashedPass)
+	if err != nil {
+		respondJSON(w, 404, map[string]string{"error": "User not found"})
+		return
+	}
+
+	match := (req.CurrentPassword == hashedPass) || (bcrypt.CompareHashAndPassword([]byte(hashedPass), []byte(req.CurrentPassword)) == nil)
+	if !match {
+		respondJSON(w, 401, map[string]string{"error": "Current password does not match records"})
+		return
+	}
+
+	respondJSON(w, 200, map[string]interface{}{"status": "success", "valid": true, "message": "Current password confirmed!"})
+}
+
+// 10E. UPDATE PASSWORD HANDLER (POST /api/user/update-password)
+func UpdatePasswordHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username        string `json:"username"`
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Username == "" || req.NewPassword == "" {
+		respondJSON(w, 400, map[string]string{"error": "Username and new password are required"})
+		return
+	}
+	if len(req.NewPassword) < 6 {
+		respondJSON(w, 400, map[string]string{"error": "New password must be at least 6 characters"})
+		return
+	}
+
+	if DB == nil {
+		respondJSON(w, 200, map[string]string{"status": "success", "message": "Password updated successfully!"})
+		return
+	}
+
+	// Verify current password if provided
+	if req.CurrentPassword != "" {
+		var hashedPass string
+		err := DB.QueryRow("SELECT password FROM users WHERE LOWER(username)=LOWER($1)", req.Username).Scan(&hashedPass)
+		if err == nil {
+			match := (req.CurrentPassword == hashedPass) || (bcrypt.CompareHashAndPassword([]byte(hashedPass), []byte(req.CurrentPassword)) == nil)
+			if !match {
+				respondJSON(w, 401, map[string]string{"error": "Current password is incorrect"})
+				return
+			}
+		}
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), 10)
+	if err != nil {
+		respondJSON(w, 500, map[string]string{"error": "Encryption error"})
+		return
+	}
+
+	_, err = DB.Exec("UPDATE users SET password=$1 WHERE LOWER(username)=LOWER($2)", string(newHash), req.Username)
+	if err != nil {
+		respondJSON(w, 500, map[string]string{"error": "Database error updating password: " + err.Error()})
+		return
+	}
+
+	respondJSON(w, 200, map[string]string{"status": "success", "message": "Account password updated successfully!"})
 }
 
 // 11. PRODUCT IMAGE CATALOG (Save & List Neon Bucket URLs)
@@ -1035,9 +1536,9 @@ func ServeNeonMediaHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// 15. PRODUCT CATALOG HANDLER (GET, POST, DELETE - ZERO IMAGES, UNIT & VARIANTS)
+// 15. PRODUCT CATALOG HANDLER (GET, POST, DELETE - WITH AUTO-TAGS <IMG_N> & IMAGE STORAGE)
 func ProductsHandler(w http.ResponseWriter, r *http.Request) {
-	username := r.URL.Query().Get("username")
+	username := cleanUsername(r.URL.Query().Get("username"))
 	if username == "" {
 		username = "admin"
 	}
@@ -1048,32 +1549,65 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows, err := DB.Query(`SELECT id, name, price, description, COALESCE(item_type, 'product'), COALESCE(unit_type, 'custom'), COALESCE(variants, '[]'::jsonb)::text 
+		rows, err := DB.Query(`SELECT id, 
+			COALESCE(name, ''), 
+			COALESCE(price, ''), 
+			COALESCE(description, ''), 
+			COALESCE(item_type, 'product'), 
+			COALESCE(unit_type, 'custom'), 
+			COALESCE(variants::text, '[]'),
+			COALESCE(ai_tag, ''),
+			COALESCE(image_url, ''),
+			COALESCE(image_data, '')
 			FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, username)
 		if err != nil {
-			respondJSON(w, 500, map[string]string{"error": err.Error()})
-			return
+			// Fallback without image columns if legacy table
+			rows, err = DB.Query(`SELECT id, 
+				COALESCE(name, ''), 
+				COALESCE(price, ''), 
+				COALESCE(description, ''), 
+				COALESCE(item_type, 'product'), 
+				COALESCE(unit_type, 'custom'), 
+				COALESCE(variants::text, '[]'),
+				COALESCE(ai_tag, ''),
+				''::text, ''::text
+				FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, username)
+			if err != nil {
+				log.Printf("⚠️ ProductsHandler GET query error for @%s: %v", username, err)
+				respondJSON(w, 200, map[string]interface{}{"products": []interface{}{}})
+				return
+			}
 		}
 		defer rows.Close()
 
 		var products []map[string]interface{}
 		for rows.Next() {
 			var id int
-			var name, price, desc, itemType, unitType, variantsJSON string
-			rows.Scan(&id, &name, &price, &desc, &itemType, &unitType, &variantsJSON)
+			var name, price, desc, itemType, unitType, variantsJSON, aiTag, imgUrl, imgData string
+			if err := rows.Scan(&id, &name, &price, &desc, &itemType, &unitType, &variantsJSON, &aiTag, &imgUrl, &imgData); err == nil {
+				var parsedVariants []map[string]interface{}
+				_ = json.Unmarshal([]byte(variantsJSON), &parsedVariants)
 
-			var parsedVariants []map[string]interface{}
-			_ = json.Unmarshal([]byte(variantsJSON), &parsedVariants)
+				displayImg := imgUrl
+				if displayImg == "" && imgData != "" {
+					displayImg = imgData
+				}
 
-			products = append(products, map[string]interface{}{
-				"id":        id,
-				"name":      name,
-				"price":     price,
-				"details":   desc,
-				"item_type": itemType,
-				"unit_type": unitType,
-				"variants":  parsedVariants,
-			})
+				products = append(products, map[string]interface{}{
+					"id":         id,
+					"name":       name,
+					"price":      price,
+					"details":    desc,
+					"item_type":  itemType,
+					"unit_type":  unitType,
+					"variants":   parsedVariants,
+					"ai_tag":     aiTag,
+					"image_url":  displayImg,
+					"image_data": imgData,
+				})
+			} else {
+				log.Printf("⚠️ ProductsHandler row scan error: %v", err)
+			}
 		}
 		respondJSON(w, 200, map[string]interface{}{"products": products})
 		return
@@ -1089,8 +1623,12 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			ItemType    string                   `json:"item_type"`
 			UnitType    string                   `json:"unit_type"`
 			Variants    []map[string]interface{} `json:"variants"`
+			AITag       string                   `json:"ai_tag"`
+			ImageURL    string                   `json:"image_url"`
+			ImageData   string                   `json:"image_data"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		req.Username = cleanUsername(req.Username)
 		if req.Username == "" {
 			req.Username = username
 		}
@@ -1102,6 +1640,9 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.UnitType == "" {
 			req.UnitType = "custom"
+		}
+		if req.ImageURL == "" && req.ImageData != "" {
+			req.ImageURL = req.ImageData
 		}
 
 		if req.Name == "" {
@@ -1123,10 +1664,25 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Auto-assign <IMG_N> tag if not specified
+		if req.AITag == "" {
+			var existingCount int
+			_ = DB.QueryRow("SELECT COUNT(*) FROM products WHERE LOWER(username)=LOWER($1)", req.Username).Scan(&existingCount)
+			req.AITag = fmt.Sprintf("<IMG_%d>", existingCount+1)
+		}
+
 		var newID int
-		err := DB.QueryRow(`INSERT INTO products (username, name, price, description, item_type, unit_type, variants)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) RETURNING id`,
-			req.Username, req.Name, req.Price, req.Description, req.ItemType, req.UnitType, variantsStr).Scan(&newID)
+		// Try inserting with all columns
+		err := DB.QueryRow(`INSERT INTO products (username, name, price, description, item_type, unit_type, variants, ai_tag, image_url, image_data)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10) RETURNING id`,
+			req.Username, req.Name, req.Price, req.Description, req.ItemType, req.UnitType, variantsStr, req.AITag, req.ImageURL, req.ImageData).Scan(&newID)
+
+		if err != nil {
+			// Fallback if variants is TEXT or columns missing
+			err = DB.QueryRow(`INSERT INTO products (username, name, price, description, item_type, unit_type, variants, ai_tag)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+				req.Username, req.Name, req.Price, req.Description, req.ItemType, req.UnitType, variantsStr, req.AITag).Scan(&newID)
+		}
 
 		if err != nil {
 			respondJSON(w, 500, map[string]string{"error": "Database error: " + err.Error()})
@@ -1137,13 +1693,16 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			"status":  "success",
 			"message": "Item added to Neon DB Catalog!",
 			"product": map[string]interface{}{
-				"id":        newID,
-				"name":      req.Name,
-				"price":     req.Price,
-				"details":   req.Description,
-				"item_type": req.ItemType,
-				"unit_type": req.UnitType,
-				"variants":  req.Variants,
+				"id":         newID,
+				"name":       req.Name,
+				"price":      req.Price,
+				"details":    req.Description,
+				"item_type":  req.ItemType,
+				"unit_type":  req.UnitType,
+				"variants":   req.Variants,
+				"ai_tag":     req.AITag,
+				"image_url":  req.ImageURL,
+				"image_data": req.ImageData,
 			},
 		})
 		return
@@ -1156,11 +1715,16 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if DB != nil {
-			DB.Exec("DELETE FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username)
+			if username == "admin" {
+				_, _ = DB.Exec("DELETE FROM products WHERE id=$1", idStr)
+			} else {
+				_, _ = DB.Exec("DELETE FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username)
+			}
 		}
 		respondJSON(w, 200, map[string]string{"status": "success", "message": "Product deleted"})
 		return
 	}
+}
 }
 
 // 16. BUSINESS DASHBOARD STATS (ZERO FAKE DATA)
@@ -1280,6 +1844,228 @@ func UserConfigHandler(w http.ResponseWriter, r *http.Request) {
 		"ai_provider":   aiProvider,
 		"system_prompt": sysPrompt,
 		"auto_reply":    autoReply,
+	})
+}
+
+// 19. BULK UPLOAD TEMP IMAGE HANDLER (POST /api/bulk/upload-temp)
+func BulkUploadTempHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Filename string `json:"filename"`
+		DataURL  string `json:"data_url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.DataURL == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "No image data provided"})
+		return
+	}
+
+	fn := req.Filename
+	if fn == "" {
+		fn = "broadcast.jpg"
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":    "success",
+		"file_url":  req.DataURL,
+		"file_path": fn,
+		"message":   "Temporary image loaded for broadcast campaign.",
+	})
+}
+
+// 20. TEST LEAD NOTIFICATION ALERT DISPATCH (POST /api/ai/test-lead-alert)
+func TestLeadAlertHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username          string `json:"username"`
+		NotificationPhone string `json:"notification_phone"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	username := req.Username
+	if username == "" {
+		username = "admin"
+	}
+
+	targetPhone := strings.TrimSpace(req.NotificationPhone)
+	if targetPhone == "" && DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(notification_phone, phone, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&targetPhone)
+	}
+
+	cleanPhone := regexp.MustCompile(`\D`).ReplaceAllString(targetPhone, "")
+	if len(cleanPhone) < 8 {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Please enter a valid notification WhatsApp number with country code."})
+		return
+	}
+
+	alertText := fmt.Sprintf("🚨 *TEST LEAD ALERT DISPATCH* 🚨\n\n• Account: @%s\n• Target: +%s\n• Engine: EduCloud Go WhatsApp Gateway\n• Time: %s\n\n✅ If you received this, your automated lead capture notification is fully operational!",
+		username, cleanPhone, time.Now().Format("02 Jan 15:04:05"))
+
+	// Push to Live Chat SSE
+	whatsapp.PushToLiveChat(username, cleanPhone, alertText, "lead_alert")
+
+	// If WhatsApp client is connected, send real message
+	client := whatsapp.GetOrCreateClient(username)
+	if client != nil && client.IsLoggedIn() {
+		_ = whatsapp.SendMessage(client, cleanPhone, alertText)
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":             "success",
+		"message":            fmt.Sprintf("Test alert dispatched to +%s! Check WhatsApp and Live Chat.", cleanPhone),
+		"notification_phone": cleanPhone,
+	})
+}
+
+// 21. REAL CUSTOMER CONVERSATION LIST (GET /api/chats)
+func ChatsHandler(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		username = "admin"
+	}
+
+	type Conversation struct {
+		CustomerPhone string `json:"customer_phone"`
+		LastMessage   string `json:"last_message"`
+		LastRole      string `json:"last_role"`
+		LastTime      string `json:"last_time"`
+		TotalCount    int    `json:"total_count"`
+	}
+
+	var conversations []Conversation
+
+	if DB != nil {
+		rows, err := DB.Query(`
+			SELECT customer_phone, 
+			       COALESCE((SELECT message_text FROM customer_chats c2 WHERE c2.username=c1.username AND c2.customer_phone=c1.customer_phone ORDER BY id DESC LIMIT 1), ''),
+			       COALESCE((SELECT role FROM customer_chats c2 WHERE c2.username=c1.username AND c2.customer_phone=c1.customer_phone ORDER BY id DESC LIMIT 1), 'customer'),
+			       COALESCE((SELECT TO_CHAR(created_at, 'HH24:MI') FROM customer_chats c2 WHERE c2.username=c1.username AND c2.customer_phone=c1.customer_phone ORDER BY id DESC LIMIT 1), 'Recent'),
+			       COUNT(*)
+			FROM customer_chats c1
+			WHERE LOWER(username)=LOWER($1)
+			GROUP BY customer_phone, username
+			ORDER BY MAX(id) DESC LIMIT 50`, username)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var conv Conversation
+				if err := rows.Scan(&conv.CustomerPhone, &conv.LastMessage, &conv.LastRole, &conv.LastTime, &conv.TotalCount); err == nil {
+					conversations = append(conversations, conv)
+				}
+			}
+		}
+	}
+
+	if conversations == nil {
+		conversations = []Conversation{}
+	}
+
+	respondJSON(w, 200, map[string]interface{}{"conversations": conversations})
+}
+
+// 22. GET REAL LAST 10 MESSAGES FOR SPECIFIC CUSTOMER (GET /api/chats/messages)
+func ChatMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	phone := strings.TrimSpace(r.URL.Query().Get("phone"))
+	if username == "" {
+		username = "admin"
+	}
+
+	cleanPhone := regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
+	if cleanPhone == "" {
+		respondJSON(w, 200, map[string]interface{}{"messages": []interface{}{}})
+		return
+	}
+
+	type ChatMsgItem struct {
+		ID   int    `json:"id"`
+		Role string `json:"role"`
+		Text string `json:"text"`
+		Time string `json:"time"`
+	}
+
+	var messages []ChatMsgItem
+
+	if DB != nil {
+		rows, err := DB.Query(`SELECT id, role, message_text, COALESCE(TO_CHAR(created_at, 'HH24:MI'), 'Recent')
+			FROM (
+				SELECT id, role, message_text, created_at 
+				FROM customer_chats 
+				WHERE LOWER(username)=LOWER($1) AND customer_phone=$2
+				ORDER BY id DESC LIMIT 15
+			) sub ORDER BY id ASC`, username, cleanPhone)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var m ChatMsgItem
+				if err := rows.Scan(&m.ID, &m.Role, &m.Text, &m.Time); err == nil {
+					messages = append(messages, m)
+				}
+			}
+		}
+	}
+
+	if messages == nil {
+		messages = []ChatMsgItem{}
+	}
+
+	respondJSON(w, 200, map[string]interface{}{"messages": messages})
+}
+
+// 23. SEND OUTGOING MESSAGE FROM LIVE CHAT UI (POST /api/chats/send)
+func ChatSendHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Phone    string `json:"phone"`
+		Message  string `json:"message"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Username == "" {
+		req.Username = "admin"
+	}
+
+	cleanPhone := regexp.MustCompile(`\D`).ReplaceAllString(req.Phone, "")
+	cleanMsg := strings.TrimSpace(req.Message)
+
+	if cleanPhone == "" || cleanMsg == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Phone number and message text required"})
+		return
+	}
+
+	// 1. Record in DB
+	if DB != nil {
+		_, _ = DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, created_at)
+			VALUES ($1, $2, 'assistant', $3, NOW())`, req.Username, cleanPhone, cleanMsg)
+	}
+
+	// 2. Push to Live Chat SSE
+	whatsapp.PushToLiveChat(req.Username, cleanPhone, cleanMsg, "outgoing")
+
+	// 3. Send over WhatsApp if device linked
+	client := whatsapp.GetOrCreateClient(req.Username)
+	if client != nil && client.IsLoggedIn() {
+		_ = whatsapp.SendMessage(client, cleanPhone, cleanMsg)
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":  "success",
+		"message": "Message sent and recorded in customer chat history.",
 	})
 }
 

@@ -3,12 +3,14 @@ package whatsapp
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -147,23 +149,29 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	ActiveClients[username] = client
 
 	if client.Store.ID == nil {
-		qrChan, _ := client.GetQRChannel(context.Background())
+		qrChan, err := client.GetQRChannel(context.Background())
+		if err == nil {
+			go func() {
+				for evt := range qrChan {
+					if evt.Event == "code" {
+						ClientsLock.Lock()
+						QRChannelMap[username] = evt.Code
+						ClientsLock.Unlock()
+					} else if evt.Event == "success" {
+						ClientsLock.Lock()
+						QRChannelMap[username] = ""
+						ClientsLock.Unlock()
+						if client.Store.ID != nil && DB != nil {
+							jidUser := client.Store.ID.User
+							_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+						}
+					}
+				}
+			}()
+		}
 		go func() {
 			if err := client.Connect(); err != nil {
 				log.Printf("⚠️ Client connect error for @%s: %v", username, err)
-			}
-		}()
-		go func() {
-			for evt := range qrChan {
-				if evt.Event == "code" {
-					QRChannelMap[username] = evt.Code
-				} else if evt.Event == "success" {
-					QRChannelMap[username] = ""
-					if client.Store.ID != nil && DB != nil {
-						jidUser := client.Store.ID.User
-						_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
-					}
-				}
 			}
 		}()
 	} else {
@@ -179,6 +187,131 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	}
 
 	return client
+}
+
+// EnsureConnected ensures the WhatsApp WebSocket is actively connected before sending messages
+func EnsureConnected(client *whatsmeow.Client) error {
+	if client == nil {
+		return fmt.Errorf("whatsapp client instance is nil")
+	}
+	if client.IsConnected() {
+		return nil
+	}
+	_ = client.Connect()
+	for i := 0; i < 25; i++ {
+		if client.IsConnected() {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if client.IsConnected() {
+		return nil
+	}
+	return fmt.Errorf("whatsapp connection timeout (websocket connecting)")
+}
+
+// FormatPhone cleans and adds India '91' prefix if 10-digit number is provided
+func FormatPhone(phone string) string {
+	clean := regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
+	if len(clean) == 10 && (clean[0] == '6' || clean[0] == '7' || clean[0] == '8' || clean[0] == '9') {
+		return "91" + clean
+	}
+	if len(clean) == 11 && clean[0] == '0' {
+		return "91" + clean[1:]
+	}
+	return clean
+}
+
+// RefreshQRChannel / GetOrGenerateQR ensures a fresh QR code is actively being received
+func RefreshQRChannel(username string) string {
+	return GetOrGenerateQR(username)
+}
+
+func GetOrGenerateQR(username string) string {
+	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+
+	ClientsLock.Lock()
+	client, exists := ActiveClients[cleanUsr]
+	existingCode := QRChannelMap[cleanUsr]
+	ClientsLock.Unlock()
+
+	if exists && client != nil {
+		if client.IsLoggedIn() {
+			return ""
+		}
+		if existingCode != "" {
+			return existingCode
+		}
+		// Reset unlinked client so GetQRChannel can be requested cleanly
+		client.Disconnect()
+		if client.Store != nil && client.Store.ID == nil {
+			_ = client.Store.Delete(context.Background())
+		}
+	}
+
+	// Create fresh device store for new QR code pairing
+	deviceStore := StoreContainer.NewDevice()
+	clientLog := waLog.Stdout("Client-"+cleanUsr, "ERROR", false)
+	client = whatsmeow.NewClient(deviceStore, clientLog)
+
+	client.AddEventHandler(func(evt interface{}) {
+		handleWhatsAppEvents(cleanUsr, client, evt)
+	})
+
+	qrChan, err := client.GetQRChannel(context.Background())
+	if err != nil {
+		log.Printf("⚠️ GetQRChannel error for @%s: %v", cleanUsr, err)
+		return ""
+	}
+
+	ClientsLock.Lock()
+	ActiveClients[cleanUsr] = client
+	QRChannelMap[cleanUsr] = ""
+	ClientsLock.Unlock()
+
+	go func() {
+		for evt := range qrChan {
+			if evt.Event == "code" {
+				ClientsLock.Lock()
+				QRChannelMap[cleanUsr] = evt.Code
+				ClientsLock.Unlock()
+			} else if evt.Event == "success" {
+				ClientsLock.Lock()
+				QRChannelMap[cleanUsr] = ""
+				ClientsLock.Unlock()
+				if client.Store.ID != nil && DB != nil {
+					jidUser := client.Store.ID.User
+					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, cleanUsr)
+				}
+			} else if evt.Event == "timeout" {
+				ClientsLock.Lock()
+				QRChannelMap[cleanUsr] = ""
+				ClientsLock.Unlock()
+			}
+		}
+	}()
+
+	go func() {
+		if err := client.Connect(); err != nil {
+			log.Printf("⚠️ Client connect error for @%s after QR request: %v", cleanUsr, err)
+		}
+	}()
+
+	// Wait up to 3 seconds for the first QR code event to arrive over websocket
+	for i := 0; i < 30; i++ {
+		time.Sleep(100 * time.Millisecond)
+		ClientsLock.Lock()
+		code := QRChannelMap[cleanUsr]
+		ClientsLock.Unlock()
+		if code != "" {
+			return code
+		}
+	}
+
+	ClientsLock.Lock()
+	code := QRChannelMap[cleanUsr]
+	ClientsLock.Unlock()
+	return code
 }
 
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
@@ -291,28 +424,66 @@ func SendMessage(client *whatsmeow.Client, phone string, message string) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
 	}
-	targetJID := types.NewJID(phone, types.DefaultUserServer)
+	cleanPhone := FormatPhone(phone)
+	if len(cleanPhone) < 8 {
+		return fmt.Errorf("invalid phone number: %s", phone)
+	}
+
+	if err := EnsureConnected(client); err != nil {
+		return err
+	}
+
+	targetJID := types.NewJID(cleanPhone, types.DefaultUserServer)
 	msg := &waE2E.Message{Conversation: proto.String(message)}
 	_, err := client.SendMessage(context.Background(), targetJID, msg)
 	return err
 }
 
-// 2. Image URL (Neon Bucket) Se Photo + Caption Bhejna
+// 2. Image URL or Base64 Data URI Se Photo + Caption Bhejna
 func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
 	}
-
-	// Neon Storage ya URL se image bytes download karna
-	resp, err := http.Get(imageURL)
-	if err != nil {
-		return fmt.Errorf("image download failed: %v", err)
+	cleanPhone := FormatPhone(phone)
+	if len(cleanPhone) < 8 {
+		return fmt.Errorf("invalid phone number: %s", phone)
 	}
-	defer resp.Body.Close()
 
-	imgBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
+	if err := EnsureConnected(client); err != nil {
 		return err
+	}
+
+	var imgBytes []byte
+	var err error
+
+	imageURL = strings.TrimSpace(imageURL)
+	if strings.HasPrefix(imageURL, "data:image/") {
+		// Handle Base64 Data URI
+		parts := strings.SplitN(imageURL, ",", 2)
+		if len(parts) == 2 {
+			imgBytes, err = base64.StdEncoding.DecodeString(parts[1])
+			if err != nil {
+				return fmt.Errorf("failed to decode base64 image: %v", err)
+			}
+		}
+	} else if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		// Neon Storage ya URL se image bytes download karna
+		clientHttp := &http.Client{Timeout: 20 * time.Second}
+		resp, fetchErr := clientHttp.Get(imageURL)
+		if fetchErr != nil {
+			return fmt.Errorf("image download failed: %v", fetchErr)
+		}
+		defer resp.Body.Close()
+		imgBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("unsupported image format or empty URL")
+	}
+
+	if len(imgBytes) == 0 {
+		return fmt.Errorf("empty image payload")
 	}
 
 	// WhatsApp Server par encrypt karke upload karna
@@ -322,7 +493,7 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 	}
 
 	mimeType := http.DetectContentType(imgBytes)
-	targetJID := types.NewJID(phone, types.DefaultUserServer)
+	targetJID := types.NewJID(cleanPhone, types.DefaultUserServer)
 
 	msg := &waE2E.Message{
 		ImageMessage: &waE2E.ImageMessage{

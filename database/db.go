@@ -62,13 +62,22 @@ func InitDB() {
 	DB.SetConnMaxLifetime(10 * time.Minute)    // Recycle connections periodically
 	DB.SetConnMaxIdleTime(2 * time.Minute)     // Close idle connections quickly to free heap
 
-	if err = DB.Ping(); err != nil {
-		log.Printf("⚠️ Notice: Neon DB ping skipped (offline/unreachable): %v", err)
-		DB = nil
-		return
+	// Retry ping up to 3 times to allow Neon Serverless cold compute to wake up
+	pingSuccess := false
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err = DB.Ping(); err == nil {
+			pingSuccess = true
+			break
+		}
+		log.Printf("⏳ Neon DB cold-start ping attempt %d/3: %v", attempt, err)
+		time.Sleep(1 * time.Second)
 	}
 
-	log.Println("✅ Neon Cloud PostgreSQL & Object Database Connected Successfully (Pool: Max 8 Conns)")
+	if pingSuccess {
+		log.Println("✅ Neon Cloud PostgreSQL & Object Database Connected Successfully (Pool: Max 8 Conns)")
+	} else {
+		log.Println("⚠️ Neon DB ping pending/cold start. Keeping DB connection pool open for async query wake-up.")
+	}
 
 	// Auto-Migrate Core Tables
 	migrateSchema()
@@ -124,9 +133,17 @@ func migrateSchema() {
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`,
-		`ALTER TABLE products DROP COLUMN IF EXISTS image_url;`,
-		`DROP TABLE IF EXISTS neon_media_objects CASCADE;`,
-		`DROP TABLE IF EXISTS user_media CASCADE;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_data TEXT DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS customer_chats (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(100) NOT NULL,
+			customer_phone VARCHAR(50) NOT NULL,
+			role VARCHAR(50) NOT NULL,
+			message_text TEXT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_chats_usr_ph ON customer_chats(username, customer_phone);`,
 		`CREATE TABLE IF NOT EXISTS leads (
 			id SERIAL PRIMARY KEY,
 			username VARCHAR(100) NOT NULL,

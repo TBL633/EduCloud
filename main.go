@@ -72,15 +72,34 @@ func main() {
 
 	http.HandleFunc("/api/send", corsMiddleware(api.SendHandler))
 	http.HandleFunc("/api/bulk", corsMiddleware(api.BulkSendHandler))
+	http.HandleFunc("/api/bulk/send", corsMiddleware(api.BulkSendHandler))
+	http.HandleFunc("/api/bulk/status", corsMiddleware(api.BulkStatusHandler))
+	http.HandleFunc("/api/bulk/upload-temp", corsMiddleware(api.BulkUploadTempHandler))
+
+	// AI Responder Endpoints & Interactive Testing
 	http.HandleFunc("/api/ai/settings", corsMiddleware(api.SaveAISettingsHandler))
-	http.HandleFunc("/api/media", corsMiddleware(api.MediaCatalogHandler))
+	http.HandleFunc("/api/ai/test", corsMiddleware(api.AITestHandler))
+	http.HandleFunc("/api/ai/test-lead-alert", corsMiddleware(api.TestLeadAlertHandler))
+
+	// Real-Time Customer Chat Endpoints (Zero-DB Taxing via SSE + Sliding Window)
+	http.HandleFunc("/api/chats", corsMiddleware(api.ChatsHandler))
+	http.HandleFunc("/api/chats/messages", corsMiddleware(api.ChatMessagesHandler))
+	http.HandleFunc("/api/chats/send", corsMiddleware(api.ChatSendHandler))
 	http.HandleFunc("/api/chat/stream", api.LiveChatSSEHandler)
+
+	http.HandleFunc("/api/media", corsMiddleware(api.MediaCatalogHandler))
 
 	// Business Workspace Endpoints (Zero Fake Data)
 	http.HandleFunc("/api/products", corsMiddleware(api.ProductsHandler))
 	http.HandleFunc("/api/business/dashboard", corsMiddleware(api.BusinessDashboardHandler))
 	http.HandleFunc("/api/leads", corsMiddleware(api.LeadsHandler))
 	http.HandleFunc("/api/user/config", corsMiddleware(api.UserConfigHandler))
+
+	// User Profile & Security Endpoints
+	http.HandleFunc("/api/user/profile", corsMiddleware(api.UserProfileHandler))
+	http.HandleFunc("/api/user/verify-password", corsMiddleware(api.VerifyPasswordHandler))
+	http.HandleFunc("/api/user/change-password", corsMiddleware(api.UpdatePasswordHandler))
+	http.HandleFunc("/api/user/update-password", corsMiddleware(api.UpdatePasswordHandler))
 
 	// 5. Admin Multi-Account Routes
 	http.HandleFunc("/api/admin/dashboard", corsMiddleware(api.AdminDashboardHandler))
