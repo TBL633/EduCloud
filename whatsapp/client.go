@@ -314,6 +314,42 @@ func GetOrGenerateQR(username string) string {
 	return code
 }
 
+// SaveCustomerChatAndPrune records incoming/outgoing messages in customer_chats
+// and immediately prunes old records in Neon Postgres so only the latest 10 messages per customer exist.
+func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string) {
+	if DB == nil {
+		return
+	}
+	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	cleanUsr = strings.ToLower(cleanUsr)
+	cleanPhone := FormatPhone(customerPhone)
+	messageText = strings.TrimSpace(messageText)
+
+	if cleanUsr == "" || cleanPhone == "" || messageText == "" {
+		return
+	}
+
+	// 1. Insert chat record into customer_chats table
+	_, err := DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, created_at)
+		VALUES ($1, $2, $3, $4, NOW())`, cleanUsr, cleanPhone, role, messageText)
+	if err != nil {
+		log.Printf("⚠️ SaveCustomerChat error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
+	}
+
+	// 2. Prune DB to strictly retain last 10 messages per customer (Sliding Window in DB)
+	_, _ = DB.Exec(`DELETE FROM customer_chats 
+		WHERE LOWER(username)=LOWER($1) 
+		  AND customer_phone=$2 
+		  AND id NOT IN (
+			SELECT id FROM customer_chats 
+			WHERE LOWER(username)=LOWER($1) AND customer_phone=$2 
+			ORDER BY id DESC LIMIT 10
+		  )`, cleanUsr, cleanPhone)
+
+	// 3. Sync RAM cache and update last activity timestamp (5-min inactivity timer reset)
+	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, role, messageText)
+}
+
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
@@ -331,33 +367,46 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return
 		}
 
-		// 1. ZERO-LOAD LIVE CHAT: Push directly to browser
+		// 1. RECORD IN CUSTOMER CHATS (NOT LEADS!) AND ENFORCE STRICT 10-MESSAGE LIMIT IN DB
+		SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
+
+		// 2. ZERO-LOAD LIVE CHAT: Push directly to browser via SSE
 		PushToLiveChat(username, senderPhone, msgText, "incoming")
 
-		// 2. RECORD REAL CAPTURED LEAD IN NEON POSTGRESQL
-		if DB != nil {
-			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status) VALUES ($1, $2, $3, 'Captured')",
-				username, senderPhone, msgText)
-		}
-
-		// 3. AI AUTO-REPLY CHECK
+		// 3. AI AUTO-REPLY CHECK & LEAD QUALIFICATION DISPATCH
 		go func() {
 			if DB == nil {
 				return
 			}
-			var provider, apiKey, sysPrompt string
+			var provider, apiKey, sysPrompt, notifPhone string
 			var autoReply bool
-			err := DB.QueryRow("SELECT ai_provider, api_key, system_prompt, auto_reply FROM users WHERE username=$1", username).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply)
+			err := DB.QueryRow("SELECT ai_provider, api_key, system_prompt, auto_reply, COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &notifPhone)
 
 			if err == nil && autoReply && apiKey != "" {
 				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
 				if imgURL != "" {
 					_ = SendImageFromURL(client, senderPhone, imgURL, replyText)
+					SaveCustomerChatAndPrune(username, senderPhone, "assistant", "[Image Sent] "+replyText)
 					PushToLiveChat(username, senderPhone, "[Image Sent] "+replyText, "outgoing_ai")
 				} else if replyText != "" {
 					_ = SendMessage(client, senderPhone, replyText)
+					SaveCustomerChatAndPrune(username, senderPhone, "assistant", replyText)
 					PushToLiveChat(username, senderPhone, replyText, "outgoing_ai")
+				}
+
+				// 4. LEAD CREATION: A lead is ONLY created in DB when AI Lead Responder dispatches a lead alert to notification_phone!
+				cleanNotif := FormatPhone(notifPhone)
+				if cleanNotif != "" && client != nil && client.IsLoggedIn() {
+					alertText := fmt.Sprintf("🚨 *NEW AI QUALIFIED LEAD ALERT* 🚨\n\n• Account: @%s\n• Customer Phone: +%s\n• Last Message: %s\n• Time: %s",
+						username, senderPhone, msgText, time.Now().Format("02 Jan 15:04:05"))
+					errAlert := SendMessage(client, cleanNotif, alertText)
+					if errAlert == nil {
+						// SUCCESSFUL LEAD ALERT DISPATCHED TO SAVED NUMBER -> CREATE RECORD IN LEADS TABLE!
+						_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Qualified Lead', NOW())",
+							username, senderPhone, msgText)
+						PushToLiveChat(username, cleanNotif, alertText, "lead_alert")
+					}
 				}
 			}
 		}()

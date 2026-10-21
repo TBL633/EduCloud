@@ -2112,8 +2112,13 @@
                 es.onmessage = function(event) {
                     try {
                         const data = JSON.parse(event.data);
-                        // User unlinked from their phone: Server auto-detected
-                        if (data.type === 'session_unlinked') {
+                        if (['incoming', 'outgoing', 'outgoing_ai', 'outgoing_manual', 'lead_alert'].includes(data.type)) {
+                            // Customer messaged or reply sent: Top contact updates and chat reloads in real time
+                            loadCustomerConversationsList();
+                            if (data.phone && currentActiveChatPhone === data.phone) {
+                                loadCustomerChatHistory(data.phone);
+                            }
+                        } else if (data.type === 'session_unlinked') {
                             const deskPill = document.getElementById('biz-wa-status-text');
                             if (deskPill) deskPill.innerText = 'Disconnected';
                             const display = document.getElementById('eight-digit-display-box');

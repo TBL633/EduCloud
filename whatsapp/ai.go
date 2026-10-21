@@ -19,15 +19,53 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+type CachedChatSession struct {
+	LastActivity time.Time
+	Messages     []ChatMessage
+}
+
 var (
-	// Key: "username_customerPhone" -> Value: Last 10 Messages
-	chatMemory = make(map[string][]ChatMessage)
-	memoryLock sync.Mutex
+	// Key: "username_customerPhone" -> Value: RAM cached session (Max 10 messages, 5-min inactivity TTL)
+	chatMemoryRAM = make(map[string]*CachedChatSession)
+	ramCacheLock  sync.Mutex
 
 	// Round-Robin API Key rotation index per username
 	keyRotationIndex = make(map[string]int)
 	keyRotationLock  sync.Mutex
 )
+
+func init() {
+	// 1. Background RAM Eviction Worker (Clears sessions with no activity for > 5 minutes)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		for range ticker.C {
+			ramCacheLock.Lock()
+			now := time.Now()
+			for sessionKey, session := range chatMemoryRAM {
+				if session != nil && now.Sub(session.LastActivity) > 5*time.Minute {
+					delete(chatMemoryRAM, sessionKey)
+					log.Printf("🧹 [RAM Eviction]: Session %s inactive for 5 min -> Evicted from RAM cache. Preserved in Neon DB.", sessionKey)
+				}
+			}
+			ramCacheLock.Unlock()
+		}
+	}()
+
+	// 2. Background DB Purge Worker (Deletes customer chats older than 5 days from Neon Postgres)
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		for range ticker.C {
+			if DB != nil {
+				res, err := DB.Exec("DELETE FROM customer_chats WHERE created_at < NOW() - INTERVAL '5 days'")
+				if err == nil {
+					if rows, _ := res.RowsAffected(); rows > 0 {
+						log.Printf("🗑️ [DB Cleanup]: Purged %d customer chat messages older than 5 days.", rows)
+					}
+				}
+			}
+		}
+	}()
+}
 
 // Helper to select API key in Round-Robin fashion if multiple keys exist
 func getRotatedAPIKey(username, rawKeys string) string {
@@ -62,20 +100,83 @@ func getRotatedAPIKey(username, rawKeys string) string {
 	return selectedKey
 }
 
-// 1. Sliding Window Manager (Max 10 messages per customer)
-func updateSlidingWindow(sessionKey string, role string, text string) []ChatMessage {
-	memoryLock.Lock()
-	defer memoryLock.Unlock()
+// 1. Sliding Window RAM Cache Manager (Max 10 messages per customer, 5-min inactivity eviction, auto re-hydration from DB)
+func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMessage {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	sessionKey := cleanUsr + "_" + cleanPhone
 
-	history := chatMemory[sessionKey]
-	history = append(history, ChatMessage{Role: role, Content: text})
+	ramCacheLock.Lock()
+	defer ramCacheLock.Unlock()
 
-	// Sirf aakhiri 10 messages rakho taaki RAM aur AI tokens bachein
-	if len(history) > 10 {
-		history = history[len(history)-10:]
+	session, exists := chatMemoryRAM[sessionKey]
+
+	// If session not in RAM (e.g. initial message OR evicted after 5 min inactivity),
+	// re-hydrate last 10 messages directly from Neon PostgreSQL DB into RAM!
+	if !exists || session == nil || len(session.Messages) == 0 {
+		var dbMessages []ChatMessage
+		if DB != nil {
+			rows, err := DB.Query(`SELECT role, message_text 
+				FROM (
+					SELECT id, role, message_text 
+					FROM customer_chats 
+					WHERE LOWER(username)=LOWER($1) AND customer_phone=$2 
+					ORDER BY id DESC LIMIT 10
+				) sub ORDER BY id ASC`, cleanUsr, cleanPhone)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var r, m string
+					if err := rows.Scan(&r, &m); err == nil {
+						if r == "customer" {
+							r = "user"
+						} else if r == "assistant" || r == "outgoing" || r == "outgoing_ai" {
+							r = "assistant"
+						}
+						dbMessages = append(dbMessages, ChatMessage{Role: r, Content: m})
+					}
+				}
+			}
+		}
+		session = &CachedChatSession{
+			LastActivity: time.Now(),
+			Messages:     dbMessages,
+		}
+		chatMemoryRAM[sessionKey] = session
+		log.Printf("📥 [RAM Re-Hydration]: Loaded %d prior messages from DB into RAM for %s", len(dbMessages), sessionKey)
 	}
-	chatMemory[sessionKey] = history
-	return history
+
+	// Append current message if non-empty
+	if text != "" {
+		normalRole := role
+		if normalRole == "customer" {
+			normalRole = "user"
+		} else if normalRole == "outgoing" || normalRole == "outgoing_ai" {
+			normalRole = "assistant"
+		}
+		session.Messages = append(session.Messages, ChatMessage{Role: normalRole, Content: text})
+	}
+
+	// Maintain strictly max 10 messages in RAM
+	if len(session.Messages) > 10 {
+		session.Messages = session.Messages[len(session.Messages)-10:]
+	}
+
+	// Update last activity timestamp to reset 5-minute inactivity timer
+	session.LastActivity = time.Now()
+
+	copied := make([]ChatMessage, len(session.Messages))
+	copy(copied, session.Messages)
+	return copied
+}
+
+// Legacy alias for compatibility
+func updateSlidingWindow(sessionKey string, role string, text string) []ChatMessage {
+	parts := strings.SplitN(sessionKey, "_", 2)
+	if len(parts) == 2 {
+		return updateSlidingWindowRAM(parts[0], parts[1], role, text)
+	}
+	return []ChatMessage{{Role: role, Content: text}}
 }
 
 // Helper to retrieve live product catalog items to feed into AI system prompt
@@ -115,6 +216,7 @@ func GetCatalogContext(username string) string {
 // 2. Main AI Auto-Reply Generator
 func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, systemPrompt string) (string, string) {
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	cleanPhone := FormatPhone(customerPhone)
 	selectedApiKey := getRotatedAPIKey(cleanUsr, apiKey)
 	if selectedApiKey == "" {
 		return "", ""
@@ -126,15 +228,34 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp)
 	}
 
-	sessionKey := cleanUsr + "_" + customerPhone
-	_ = updateSlidingWindow(sessionKey, "user", incomingText)
+	// Re-hydrate / Update RAM sliding window (Max 10 messages, 5-min inactivity eviction)
+	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 
 	catalogContext := GetCatalogContext(cleanUsr)
 	fullPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional. If you reference a product that has an assigned tag like <IMG_1> or <IMG_2>, include the tag in your reply."
 
-	aiResponse, err := CallAIModel(provider, model, temp, selectedApiKey, fullPrompt, incomingText)
+	// Build conversation history for AI model
+	var lastUserMsg string
+	var contextBuilder strings.Builder
+	contextBuilder.WriteString(fullPrompt)
+	contextBuilder.WriteString("\n\n=== RECENT CHAT HISTORY (LAST 10 MESSAGES) ===\n")
+	for _, m := range history {
+		if m.Role == "user" {
+			contextBuilder.WriteString(fmt.Sprintf("Customer: %s\n", m.Content))
+			lastUserMsg = m.Content
+		} else {
+			contextBuilder.WriteString(fmt.Sprintf("Assistant: %s\n", m.Content))
+		}
+	}
+	contextBuilder.WriteString("=== END RECENT HISTORY ===\nAnswer the customer's latest query accurately:")
+
+	if lastUserMsg == "" {
+		lastUserMsg = incomingText
+	}
+
+	aiResponse, err := CallAIModel(provider, model, temp, selectedApiKey, contextBuilder.String(), lastUserMsg)
 	if err != nil || aiResponse == "" {
-		log.Printf("⚠️ GenerateAIReply error for @%s: %v", cleanUsr, err)
+		log.Printf("⚠️ GenerateAIReply error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""
 	}
 
@@ -161,8 +282,8 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		}
 	}
 
-	// Save AI reply in sliding window memory
-	updateSlidingWindow(sessionKey, "assistant", aiResponse)
+	// Save AI reply in RAM sliding window
+	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
 
 	return aiResponse, imageURL
 }

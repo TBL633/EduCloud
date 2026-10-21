@@ -47,6 +47,13 @@ func main() {
 		http.ServeFile(w, r, "public/business-portal.html")
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		filePath := "public" + r.URL.Path
+		if r.URL.Path != "/" {
+			if _, err := os.Stat(filePath); err == nil {
+				http.ServeFile(w, r, filePath)
+				return
+			}
+		}
 		http.ServeFile(w, r, "public/index.html")
 	})
 
@@ -110,7 +117,7 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "3000"
 	}
 	log.Printf("✅ Server listening on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))

@@ -822,6 +822,7 @@ func SendHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	whatsapp.SaveCustomerChatAndPrune(req.Username, req.Phone, "assistant", req.Message)
 	whatsapp.PushToLiveChat(req.Username, req.Phone, req.Message, "outgoing_manual")
 	respondJSON(w, 200, map[string]string{"status": "success", "message": "Message Sent!"})
 }
@@ -2047,11 +2048,8 @@ func ChatSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Record in DB
-	if DB != nil {
-		_, _ = DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, created_at)
-			VALUES ($1, $2, 'assistant', $3, NOW())`, req.Username, cleanPhone, cleanMsg)
-	}
+	// 1. Record in DB with 10-message sliding window pruning
+	whatsapp.SaveCustomerChatAndPrune(req.Username, cleanPhone, "assistant", cleanMsg)
 
 	// 2. Push to Live Chat SSE
 	whatsapp.PushToLiveChat(req.Username, cleanPhone, cleanMsg, "outgoing")
