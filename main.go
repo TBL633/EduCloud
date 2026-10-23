@@ -38,6 +38,8 @@ func main() {
 	// 2. Initialize Whatsmeow Multi-Device Store
 	dbURL := database.GetDBURL()
 	whatsapp.InitStore(dbURL, database.DB)
+	whatsapp.AutoConnectAllSessions()
+	whatsapp.StartKeepAliveMonitor()
 
 	// 3. Frontend UI Routes (Multi-file Architecture)
 	http.HandleFunc("/admin-portal.html", func(w http.ResponseWriter, r *http.Request) {

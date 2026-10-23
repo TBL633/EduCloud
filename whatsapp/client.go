@@ -511,6 +511,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		log.Printf("📩 Incoming message from +%s (@%s): %s", senderPhone, username, msgText)
 
+		// Auto-mark message as read on WhatsApp so blue ticks appear and connection stays active
+		if client != nil {
+			go func() {
+				_ = client.MarkRead([]types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+			}()
+		}
+
 		// Ultra-Fast Concurrent Server RAM Execution (0ms DB Latency for Reply Delivery)
 		go func() {
 			// 1. PUSH INCOMING MESSAGE TO LIVE CHAT SSE UI INSTANTLY
@@ -554,6 +561,16 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			// 4. AFTER PROCESSING & DELIVERING INSTANTLY ON SERVER, SYNC TO DB ASYNCHRONOUSLY IN BACKGROUND
 			AsyncDBSync(username, senderPhone, msgText, deliveredReply)
 		}()
+
+	case *events.Disconnected:
+		log.Printf("⚠️ WebSocket disconnected (EOF/Frame header drop) for @%s. Triggering auto-reconnect...", username)
+		go func() {
+			time.Sleep(1 * time.Second)
+			if client != nil && client.IsLoggedIn() && !client.IsConnected() {
+				_ = client.Connect()
+			}
+		}()
+
 	case *events.LoggedOut:
 		fmt.Printf("⚠️ User @%s unlinked from phone. Auto-cleaning WhatsApp session details...\n", username)
 		ClientsLock.Lock()
@@ -591,6 +608,67 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
 	}
+}
+
+// AutoConnectAllSessions initializes and connects all saved WhatsApp clients on boot
+func AutoConnectAllSessions() {
+	if DB == nil {
+		return
+	}
+	rows, err := DB.Query("SELECT DISTINCT username FROM users WHERE status='Connected' OR wa_jid!=''")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var username string
+		if err := rows.Scan(&username); err == nil && username != "" {
+			go func(usr string) {
+				c := GetOrCreateClient(usr)
+				if c != nil && c.IsLoggedIn() && !c.IsConnected() {
+					_ = c.Connect()
+				}
+			}(username)
+			count++
+		}
+	}
+	if count > 0 {
+		log.Printf("⚡ [WhatsApp Gateway] Auto-initialized %d active WhatsApp account sessions on boot.", count)
+	}
+}
+
+// StartKeepAliveMonitor checks active clients every 15 seconds and re-establishes broken WebSockets
+func StartKeepAliveMonitor() {
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		for range ticker.C {
+			ClientsLock.Lock()
+			var activeUsers []string
+			for usr := range ActiveClients {
+				activeUsers = append(activeUsers, usr)
+			}
+			ClientsLock.Unlock()
+
+			for _, usr := range activeUsers {
+				ClientsLock.Lock()
+				client := ActiveClients[usr]
+				ClientsLock.Unlock()
+
+				if client != nil && client.IsLoggedIn() && !client.IsConnected() {
+					log.Printf("🔄 [KeepAlive] Client @%s WebSocket dropped; re-connecting...", usr)
+					go func(c *whatsmeow.Client, u string) {
+						if err := c.Connect(); err != nil {
+							log.Printf("⚠️ [KeepAlive] Reconnect attempt error for @%s: %v", u, err)
+						} else {
+							log.Printf("✅ [KeepAlive] Successfully re-connected WebSocket for @%s!", u)
+						}
+					}(client, usr)
+				}
+			}
+		}
+	}()
 }
 
 func PushToLiveChat(username, phone, text, msgType string) {
