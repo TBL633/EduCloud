@@ -25,18 +25,100 @@ type CachedChatSession struct {
 	Messages     []ChatMessage
 }
 
+type UserConfigRAM struct {
+	Provider      string
+	APIKey        string
+	SystemPrompt  string
+	Model         string
+	Temperature   float64
+	AutoReply     bool
+	ImportCatalog bool
+	CatalogText   string
+	LastCached    time.Time
+}
+
 var (
 	// Key: "username_customerPhone" -> Value: RAM cached session (Max 10 messages, 5-min inactivity TTL)
 	chatMemoryRAM = make(map[string]*CachedChatSession)
 	ramCacheLock  sync.Mutex
+
+	// User Config RAM Cache (1-minute TTL or instant API invalidation)
+	userConfigCache = make(map[string]*UserConfigRAM)
+	userConfigLock  sync.Mutex
 
 	// Round-Robin API Key rotation index per username
 	keyRotationIndex = make(map[string]int)
 	keyRotationLock  sync.Mutex
 )
 
+// InvalidateUserConfigCache purges RAM cache when user updates AI settings or product catalog via API
+func InvalidateUserConfigCache(username string) {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	userConfigLock.Lock()
+	delete(userConfigCache, cleanUsr)
+	userConfigLock.Unlock()
+}
+
+// GetUserConfigRAM returns instant 0ms RAM cached user AI settings
+func GetUserConfigRAM(username string) *UserConfigRAM {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	userConfigLock.Lock()
+	cached, exists := userConfigCache[cleanUsr]
+	if exists && cached != nil && time.Since(cached.LastCached) < 1*time.Minute {
+		userConfigLock.Unlock()
+		return cached
+	}
+	userConfigLock.Unlock()
+
+	cfg := &UserConfigRAM{
+		Provider:      "groq",
+		APIKey:        "",
+		SystemPrompt:  "",
+		Model:         "llama-3.3-70b-versatile",
+		Temperature:   0.7,
+		AutoReply:     true,
+		ImportCatalog: true,
+		CatalogText:   "",
+		LastCached:    time.Now(),
+	}
+
+	if DB != nil {
+		var p, k, s, m string
+		var t float64
+		var ar, ic bool
+		err := DB.QueryRow(`SELECT 
+			COALESCE(ai_provider, 'groq'), 
+			COALESCE(api_key, ''), 
+			COALESCE(system_prompt, ''), 
+			COALESCE(ai_model, 'llama-3.3-70b-versatile'), 
+			COALESCE(ai_temperature, 0.7), 
+			COALESCE(auto_reply, true), 
+			COALESCE(import_catalog_details, true) 
+			FROM users WHERE LOWER(username)=LOWER($1)`, cleanUsr).Scan(&p, &k, &s, &m, &t, &ar, &ic)
+		if err == nil {
+			cfg.Provider = p
+			cfg.APIKey = k
+			cfg.SystemPrompt = s
+			cfg.Model = m
+			cfg.Temperature = t
+			cfg.AutoReply = ar
+			cfg.ImportCatalog = ic
+		}
+	}
+
+	if cfg.ImportCatalog {
+		cfg.CatalogText = GetCatalogContext(cleanUsr)
+	}
+
+	userConfigLock.Lock()
+	userConfigCache[cleanUsr] = cfg
+	userConfigLock.Unlock()
+
+	return cfg
+}
+
 func init() {
-	// 1. Background RAM Eviction Worker (Clears sessions with no activity for > 5 minutes)
+	// 1. Background RAM Eviction Worker (Clears sessions with no activity for > 5 minutes to keep server RAM minimal)
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		for range ticker.C {
@@ -284,6 +366,100 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
 
 	return aiResponse, ""
+}
+
+// 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & context execution)
+func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserConfigRAM) (string, string) {
+	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	cleanPhone := FormatPhone(customerPhone)
+
+	if cfg == nil {
+		cfg = GetUserConfigRAM(cleanUsr)
+	}
+
+	selectedApiKey := getRotatedAPIKey(cleanUsr, cfg.APIKey)
+	if selectedApiKey == "" {
+		selectedApiKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		}
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		}
+	}
+	if selectedApiKey == "" {
+		log.Printf("⚠️ No API key found for @%s", cleanUsr)
+		return "", ""
+	}
+
+	sysPrompt := cfg.SystemPrompt
+	if strings.TrimSpace(sysPrompt) == "" {
+		sysPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
+	}
+
+	// Update RAM sliding window instantly in 0ms
+	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+
+	fullPrompt := sysPrompt
+	if cfg.ImportCatalog && cfg.CatalogText != "" {
+		fullPrompt += cfg.CatalogText
+	}
+	fullPrompt += "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
+
+	var lastUserMsg string
+	var contextBuilder strings.Builder
+	contextBuilder.WriteString(fullPrompt)
+	contextBuilder.WriteString("\n\n=== RECENT CHAT HISTORY (LAST 10 MESSAGES) ===\n")
+	for _, m := range history {
+		if m.Role == "user" {
+			contextBuilder.WriteString(fmt.Sprintf("Customer: %s\n", m.Content))
+			lastUserMsg = m.Content
+		} else {
+			contextBuilder.WriteString(fmt.Sprintf("Assistant: %s\n", m.Content))
+		}
+	}
+	contextBuilder.WriteString("=== END RECENT HISTORY ===\nAnswer the customer's latest query accurately:")
+
+	if lastUserMsg == "" {
+		lastUserMsg = incomingText
+	}
+
+	aiResponse, err := CallAIModel(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, contextBuilder.String(), lastUserMsg)
+	if err != nil || aiResponse == "" {
+		log.Printf("⚠️ GenerateAIReplyRAM error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
+		return "", ""
+	}
+
+	// Update RAM sliding window with AI response
+	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
+
+	return aiResponse, ""
+}
+
+// 4. AsyncDBSync syncs processed customer chats and captured leads to Neon PostgreSQL DB in background without blocking server execution
+func AsyncDBSync(username, customerPhone, incomingText, aiReplyText string) {
+	go func() {
+		if DB == nil {
+			return
+		}
+		cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+		cleanPhone := FormatPhone(customerPhone)
+		if cleanUsr == "" || cleanPhone == "" {
+			return
+		}
+
+		// Sync customer incoming message to DB
+		if incomingText != "" {
+			SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "customer", incomingText)
+			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
+				cleanUsr, cleanPhone, incomingText)
+		}
+
+		// Sync AI reply to DB
+		if aiReplyText != "" {
+			SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", aiReplyText)
+		}
+	}()
 }
 
 // Unified multi-provider AI model caller (Groq, Gemini, OpenAI, DeepSeek, OpenRouter)

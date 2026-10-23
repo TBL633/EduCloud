@@ -25,11 +25,20 @@ func GetDBURL() string {
 	if dbURL == "" {
 		dbURL = strings.TrimSpace(os.Getenv("DATABASE_PUBLIC_URL"))
 	}
-	if dbURL != "" && !strings.Contains(dbURL, "sslmode=") {
-		if strings.Contains(dbURL, "?") {
-			dbURL += "&sslmode=require"
-		} else {
-			dbURL += "?sslmode=require"
+	if dbURL != "" {
+		// Strip PgBouncer pooler suffix to bypass transaction pooling prepared statement errors in lib/pq
+		if strings.Contains(dbURL, "-pooler.") {
+			dbURL = strings.ReplaceAll(dbURL, "-pooler.", ".")
+		}
+		if strings.Contains(dbURL, "-pooler-") {
+			dbURL = strings.ReplaceAll(dbURL, "-pooler-", "-")
+		}
+		if !strings.Contains(dbURL, "sslmode=") {
+			if strings.Contains(dbURL, "?") {
+				dbURL += "&sslmode=require"
+			} else {
+				dbURL += "?sslmode=require"
+			}
 		}
 	}
 	return dbURL

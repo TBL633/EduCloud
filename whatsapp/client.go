@@ -48,25 +48,53 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 			dbURL = strings.TrimSpace(os.Getenv("POSTGRES_URL"))
 		}
 	}
-	if dbURL != "" && !strings.Contains(dbURL, "sslmode=") {
-		if strings.Contains(dbURL, "?") {
-			dbURL += "&sslmode=require"
+
+	// Direct URL: strip -pooler suffix so Whatsmeow sqlstore connects directly to Neon DB engine
+	// bypassing PgBouncer transaction mode which destroys unnamed prepared statements
+	directURL := dbURL
+	if strings.Contains(directURL, "-pooler.") {
+		directURL = strings.ReplaceAll(directURL, "-pooler.", ".")
+	}
+	if strings.Contains(directURL, "-pooler-") {
+		directURL = strings.ReplaceAll(directURL, "-pooler-", "-")
+	}
+	if directURL != "" && !strings.Contains(directURL, "sslmode=") {
+		if strings.Contains(directURL, "?") {
+			directURL += "&sslmode=require"
 		} else {
-			dbURL += "?sslmode=require"
+			directURL += "?sslmode=require"
 		}
 	}
 
 	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", false)
 	var err error
 
-	// 1. Primary: Use dedicated sqlstore connection with sanitized dbURL
-	if dbURL != "" {
-		StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
+	// 1. Primary: Use dedicated direct sqlstore connection
+	if directURL != "" {
+		dedicatedDB, dbErr := sql.Open("postgres", directURL)
+		if dbErr == nil && dedicatedDB != nil {
+			dedicatedDB.SetMaxOpenConns(6)
+			dedicatedDB.SetMaxIdleConns(2)
+			dedicatedDB.SetConnMaxLifetime(10 * time.Minute)
+			dedicatedDB.SetConnMaxIdleTime(2 * time.Minute)
+
+			StoreContainer = sqlstore.NewWithDB(dedicatedDB, "postgres", dbLog)
+			if StoreContainer != nil {
+				err = StoreContainer.Upgrade(context.Background())
+				if err == nil {
+					log.Println("✅ Whatsmeow Store initialized with dedicated direct PostgreSQL connection!")
+					return
+				}
+				log.Printf("⚠️ StoreContainer.Upgrade notice: %v", err)
+			}
+		}
+
+		StoreContainer, err = sqlstore.New(context.Background(), "postgres", directURL, dbLog)
 		if err == nil && StoreContainer != nil {
-			log.Println("✅ Whatsmeow Store initialized with dedicated PostgreSQL connection!")
+			log.Println("✅ Whatsmeow Store initialized with direct PostgreSQL connection string!")
 			return
 		}
-		log.Printf("⚠️ Dedicated Whatsmeow Store connection error: %v. Falling back to active pool...", err)
+		log.Printf("⚠️ Direct Whatsmeow Store connection notice: %v. Trying active pool fallback...", err)
 	}
 
 	// 2. Secondary: Use existing pooled connection if available
@@ -483,34 +511,24 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		log.Printf("📩 Incoming message from +%s (@%s): %s", senderPhone, username, msgText)
 
-		// Concurrent Ultra-Fast Asynchronous Processing
+		// Ultra-Fast Concurrent Server RAM Execution (0ms DB Latency for Reply Delivery)
 		go func() {
-			// 1. RECORD IN CUSTOMER CHATS DB & ENFORCE STRICT 10-MESSAGE SLIDING WINDOW
-			SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
-
-			// 2. PUSH TO LIVE CHAT UI VIA SSE STREAM
+			// 1. PUSH INCOMING MESSAGE TO LIVE CHAT SSE UI INSTANTLY
 			PushToLiveChat(username, senderPhone, msgText, "incoming")
 
-			if DB == nil {
-				return
-			}
-			var provider, apiKey, sysPrompt string
-			var autoReply bool
-			err := DB.QueryRow("SELECT COALESCE(ai_provider, 'groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true) FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply)
+			// 2. FETCH USER AI CONFIGURATION FROM INSTANT RAM CACHE
+			cfg := GetUserConfigRAM(username)
 
-			// Save captured lead record
-			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
-				username, senderPhone, msgText)
+			var deliveredReply string
 
-			if err == nil && autoReply {
+			if cfg != nil && cfg.AutoReply {
 				activeClient := client
 				if activeClient == nil || !activeClient.IsLoggedIn() {
 					activeClient = GetOrCreateClient(username)
 				}
 
-				// ULTRA-FAST AI GENERATION
-				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
+				// 3. GENERATE AI REPLY INSTANTLY IN SERVER RAM
+				replyText, imgURL := GenerateAIReplyRAM(username, senderPhone, msgText, cfg)
 
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, replyText)
@@ -519,8 +537,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					} else {
 						log.Printf("⚡ AI image reply delivered to +%s", senderPhone)
 					}
-					SaveCustomerChatAndPrune(username, senderPhone, "assistant", "[Image Sent] "+replyText)
-					PushToLiveChat(username, senderPhone, "[Image Sent] "+replyText, "outgoing_ai")
+					deliveredReply = "[Image Sent] " + replyText
+					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendMessage(activeClient, senderPhone, replyText)
 					if sendErr != nil {
@@ -528,10 +546,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					} else {
 						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, replyText)
 					}
-					SaveCustomerChatAndPrune(username, senderPhone, "assistant", replyText)
-					PushToLiveChat(username, senderPhone, replyText, "outgoing_ai")
+					deliveredReply = replyText
+					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
 				}
 			}
+
+			// 4. AFTER PROCESSING & DELIVERING INSTANTLY ON SERVER, SYNC TO DB ASYNCHRONOUSLY IN BACKGROUND
+			AsyncDBSync(username, senderPhone, msgText, deliveredReply)
 		}()
 	case *events.LoggedOut:
 		fmt.Printf("⚠️ User @%s unlinked from phone. Auto-cleaning WhatsApp session details...\n", username)

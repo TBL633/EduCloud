@@ -98,6 +98,9 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Purge RAM cache so updated settings take effect immediately
+		whatsapp.InvalidateUserConfigCache(username)
+
 		respondJSON(w, 200, map[string]string{
 			"status":  "success",
 			"message": "AI Auto-Responder settings saved successfully!",
