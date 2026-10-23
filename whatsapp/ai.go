@@ -365,7 +365,7 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("User-Agent", "EduCloud-WhatsApp-Gateway/1.0")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -417,7 +417,7 @@ func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt
 	}
 	body, _ := json.Marshal(payload)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return "", err

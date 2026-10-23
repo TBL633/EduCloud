@@ -217,9 +217,53 @@ func EnsureConnected(client *whatsmeow.Client) error {
 	return fmt.Errorf("whatsapp connection timeout (websocket connecting)")
 }
 
+// ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs and filters out LID JIDs (117... / 223...)
+func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.JID) string {
+	// 1. Try Chat JID if it is a standard phone user server
+	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us") && chatJID.User != "" {
+		clean := regexp.MustCompile(`\D`).ReplaceAllString(chatJID.User, "")
+		clean = strings.Split(clean, ".")[0]
+		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+			return FormatPhone(clean)
+		}
+	}
+
+	// 2. Try Sender JID if it is a standard phone user server
+	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us") && senderJID.User != "" {
+		clean := regexp.MustCompile(`\D`).ReplaceAllString(senderJID.User, "")
+		clean = strings.Split(clean, ".")[0]
+		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+			return FormatPhone(clean)
+		}
+	}
+
+	// 3. Resolve from Whatsmeow Contacts Store if LID JID
+	if client != nil && client.Store != nil {
+		if contact, err := client.Store.Contacts.GetContact(senderJID); err == nil && contact.Found && contact.JID.User != "" {
+			clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.JID.User, "")
+			clean = strings.Split(clean, ".")[0]
+			if len(clean) >= 10 && len(clean) <= 13 {
+				return FormatPhone(clean)
+			}
+		}
+	}
+
+	// Fallback
+	rawUser := senderJID.User
+	if rawUser == "" {
+		rawUser = chatJID.User
+	}
+	rawUser = strings.Split(rawUser, ".")[0]
+	return FormatPhone(rawUser)
+}
+
 // FormatPhone cleans and adds India '91' prefix if 10-digit number is provided
 func FormatPhone(phone string) string {
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
+	if clean == "" {
+		return ""
+	}
+	clean = strings.Split(clean, ".")[0]
 	if len(clean) == 10 && (clean[0] == '6' || clean[0] == '7' || clean[0] == '8' || clean[0] == '9') {
 		return "91" + clean
 	}
@@ -435,12 +479,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return // Ignore newsletters, channels, status broadcasts
 		}
 
-		senderUser := v.Info.Sender.User
-		if senderUser == "" {
-			senderUser = v.Info.Chat.User
-		}
-
-		senderPhone := FormatPhone(senderUser)
+		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
 		if len(senderPhone) < 8 || len(senderPhone) > 15 || strings.HasPrefix(senderPhone, "120363") {
 			return // Ignore non-mobile newsletter channel JIDs
 		}
@@ -450,23 +489,25 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return
 		}
 
-		// 1. RECORD IN CUSTOMER CHATS (NOT LEADS!) AND ENFORCE STRICT 10-MESSAGE LIMIT IN DB
-		SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
+		log.Printf("📩 Incoming message from +%s (@%s): %s", senderPhone, username, msgText)
 
-		// 2. ZERO-LOAD LIVE CHAT: Push directly to browser via SSE
-		PushToLiveChat(username, senderPhone, msgText, "incoming")
-
-		// 3. AI AUTO-REPLY CHECK & LEAD QUALIFICATION DISPATCH
+		// Concurrent Ultra-Fast Asynchronous Processing
 		go func() {
+			// 1. RECORD IN CUSTOMER CHATS DB & ENFORCE STRICT 10-MESSAGE SLIDING WINDOW
+			SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
+
+			// 2. PUSH TO LIVE CHAT UI VIA SSE STREAM
+			PushToLiveChat(username, senderPhone, msgText, "incoming")
+
 			if DB == nil {
 				return
 			}
-			var provider, apiKey, sysPrompt, notifPhone string
+			var provider, apiKey, sysPrompt string
 			var autoReply bool
-			err := DB.QueryRow("SELECT COALESCE(ai_provider, 'groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true), COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &notifPhone)
+			err := DB.QueryRow("SELECT COALESCE(ai_provider, 'groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true) FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply)
 
-			// Always save captured lead inquiry directly into Neon Postgres DB
+			// Save captured lead record
 			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
 				username, senderPhone, msgText)
 
@@ -476,13 +517,15 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					activeClient = GetOrCreateClient(username)
 				}
 
+				// ULTRA-FAST AI GENERATION
 				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
+
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, replyText)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("✅ AI image reply sent to +%s", senderPhone)
+						log.Printf("⚡ AI image reply delivered to +%s", senderPhone)
 					}
 					SaveCustomerChatAndPrune(username, senderPhone, "assistant", "[Image Sent] "+replyText)
 					PushToLiveChat(username, senderPhone, "[Image Sent] "+replyText, "outgoing_ai")
@@ -491,19 +534,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI text reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("✅ AI auto-reply sent to +%s: %s", senderPhone, replyText)
+						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, replyText)
 					}
 					SaveCustomerChatAndPrune(username, senderPhone, "assistant", replyText)
 					PushToLiveChat(username, senderPhone, replyText, "outgoing_ai")
-				}
-
-				// If Lead Alert Notification Phone is set, dispatch automated alert message!
-				cleanNotif := FormatPhone(notifPhone)
-				if cleanNotif != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					alertText := fmt.Sprintf("🚨 *NEW AI QUALIFIED LEAD ALERT* 🚨\n\n• Account: @%s\n• Customer Phone: +%s\n• Last Message: %s\n• Time: %s",
-						username, senderPhone, msgText, time.Now().Format("02 Jan 15:04:05"))
-					_ = SendMessage(activeClient, cleanNotif, alertText)
-					PushToLiveChat(username, cleanNotif, alertText, "lead_alert")
 				}
 			}
 		}()
