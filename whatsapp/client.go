@@ -354,7 +354,7 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
-		if v.Info.IsFromMe || v.Info.IsGroup || v.Info.IsStatus {
+		if v.Info.IsFromMe || v.Info.IsGroup {
 			return
 		}
 
