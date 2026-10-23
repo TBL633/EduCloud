@@ -237,13 +237,24 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 		}
 	}
 
-	// 3. Resolve from Whatsmeow Contacts Store if LID JID
-	if client != nil && client.Store != nil {
-		if contact, err := client.Store.Contacts.GetContact(senderJID); err == nil && contact.Found && contact.JID.User != "" {
-			clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.JID.User, "")
-			clean = strings.Split(clean, ".")[0]
-			if len(clean) >= 10 && len(clean) <= 13 {
-				return FormatPhone(clean)
+	// 3. Resolve from Whatsmeow LIDMap Store if LID JID
+	if client != nil && client.Store != nil && client.Store.LIDMap != nil {
+		if senderJID.Server == "lid" {
+			if pnJID, err := client.Store.LIDMap.GetPN(context.Background(), senderJID); err == nil && pnJID.User != "" {
+				clean := regexp.MustCompile(`\D`).ReplaceAllString(pnJID.User, "")
+				clean = strings.Split(clean, ".")[0]
+				if len(clean) >= 10 && len(clean) <= 13 {
+					return FormatPhone(clean)
+				}
+			}
+		}
+		if chatJID.Server == "lid" {
+			if pnJID, err := client.Store.LIDMap.GetPN(context.Background(), chatJID); err == nil && pnJID.User != "" {
+				clean := regexp.MustCompile(`\D`).ReplaceAllString(pnJID.User, "")
+				clean = strings.Split(clean, ".")[0]
+				if len(clean) >= 10 && len(clean) <= 13 {
+					return FormatPhone(clean)
+				}
 			}
 		}
 	}
