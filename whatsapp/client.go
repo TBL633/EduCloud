@@ -113,12 +113,19 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 
 	// 1. If user previously paired, retrieve their exact session from Neon PostgreSQL sqlstore
 	if savedJID != "" {
+		cleanSaved := strings.Split(strings.Split(savedJID, "@")[0], ".")[0]
+		cleanSaved = strings.TrimSpace(cleanSaved)
+
 		allDevices, err := StoreContainer.GetAllDevices(context.Background())
 		if err == nil {
 			for _, dev := range allDevices {
-				if dev.ID != nil && (dev.ID.User == savedJID || dev.ID.String() == savedJID) {
-					deviceStore = dev
-					break
+				if dev != nil && dev.ID != nil {
+					cleanDevUser := strings.Split(strings.Split(dev.ID.User, "@")[0], ".")[0]
+					cleanDevUser = strings.TrimSpace(cleanDevUser)
+					if cleanDevUser != "" && (cleanDevUser == cleanSaved || dev.ID.User == savedJID || dev.ID.String() == savedJID) {
+						deviceStore = dev
+						break
+					}
 				}
 			}
 		}
@@ -329,9 +336,17 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 		return
 	}
 
-	// 1. Insert chat record into customer_chats table
+	// Standardize role names: 'customer' for user input, 'assistant' for AI/agent replies
+	normalRole := strings.ToLower(role)
+	if normalRole == "user" || normalRole == "client" {
+		normalRole = "customer"
+	} else if normalRole == "outgoing" || normalRole == "outgoing_ai" || normalRole == "assistant" {
+		normalRole = "assistant"
+	}
+
+	// 1. Insert chat record into customer_chats table with explicit customer_phone
 	_, err := DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, created_at)
-		VALUES ($1, $2, $3, $4, NOW())`, cleanUsr, cleanPhone, role, messageText)
+		VALUES ($1, $2, $3, $4, NOW())`, cleanUsr, cleanPhone, normalRole, messageText)
 	if err != nil {
 		log.Printf("⚠️ SaveCustomerChat error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 	}
@@ -347,7 +362,7 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 		  )`, cleanUsr, cleanPhone)
 
 	// 3. Sync RAM cache and update last activity timestamp (5-min inactivity timer reset)
-	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, role, messageText)
+	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, normalRole, messageText)
 }
 
 // Helper to extract text or label from any incoming WhatsApp message payload type
