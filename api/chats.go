@@ -37,7 +37,6 @@ func ChatsHandler(w http.ResponseWriter, r *http.Request) {
 			WHERE LOWER(username)=LOWER($1) 
 			  AND LENGTH(customer_phone) <= 15 
 			  AND customer_phone NOT LIKE '120363%'
-			  AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username)=LOWER($1))
 			GROUP BY customer_phone, username
 			ORDER BY MAX(id) DESC LIMIT 50`, username)
 		if err == nil {
@@ -87,7 +86,6 @@ func ChatMessagesHandler(w http.ResponseWriter, r *http.Request) {
 				SELECT id, role, message_text, created_at 
 				FROM customer_chats 
 				WHERE LOWER(username)=LOWER($1) AND customer_phone=$2
-				  AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username)=LOWER($1))
 				ORDER BY id DESC LIMIT 10
 			) sub ORDER BY id ASC`, username, cleanPhone)
 		if err == nil {

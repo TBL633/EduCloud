@@ -350,6 +350,43 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, role, messageText)
 }
 
+// Helper to extract text from any incoming WhatsApp message payload type
+func extractMessageText(msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if text := msg.GetConversation(); text != "" {
+		return text
+	}
+	if ext := msg.GetExtendedTextMessage(); ext != nil && ext.GetText() != "" {
+		return ext.GetText()
+	}
+	if img := msg.GetImageMessage(); img != nil && img.GetCaption() != "" {
+		return img.GetCaption()
+	}
+	if vid := msg.GetVideoMessage(); vid != nil && vid.GetCaption() != "" {
+		return vid.GetCaption()
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil && doc.GetCaption() != "" {
+		return doc.GetCaption()
+	}
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return extractMessageText(ephem.GetMessage())
+	}
+	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
+		return extractMessageText(viewOnce.GetMessage())
+	}
+	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
+		return extractMessageText(viewOnceV2.GetMessage())
+	}
+	if edited := msg.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
+		if protoMsg := edited.GetMessage().GetProtocolMessage(); protoMsg != nil && protoMsg.GetEditedMessage() != nil {
+			return extractMessageText(protoMsg.GetEditedMessage())
+		}
+	}
+	return ""
+}
+
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
@@ -367,10 +404,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return // Ignore non-mobile newsletter channel JIDs
 		}
 
-		msgText := v.Message.GetConversation()
-		if msgText == "" && v.Message.ExtendedTextMessage != nil {
-			msgText = v.Message.ExtendedTextMessage.GetText()
-		}
+		msgText := extractMessageText(v.Message)
 		if msgText == "" {
 			return
 		}
@@ -388,14 +422,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}
 			var provider, apiKey, sysPrompt, notifPhone string
 			var autoReply bool
-			err := DB.QueryRow("SELECT ai_provider, api_key, system_prompt, auto_reply, COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
+			err := DB.QueryRow("SELECT COALESCE(ai_provider, 'groq'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true), COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
 				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &notifPhone)
 
 			// Always save captured lead inquiry directly into Neon Postgres DB
 			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
 				username, senderPhone, msgText)
 
-			if err == nil && autoReply && apiKey != "" {
+			if err == nil && autoReply {
 				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
 				if imgURL != "" {
 					_ = SendImageFromURL(client, senderPhone, imgURL, replyText)

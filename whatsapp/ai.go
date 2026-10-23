@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -218,7 +219,19 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
 	cleanPhone := FormatPhone(customerPhone)
 	selectedApiKey := getRotatedAPIKey(cleanUsr, apiKey)
+
+	// Fallback to environment variables if no user API key configured
 	if selectedApiKey == "" {
+		selectedApiKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		}
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		}
+	}
+	if selectedApiKey == "" {
+		log.Printf("⚠️ No API key found for @%s (neither user configured nor environment variable set)", cleanUsr)
 		return "", ""
 	}
 
@@ -227,6 +240,10 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	importCatalog := true
 	if DB != nil {
 		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, true) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
+	}
+
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
 	}
 
 	// Re-hydrate / Update RAM sliding window (Max 10 messages, 5-min inactivity eviction)
@@ -279,6 +296,19 @@ func CallAIModel(provider, model string, temperature float64, rawApiKey, sysProm
 	prov := strings.ToLower(strings.TrimSpace(provider))
 	if prov == "chatgpt" {
 		prov = "openai"
+	}
+
+	// Smart key prefix auto-detection to prevent provider mismatches
+	if strings.HasPrefix(apiKey, "gsk_") {
+		prov = "groq"
+	} else if strings.HasPrefix(apiKey, "sk-") {
+		prov = "openai"
+	} else if strings.HasPrefix(apiKey, "AIzaSy") {
+		prov = "gemini"
+	}
+
+	if prov == "" {
+		prov = "groq"
 	}
 
 	if prov == "gemini" {
