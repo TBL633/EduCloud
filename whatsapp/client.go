@@ -350,7 +350,7 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, role, messageText)
 }
 
-// Helper to extract text from any incoming WhatsApp message payload type
+// Helper to extract text or label from any incoming WhatsApp message payload type
 func extractMessageText(msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
@@ -361,14 +361,35 @@ func extractMessageText(msg *waE2E.Message) string {
 	if ext := msg.GetExtendedTextMessage(); ext != nil && ext.GetText() != "" {
 		return ext.GetText()
 	}
-	if img := msg.GetImageMessage(); img != nil && img.GetCaption() != "" {
-		return img.GetCaption()
+	if img := msg.GetImageMessage(); img != nil {
+		if img.GetCaption() != "" {
+			return img.GetCaption()
+		}
+		return "[Photo received]"
 	}
-	if vid := msg.GetVideoMessage(); vid != nil && vid.GetCaption() != "" {
-		return vid.GetCaption()
+	if vid := msg.GetVideoMessage(); vid != nil {
+		if vid.GetCaption() != "" {
+			return vid.GetCaption()
+		}
+		return "[Video received]"
 	}
-	if doc := msg.GetDocumentMessage(); doc != nil && doc.GetCaption() != "" {
-		return doc.GetCaption()
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		if doc.GetCaption() != "" {
+			return doc.GetCaption()
+		}
+		if doc.GetTitle() != "" {
+			return "[Document received: " + doc.GetTitle() + "]"
+		}
+		return "[Document received]"
+	}
+	if audio := msg.GetAudioMessage(); audio != nil {
+		return "[Voice message received]"
+	}
+	if sticker := msg.GetStickerMessage(); sticker != nil {
+		return "[Sticker received]"
+	}
+	if loc := msg.GetLocationMessage(); loc != nil {
+		return "[Location shared]"
 	}
 	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
 		return extractMessageText(ephem.GetMessage())
@@ -395,11 +416,16 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return
 		}
 
-		if v.Info.Sender.Server != types.DefaultUserServer {
+		if v.Info.Sender.Server == "newsletter" || v.Info.Chat.Server == "newsletter" || v.Info.Chat.Server == "broadcast" {
 			return // Ignore newsletters, channels, status broadcasts
 		}
 
-		senderPhone := FormatPhone(v.Info.Sender.User)
+		senderUser := v.Info.Sender.User
+		if senderUser == "" {
+			senderUser = v.Info.Chat.User
+		}
+
+		senderPhone := FormatPhone(senderUser)
 		if len(senderPhone) < 8 || len(senderPhone) > 15 || strings.HasPrefix(senderPhone, "120363") {
 			return // Ignore non-mobile newsletter channel JIDs
 		}
@@ -430,23 +456,38 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				username, senderPhone, msgText)
 
 			if err == nil && autoReply {
+				activeClient := client
+				if activeClient == nil || !activeClient.IsLoggedIn() {
+					activeClient = GetOrCreateClient(username)
+				}
+
 				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
-				if imgURL != "" {
-					_ = SendImageFromURL(client, senderPhone, imgURL, replyText)
+				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
+					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, replyText)
+					if sendErr != nil {
+						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
+					} else {
+						log.Printf("✅ AI image reply sent to +%s", senderPhone)
+					}
 					SaveCustomerChatAndPrune(username, senderPhone, "assistant", "[Image Sent] "+replyText)
 					PushToLiveChat(username, senderPhone, "[Image Sent] "+replyText, "outgoing_ai")
-				} else if replyText != "" {
-					_ = SendMessage(client, senderPhone, replyText)
+				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
+					sendErr := SendMessage(activeClient, senderPhone, replyText)
+					if sendErr != nil {
+						log.Printf("⚠️ Error sending AI text reply to +%s: %v", senderPhone, sendErr)
+					} else {
+						log.Printf("✅ AI auto-reply sent to +%s: %s", senderPhone, replyText)
+					}
 					SaveCustomerChatAndPrune(username, senderPhone, "assistant", replyText)
 					PushToLiveChat(username, senderPhone, replyText, "outgoing_ai")
 				}
 
 				// If Lead Alert Notification Phone is set, dispatch automated alert message!
 				cleanNotif := FormatPhone(notifPhone)
-				if cleanNotif != "" && client != nil && client.IsLoggedIn() {
+				if cleanNotif != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					alertText := fmt.Sprintf("🚨 *NEW AI QUALIFIED LEAD ALERT* 🚨\n\n• Account: @%s\n• Customer Phone: +%s\n• Last Message: %s\n• Time: %s",
 						username, senderPhone, msgText, time.Now().Format("02 Jan 15:04:05"))
-					_ = SendMessage(client, cleanNotif, alertText)
+					_ = SendMessage(activeClient, cleanNotif, alertText)
 					PushToLiveChat(username, cleanNotif, alertText, "lead_alert")
 				}
 			}

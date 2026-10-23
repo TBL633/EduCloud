@@ -340,7 +340,7 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 		}
 	default: // groq
 		url = "https://api.groq.com/openai/v1/chat/completions"
-		if reqModel == "" {
+		if reqModel == "" || strings.Contains(reqModel, "llama3-70b-8192") || strings.Contains(reqModel, "llama3-8b-8192") || strings.Contains(reqModel, "llama2") || strings.Contains(reqModel, "mixtral") {
 			reqModel = "llama-3.3-70b-versatile"
 		}
 	}
@@ -402,7 +402,7 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 
 func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt, userText string) (string, error) {
 	mdl := strings.TrimSpace(model)
-	if mdl == "" {
+	if mdl == "" || strings.Contains(mdl, "gemini-1.0") || strings.Contains(mdl, "gemini-pro") {
 		mdl = "gemini-1.5-flash"
 	}
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", mdl, apiKey)
