@@ -59,7 +59,17 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", false)
 	var err error
 
-	// 1. Primary: Use existing pooled connection if available
+	// 1. Primary: Use dedicated sqlstore connection with sanitized dbURL
+	if dbURL != "" {
+		StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
+		if err == nil && StoreContainer != nil {
+			log.Println("✅ Whatsmeow Store initialized with dedicated PostgreSQL connection!")
+			return
+		}
+		log.Printf("⚠️ Dedicated Whatsmeow Store connection error: %v. Falling back to active pool...", err)
+	}
+
+	// 2. Secondary: Use existing pooled connection if available
 	if dbConn != nil {
 		StoreContainer = sqlstore.NewWithDB(dbConn, "postgres", dbLog)
 		if StoreContainer != nil {
@@ -68,18 +78,7 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 				log.Println("✅ Whatsmeow Store initialized with active PostgreSQL pool!")
 				return
 			}
-			log.Printf("⚠️ StoreContainer.Upgrade notice: %v. Falling back to dedicated connection...", err)
-		}
-	}
-
-	// 2. Secondary: Open dedicated sqlstore connection with sanitized dbURL
-	if dbURL != "" {
-		StoreContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
-		if err != nil {
-			log.Printf("⚠️ Whatsmeow Store connection error: %v", err)
-		} else {
-			log.Println("✅ Whatsmeow Store initialized with dedicated connection!")
-			return
+			log.Printf("⚠️ StoreContainer.Upgrade notice: %v", err)
 		}
 	}
 
@@ -237,20 +236,23 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 		}
 	}
 
-	// 3. Fallback
+	// 3. Fallback: Check if user is a standard phone number
 	rawUser := senderJID.User
 	if rawUser == "" || strings.HasPrefix(rawUser, "117") || strings.HasPrefix(rawUser, "223") {
 		rawUser = chatJID.User
 	}
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(rawUser, "")
 	clean = strings.Split(clean, ".")[0]
-	return FormatPhone(clean)
+	if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+		return FormatPhone(clean)
+	}
+	return ""
 }
 
 // FormatPhone cleans and adds India '91' prefix if 10-digit number is provided
 func FormatPhone(phone string) string {
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
-	if clean == "" {
+	if clean == "" || strings.HasPrefix(clean, "117") || strings.HasPrefix(clean, "223") || len(clean) > 13 {
 		return ""
 	}
 	clean = strings.Split(clean, ".")[0]
@@ -470,8 +472,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 
 		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
-		if len(senderPhone) < 8 || len(senderPhone) > 15 || strings.HasPrefix(senderPhone, "120363") {
-			return // Ignore non-mobile newsletter channel JIDs
+		if len(senderPhone) < 10 || len(senderPhone) > 13 || strings.HasPrefix(senderPhone, "117") || strings.HasPrefix(senderPhone, "223") || strings.HasPrefix(senderPhone, "120363") {
+			return // Ignore non-mobile, LID, newsletter, broadcast JIDs
 		}
 
 		msgText := extractMessageText(v.Message)

@@ -212,7 +212,7 @@ func LeadsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if DB != nil {
 		rows, err := DB.Query(`SELECT id, COALESCE(customer_phone, ''), COALESCE(inquiry_text, ''), COALESCE(status, 'Captured'), COALESCE(TO_CHAR(created_at, 'DD Mon HH24:MI'), 'Recent')
-			FROM leads WHERE LOWER(username)=LOWER($1) ORDER BY id DESC LIMIT 50`, username)
+			FROM leads WHERE LOWER(username)=LOWER($1) AND LENGTH(customer_phone) >= 10 AND LENGTH(customer_phone) <= 13 AND customer_phone NOT LIKE '117%' AND customer_phone NOT LIKE '223%' ORDER BY id DESC LIMIT 50`, username)
 
 		if err == nil {
 			defer rows.Close()

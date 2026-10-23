@@ -191,8 +191,8 @@ func migrateSchema() {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_products_usr ON products(username);`,
 		`CREATE INDEX IF NOT EXISTS idx_leads_usr ON leads(username);`,
-		`DELETE FROM customer_chats WHERE LENGTH(customer_phone) > 15 OR customer_phone LIKE '120363%';`,
-		`DELETE FROM leads WHERE LENGTH(customer_phone) > 15 OR customer_phone LIKE '120363%';`,
+		`DELETE FROM customer_chats WHERE LENGTH(customer_phone) > 13 OR LENGTH(customer_phone) < 10 OR customer_phone LIKE '117%' OR customer_phone LIKE '223%' OR customer_phone LIKE '120363%';`,
+		`DELETE FROM leads WHERE LENGTH(customer_phone) > 13 OR LENGTH(customer_phone) < 10 OR customer_phone LIKE '117%' OR customer_phone LIKE '223%' OR customer_phone LIKE '120363%';`,
 	}
 
 	for _, q := range queries {

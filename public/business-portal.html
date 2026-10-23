@@ -1401,12 +1401,14 @@
 
         function formatPhoneNumberDisplay(phone) {
             const clean = String(phone).replace(/\D/g, '');
-            if (!clean) return 'Unknown Contact';
+            if (!clean || clean.startsWith('117') || clean.startsWith('223') || clean.length > 13) {
+                return 'Customer';
+            }
             if (clean.length === 12 && clean.startsWith('91')) {
                 return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
             }
-            if (clean.length === 10) {
-                return `+${clean.slice(0, 5)} ${clean.slice(5)}`;
+            if (clean.length === 10 && ['6', '7', '8', '9'].includes(clean[0])) {
+                return `+91 ${clean.slice(0, 5)} ${clean.slice(5)}`;
             }
             return `+${clean}`;
         }
@@ -1420,10 +1422,10 @@
                 const data = await res.json();
                 let conversations = data.conversations || [];
 
-                // Strict filtering for valid customer phone numbers (exclude newsletter/channels like 120363...)
+                // Strict filtering for valid customer phone numbers (exclude fake/LID/channels)
                 conversations = conversations.filter(c => {
                     const phoneStr = String(c.customer_phone || '').replace(/\D/g, '');
-                    return phoneStr.length >= 8 && phoneStr.length <= 15 && !phoneStr.startsWith('120363');
+                    return phoneStr.length >= 10 && phoneStr.length <= 13 && !phoneStr.startsWith('117') && !phoneStr.startsWith('223') && !phoneStr.startsWith('120363');
                 });
 
                 const counterEl = document.getElementById('chat-contacts-counter');

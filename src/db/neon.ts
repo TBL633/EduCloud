@@ -384,7 +384,7 @@ export async function recordCustomerChat(
   if (!pool || !isConnected) return;
   const cleanUser = username.toLowerCase();
   const cleanPhone = customerPhone.replace(/\D/g, '');
-  if (!cleanPhone || !messageText) return;
+  if (!cleanPhone || cleanPhone.length < 10 || cleanPhone.length > 13 || cleanPhone.startsWith('117') || cleanPhone.startsWith('223') || !messageText) return;
 
   try {
     // 1. Insert chat message
@@ -429,7 +429,6 @@ export async function getLast10Chats(
       `SELECT id, role, message_text, created_at
        FROM customer_chats
        WHERE LOWER(username) = $1 AND customer_phone = $2
-         AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username) = $1)
        ORDER BY id ASC
        LIMIT 10`,
       [cleanUser, cleanPhone]
@@ -463,8 +462,12 @@ export async function getCustomerConversations(
               MAX(created_at) as last_time,
               COUNT(*) as total_count
        FROM customer_chats c
-       WHERE LOWER(username) = $1 AND LENGTH(customer_phone) <= 15 AND customer_phone NOT LIKE '120363%'
-         AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username) = $1)
+       WHERE LOWER(username) = $1 
+         AND LENGTH(customer_phone) >= 10 
+         AND LENGTH(customer_phone) <= 13 
+         AND customer_phone NOT LIKE '117%' 
+         AND customer_phone NOT LIKE '223%' 
+         AND customer_phone NOT LIKE '120363%'
        GROUP BY customer_phone, username
        ORDER BY MAX(created_at) DESC
        LIMIT 50`,

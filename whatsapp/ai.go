@@ -311,69 +311,105 @@ func CallAIModel(provider, model string, temperature float64, rawApiKey, sysProm
 		prov = "groq"
 	}
 
-	if prov == "gemini" {
-		return callGeminiAPIWithModel(apiKey, model, temperature, sysPrompt, userQuery)
+	// Sanitize model parameter: if purely numeric (e.g. phone number saved in model column) or invalid, clear it
+	cleanModel := strings.TrimSpace(model)
+	if isNumericOrPhone(cleanModel) {
+		cleanModel = ""
 	}
 
-	return callOpenAIFormat(prov, model, temperature, apiKey, sysPrompt, userQuery)
+	if prov == "gemini" {
+		res, err := callGeminiAPIWithModel(apiKey, cleanModel, temperature, sysPrompt, userQuery)
+		if err == nil && res != "" {
+			return res, nil
+		}
+		// If Gemini failed with key gsk_ or model mismatch, fallback to Groq if possible
+		log.Printf("⚠️ Gemini call failed (%v). Attempting fallback to Groq/OpenAI...", err)
+		return callOpenAIFormat("groq", "llama-3.3-70b-versatile", temperature, apiKey, sysPrompt, userQuery)
+	}
+
+	return callOpenAIFormat(prov, cleanModel, temperature, apiKey, sysPrompt, userQuery)
+}
+
+func isNumericOrPhone(s string) bool {
+	if s == "" {
+		return false
+	}
+	clean := regexp.MustCompile(`\D`).ReplaceAllString(s, "")
+	return len(clean) >= 8 && (len(clean) == len(s) || strings.HasPrefix(clean, "117") || strings.HasPrefix(clean, "223") || strings.HasPrefix(clean, "91"))
 }
 
 func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPrompt, userQuery string) (string, error) {
 	url := "https://api.groq.com/openai/v1/chat/completions"
 	reqModel := strings.TrimSpace(model)
 
+	candidateModels := []string{}
+
 	switch provider {
 	case "openai":
 		url = "https://api.openai.com/v1/chat/completions"
-		if reqModel == "" {
-			reqModel = "gpt-4o-mini"
-		}
+		candidateModels = []string{"gpt-4o-mini", "gpt-4o"}
 	case "deepseek":
 		url = "https://api.deepseek.com/chat/completions"
-		if reqModel == "" {
-			reqModel = "deepseek-chat"
-		}
+		candidateModels = []string{"deepseek-chat"}
 	case "openrouter":
 		url = "https://openrouter.ai/api/v1/chat/completions"
-		if reqModel == "" {
-			reqModel = "meta-llama/llama-3.1-8b-instruct:free"
-		}
+		candidateModels = []string{"meta-llama/llama-3.1-8b-instruct:free"}
 	default: // groq
 		url = "https://api.groq.com/openai/v1/chat/completions"
-		if reqModel == "" || strings.Contains(reqModel, "llama3-70b-8192") || strings.Contains(reqModel, "llama3-8b-8192") || strings.Contains(reqModel, "llama2") || strings.Contains(reqModel, "mixtral") {
-			reqModel = "llama-3.3-70b-versatile"
+		candidateModels = []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"}
+	}
+
+	if reqModel != "" && !isNumericOrPhone(reqModel) {
+		// Prepend requested model to candidate list
+		candidateModels = append([]string{reqModel}, candidateModels...)
+	}
+
+	var lastErr error
+	for _, m := range candidateModels {
+		messages := []ChatMessage{
+			{Role: "system", Content: sysPrompt},
+			{Role: "user", Content: userQuery},
 		}
-	}
 
-	messages := []ChatMessage{
-		{Role: "system", Content: sysPrompt},
-		{Role: "user", Content: userQuery},
-	}
+		payload := map[string]interface{}{
+			"model":       m,
+			"messages":    messages,
+			"temperature": temperature,
+		}
+		body, _ := json.Marshal(payload)
 
-	payload := map[string]interface{}{
-		"model":       reqModel,
-		"messages":    messages,
-		"temperature": temperature,
-	}
-	body, _ := json.Marshal(payload)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("User-Agent", "EduCloud-WhatsApp-Gateway/1.0")
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("User-Agent", "EduCloud-WhatsApp-Gateway/1.0")
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+		respBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusOK {
+			var result struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal(respBytes, &result); err == nil && len(result.Choices) > 0 && result.Choices[0].Message.Content != "" {
+				return strings.TrimSpace(result.Choices[0].Message.Content), nil
+			}
+		}
+
 		var errData struct {
 			Error struct {
 				Message string `json:"message"`
@@ -381,51 +417,66 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 		}
 		_ = json.Unmarshal(respBytes, &errData)
 		if errData.Error.Message != "" {
-			return "", fmt.Errorf("%s (status %d)", errData.Error.Message, resp.StatusCode)
+			lastErr = fmt.Errorf("model %s: %s (status %d)", m, errData.Error.Message, resp.StatusCode)
+		} else {
+			lastErr = fmt.Errorf("model %s returned status %d", m, resp.StatusCode)
 		}
-		return "", fmt.Errorf("provider returned status %d: %s", resp.StatusCode, string(respBytes))
 	}
 
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	_ = json.Unmarshal(respBytes, &result)
-	if len(result.Choices) > 0 && result.Choices[0].Message.Content != "" {
-		return strings.TrimSpace(result.Choices[0].Message.Content), nil
+	if lastErr != nil {
+		return "", lastErr
 	}
 	return "", fmt.Errorf("empty AI reply received")
 }
 
 func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt, userText string) (string, error) {
-	mdl := strings.TrimSpace(model)
-	if mdl == "" || strings.Contains(mdl, "gemini-1.0") || strings.Contains(mdl, "gemini-pro") {
-		mdl = "gemini-1.5-flash"
-	}
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", mdl, apiKey)
+	// Candidate models list in priority order to handle deprecated/renamed models gracefully
+	candidateModels := []string{"gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"}
 
-	payload := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{"role": "user", "parts": []map[string]string{{"text": sysPrompt + "\n\nCustomer Inquiry: " + userText}}},
-		},
-		"generationConfig": map[string]interface{}{
-			"temperature": temperature,
-		},
+	reqModel := strings.TrimSpace(model)
+	if reqModel != "" && !isNumericOrPhone(reqModel) && !strings.Contains(reqModel, "gemini-1.0") && !strings.Contains(reqModel, "gemini-pro") {
+		candidateModels = append([]string{reqModel}, candidateModels...)
 	}
-	body, _ := json.Marshal(payload)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for _, mdl := range candidateModels {
+		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", mdl, apiKey)
 
-	respBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+		payload := map[string]interface{}{
+			"contents": []map[string]interface{}{
+				{"role": "user", "parts": []map[string]string{{"text": sysPrompt + "\n\nCustomer Inquiry: " + userText}}},
+			},
+			"generationConfig": map[string]interface{}{
+				"temperature": temperature,
+			},
+		}
+		body, _ := json.Marshal(payload)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Post(url, "application/json", bytes.NewBuffer(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		respBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			var result struct {
+				Candidates []struct {
+					Content struct {
+						Parts []struct {
+							Text string `json:"text"`
+						} `json:"parts"`
+					} `json:"content"`
+				} `json:"candidates"`
+			}
+			if err := json.Unmarshal(respBytes, &result); err == nil && len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
+				return strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text), nil
+			}
+		}
+
 		var errData struct {
 			Error struct {
 				Message string `json:"message"`
@@ -433,23 +484,14 @@ func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt
 		}
 		_ = json.Unmarshal(respBytes, &errData)
 		if errData.Error.Message != "" {
-			return "", fmt.Errorf("%s (status %d)", errData.Error.Message, resp.StatusCode)
+			lastErr = fmt.Errorf("gemini model %s: %s (status %d)", mdl, errData.Error.Message, resp.StatusCode)
+		} else {
+			lastErr = fmt.Errorf("gemini status %d for model %s", resp.StatusCode, mdl)
 		}
-		return "", fmt.Errorf("Gemini error status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-	_ = json.Unmarshal(respBytes, &result)
-	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
-		return strings.TrimSpace(result.Candidates[0].Content.Parts[0].Text), nil
+	if lastErr != nil {
+		return "", lastErr
 	}
 	return "", fmt.Errorf("empty response from Gemini")
 }
