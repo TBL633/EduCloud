@@ -514,7 +514,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		// Auto-mark message as read on WhatsApp so blue ticks appear and connection stays active
 		if client != nil {
 			go func() {
-				_ = client.MarkRead([]types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+				_ = client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
 			}()
 		}
 
