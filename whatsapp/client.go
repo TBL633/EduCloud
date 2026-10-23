@@ -220,7 +220,7 @@ func EnsureConnected(client *whatsmeow.Client) error {
 // ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs and filters out LID JIDs (117... / 223...)
 func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.JID) string {
 	// 1. Try Chat JID if it is a standard phone user server
-	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us") && chatJID.User != "" {
+	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us" || chatJID.Server == "s.whatsapp.net") && chatJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(chatJID.User, "")
 		clean = strings.Split(clean, ".")[0]
 		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
@@ -229,7 +229,7 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 	}
 
 	// 2. Try Sender JID if it is a standard phone user server
-	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us") && senderJID.User != "" {
+	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us" || senderJID.Server == "s.whatsapp.net") && senderJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(senderJID.User, "")
 		clean = strings.Split(clean, ".")[0]
 		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
@@ -237,35 +237,14 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 		}
 	}
 
-	// 3. Resolve from Whatsmeow LIDMap Store if LID JID
-	if client != nil && client.Store != nil && client.Store.LIDMap != nil {
-		if senderJID.Server == "lid" {
-			if pnJID, err := client.Store.LIDMap.GetPN(context.Background(), senderJID); err == nil && pnJID.User != "" {
-				clean := regexp.MustCompile(`\D`).ReplaceAllString(pnJID.User, "")
-				clean = strings.Split(clean, ".")[0]
-				if len(clean) >= 10 && len(clean) <= 13 {
-					return FormatPhone(clean)
-				}
-			}
-		}
-		if chatJID.Server == "lid" {
-			if pnJID, err := client.Store.LIDMap.GetPN(context.Background(), chatJID); err == nil && pnJID.User != "" {
-				clean := regexp.MustCompile(`\D`).ReplaceAllString(pnJID.User, "")
-				clean = strings.Split(clean, ".")[0]
-				if len(clean) >= 10 && len(clean) <= 13 {
-					return FormatPhone(clean)
-				}
-			}
-		}
-	}
-
-	// Fallback
+	// 3. Fallback
 	rawUser := senderJID.User
-	if rawUser == "" {
+	if rawUser == "" || strings.HasPrefix(rawUser, "117") || strings.HasPrefix(rawUser, "223") {
 		rawUser = chatJID.User
 	}
-	rawUser = strings.Split(rawUser, ".")[0]
-	return FormatPhone(rawUser)
+	clean := regexp.MustCompile(`\D`).ReplaceAllString(rawUser, "")
+	clean = strings.Split(clean, ".")[0]
+	return FormatPhone(clean)
 }
 
 // FormatPhone cleans and adds India '91' prefix if 10-digit number is provided
