@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     ai_temperature NUMERIC(3, 1) DEFAULT 0.7,
     api_key TEXT DEFAULT '',
     system_prompt TEXT DEFAULT '',
+    import_catalog_details BOOLEAN DEFAULT true,
     auto_reply BOOLEAN DEFAULT true,
     automation_access BOOLEAN DEFAULT true,
     status VARCHAR(50) DEFAULT 'Disconnected',
@@ -41,11 +42,13 @@ CREATE TABLE IF NOT EXISTS products (
     description TEXT DEFAULT '',
     ai_tag VARCHAR(50) DEFAULT '',
     item_type VARCHAR(50) DEFAULT 'product',
+    whatsapp_catalog_link TEXT DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_catalog_link TEXT DEFAULT '';
 ALTER TABLE products DROP COLUMN IF EXISTS image_url;
 DROP TABLE IF EXISTS neon_media_objects CASCADE;
 DROP TABLE IF EXISTS user_media CASCADE;

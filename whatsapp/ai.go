@@ -185,7 +185,7 @@ func GetCatalogContext(username string) string {
 		return ""
 	}
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
-	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, 'custom'), COALESCE(variants::text, '[]'), COALESCE(ai_tag, ''), COALESCE(image_url, ''), COALESCE(image_data, '') 
+	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, 'custom'), COALESCE(whatsapp_catalog_link, '') 
 		FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, cleanUsr)
 	if err != nil {
 		return ""
@@ -196,20 +196,20 @@ func GetCatalogContext(username string) string {
 	sb.WriteString("\n\n=== LIVE BUSINESS PRODUCT CATALOG & PRICING ===\n")
 	count := 0
 	for rows.Next() {
-		var name, price, desc, unitType, variantsJSON, aiTag, imgUrl, imgData string
-		if err := rows.Scan(&name, &price, &desc, &unitType, &variantsJSON, &aiTag, &imgUrl, &imgData); err == nil {
+		var name, price, desc, unitType, waCatalogLink string
+		if err := rows.Scan(&name, &price, &desc, &unitType, &waCatalogLink); err == nil {
 			count++
-			tagStr := ""
-			if aiTag != "" {
-				tagStr = fmt.Sprintf(" [Tag: %s]", aiTag)
+			linkStr := ""
+			if waCatalogLink != "" {
+				linkStr = fmt.Sprintf(" [WhatsApp Catalog Link: %s]", waCatalogLink)
 			}
-			sb.WriteString(fmt.Sprintf("%d. %s (Price: %s) [Unit: %s]%s - Details: %s\n", count, name, price, unitType, tagStr, desc))
+			sb.WriteString(fmt.Sprintf("%d. %s (Price: %s) [Unit: %s]%s - Details: %s\n", count, name, price, unitType, linkStr, desc))
 		}
 	}
 	if count == 0 {
 		return ""
 	}
-	sb.WriteString("=== END OF PRODUCT CATALOG (Use this exact pricing and details when customers ask. Use tags like <IMG_1> or <IMG_2> if customer asks for picture/image) ===\n")
+	sb.WriteString("=== END OF PRODUCT CATALOG (Use this exact pricing and details when customers ask.) ===\n")
 	return sb.String()
 }
 
@@ -224,15 +224,19 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 
 	model := "llama-3.3-70b-versatile"
 	temp := 0.7
+	importCatalog := true
 	if DB != nil {
-		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp)
+		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, true) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
 	}
 
 	// Re-hydrate / Update RAM sliding window (Max 10 messages, 5-min inactivity eviction)
 	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 
-	catalogContext := GetCatalogContext(cleanUsr)
-	fullPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional. If you reference a product that has an assigned tag like <IMG_1> or <IMG_2>, include the tag in your reply."
+	catalogContext := ""
+	if importCatalog {
+		catalogContext = GetCatalogContext(cleanUsr)
+	}
+	fullPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
 
 	// Build conversation history for AI model
 	var lastUserMsg string
@@ -259,33 +263,10 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		return "", ""
 	}
 
-	// Check if AI output includes <IMG_N> or [IMAGE: url] tag
-	imageURL := ""
-	reTag := regexp.MustCompile(`<IMG_\d+>`)
-	matchTag := reTag.FindString(aiResponse)
-	if matchTag != "" && DB != nil {
-		var imgUrl, imgData string
-		_ = DB.QueryRow("SELECT COALESCE(image_url, ''), COALESCE(image_data, '') FROM products WHERE LOWER(username)=LOWER($1) AND ai_tag=$2 LIMIT 1", cleanUsr, matchTag).Scan(&imgUrl, &imgData)
-		if imgUrl != "" {
-			imageURL = imgUrl
-		} else if imgData != "" {
-			imageURL = imgData
-		}
-	}
-
-	if imageURL == "" {
-		reImg := regexp.MustCompile(`\[IMAGE:\s*(https?://[^\]]+)\]`)
-		matches := reImg.FindStringSubmatch(aiResponse)
-		if len(matches) > 1 {
-			imageURL = strings.TrimSpace(matches[1])
-			aiResponse = strings.TrimSpace(reImg.ReplaceAllString(aiResponse, ""))
-		}
-	}
-
 	// Save AI reply in RAM sliding window
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
 
-	return aiResponse, imageURL
+	return aiResponse, ""
 }
 
 // Unified multi-provider AI model caller (Groq, Gemini, OpenAI, DeepSeek, OpenRouter)

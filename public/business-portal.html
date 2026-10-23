@@ -263,72 +263,83 @@
                         </div>
                     </div>
 
-                    <!-- Live Customer Chats & Contacts Card (Neon DB Real-time Memory) -->
-                    <div class="glass-card p-5 sm:p-6 rounded-3xl border border-slate-800 space-y-4 text-left">
+                    <!-- Live Customer Chats & Contacts Card (Visible ONLY when WhatsApp is Linked) -->
+                    <div id="biz-customer-chats-container" class="glass-card p-5 sm:p-6 rounded-3xl border border-slate-800 space-y-4 text-left hidden">
                         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
                             <div>
                                 <h3 class="text-sm font-bold text-white flex items-center gap-2">
                                     <i class="fa-solid fa-comments text-emerald-400"></i>
-                                    <span>WhatsApp Inbound Customer Chats</span>
+                                    <span>WhatsApp Customer Chats</span>
                                 </h3>
-                                <p class="text-[11px] text-slate-400">Real-time DB chat memory (Strictly last recent 10 messages stored & displayed).</p>
+                                <p class="text-[11px] text-slate-400">Real-time DB chat memory (Strictly latest 10 messages kept · Auto-synced with Neon DB).</p>
                             </div>
                             <div class="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5">
                                 <i class="fa-solid fa-clock-rotate-left"></i>
-                                <span>5-Day Inactivity Auto-Purge Active</span>
+                                <span>5-Day Auto-Purge Active</span>
                             </div>
                         </div>
 
-                        <!-- Info Banner -->
-                        <div class="p-3 rounded-2xl bg-cyan-950/30 border border-cyan-800/50 text-[11px] text-cyan-200 leading-relaxed flex items-start gap-2">
-                            <i class="fa-solid fa-database text-cyan-400 mt-0.5 shrink-0"></i>
-                            <div>
-                                <span class="font-bold text-white">Database Context Memory:</span> Chats are saved directly in Neon PostgreSQL (zero RAM load). Only the last 10 messages per customer are retained to provide AI with real-time sliding context. Inactive chats with no messages for 5 days are automatically purged from DB.
+                        <!-- 1. Customer Contacts List View (Shown by default when connected) -->
+                        <div id="chat-contacts-view" class="space-y-3">
+                            <div class="flex items-center justify-between pb-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                                        <i class="fa-solid fa-address-book text-emerald-400"></i>
+                                        <span>Customer Contacts</span>
+                                    </span>
+                                    <span id="chat-contacts-counter" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-900 text-emerald-400 border border-slate-800">0</span>
+                                </div>
+                                <button type="button" onclick="loadCustomerConversationsList()" class="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-800 rounded-xl text-xs font-mono font-bold cursor-pointer transition flex items-center gap-1.5">
+                                    <i class="fa-solid fa-rotate"></i> Reload
+                                </button>
+                            </div>
+                            <div id="chat-contact-list" class="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                                <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-slate-500 text-xs text-center">
+                                    Loading contacts...
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Active Contact Select & Messages Container -->
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <!-- Left Column: Customer Contacts List -->
-                            <div class="md:col-span-1 space-y-2">
-                                <div class="flex items-center justify-between">
-                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">Contacts / Chats</label>
-                                    <button type="button" onclick="loadCustomerConversationsList()" class="text-[10px] text-emerald-400 hover:underline font-mono cursor-pointer"><i class="fa-solid fa-rotate"></i> Reload</button>
-                                </div>
-                                <div id="chat-contact-list" class="space-y-1.5 max-h-[320px] overflow-y-auto pr-1">
-                                    <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-500 text-xs text-center">
-                                        Loading contacts...
+                        <!-- 2. Customer Chat Conversation View (Hidden by default, shown when contact is clicked) -->
+                        <div id="chat-conversation-view" class="hidden flex flex-col h-[520px] bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+                            <!-- Chat Header with Back Button -->
+                            <div class="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <button type="button" onclick="backToContactList()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-sm" title="Back to Contacts list">
+                                        <i class="fa-solid fa-arrow-left text-emerald-400"></i>
+                                        <span>Back</span>
+                                    </button>
+                                    <div class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center justify-center text-xs font-mono shrink-0">
+                                        <i class="fa-solid fa-user"></i>
                                     </div>
+                                    <div class="truncate">
+                                        <div id="chat-active-phone" class="text-xs font-bold font-mono text-white truncate">Customer</div>
+                                        <div class="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                            <span>WhatsApp Active · Last 10 msgs</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" onclick="refreshActiveChatMessages()" class="px-2.5 py-1 text-slate-300 hover:text-emerald-400 text-xs font-mono cursor-pointer transition flex items-center gap-1 shrink-0">
+                                    <i class="fa-solid fa-arrows-rotate"></i>
+                                    <span class="hidden sm:inline">Refresh</span>
+                                </button>
+                            </div>
+
+                            <!-- Messages Box (Strictly last 10 messages) -->
+                            <div id="chat-messages-box" class="flex-1 p-4 space-y-3 overflow-y-auto text-xs bg-slate-950/80">
+                                <div class="text-center text-slate-500 py-16">
+                                    Loading conversation...
                                 </div>
                             </div>
 
-                            <!-- Right Column: Last 10 Messages Box & Send Reply -->
-                            <div class="md:col-span-2 flex flex-col h-[360px] bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
-                                <!-- Chat Header -->
-                                <div class="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <i class="fa-brands fa-whatsapp text-emerald-400"></i>
-                                        <span id="chat-active-phone" class="text-xs font-bold font-mono text-white">Select a contact</span>
-                                    </div>
-                                    <button type="button" onclick="refreshActiveChatMessages()" class="text-[11px] text-emerald-400 hover:underline cursor-pointer flex items-center gap-1 font-mono">
-                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
-                                    </button>
-                                </div>
-
-                                <!-- Messages Box (Last 10 Messages) -->
-                                <div id="chat-messages-box" class="flex-1 p-3.5 space-y-3 overflow-y-auto text-xs">
-                                    <div class="text-center text-slate-500 py-12">
-                                        Select a lead or customer from the left list to view their last 10 recent messages.
-                                    </div>
-                                </div>
-
-                                <!-- Send Reply Input -->
-                                <div class="p-2.5 bg-slate-900 border-t border-slate-800 flex items-center gap-2">
-                                    <input type="text" id="chat-reply-text" placeholder="Type WhatsApp reply..." class="flex-1 px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500" onkeydown="if(event.key==='Enter') sendDirectChatReply()">
-                                    <button type="button" onclick="sendDirectChatReply()" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1">
-                                        <i class="fa-solid fa-paper-plane"></i>
-                                    </button>
-                                </div>
+                            <!-- Send Reply Input -->
+                            <div class="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-2">
+                                <input type="text" id="chat-reply-text" placeholder="Type WhatsApp reply..." class="flex-1 px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600" onkeydown="if(event.key==='Enter') sendDirectChatReply()">
+                                <button type="button" onclick="sendDirectChatReply()" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow-md">
+                                    <i class="fa-solid fa-paper-plane"></i>
+                                    <span class="hidden sm:inline">Send</span>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -451,6 +462,22 @@
                                 </span>
                             </div>
 
+                            <!-- Product Creation Option Switcher: Manual vs WhatsApp Business Catalog Link -->
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Creation Mode</label>
+                                <div class="grid grid-cols-2 gap-2.5">
+                                    <button type="button" id="mode-manual-btn" onclick="setCatalogCreationMode('manual')" class="p-2.5 rounded-xl border border-amber-500 bg-amber-500/10 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm">
+                                        <i class="fa-solid fa-pen-to-square text-amber-400"></i>
+                                        <span>Manual Product Details</span>
+                                    </button>
+                                    <button type="button" id="mode-wa-btn" onclick="setCatalogCreationMode('wa_link')" class="p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
+                                        <i class="fa-brands fa-whatsapp text-emerald-400"></i>
+                                        <span>WhatsApp Catalog Link</span>
+                                    </button>
+                                </div>
+                                <input type="hidden" id="creation-mode-input" value="manual">
+                            </div>
+
                             <!-- Item Classification: Product vs Service Selection -->
                             <div>
                                 <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Select Item Classification</label>
@@ -467,12 +494,26 @@
                                 <input type="hidden" id="item-type-input" value="product">
                             </div>
 
-                            <!-- Product Name & UNIT Selection -->
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div>
-                                    <label id="lbl-item-name" class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Product Name</label>
-                                    <input type="text" id="product-name" placeholder="e.g. Fresh Amul Milk" required class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600">
-                                </div>
+                            <!-- Product Name (STRICTLY COMPULSORY FOR ALL OPTIONS) -->
+                            <div>
+                                <label id="lbl-item-name" class="block text-[10px] font-bold text-amber-400 uppercase mb-1">
+                                    Product Name <span class="text-rose-400 font-extrabold">(Compulsory *)</span>
+                                </label>
+                                <input type="text" id="product-name" placeholder="Enter Product / Service Name (Compulsory)" required class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600 font-semibold">
+                            </div>
+
+                            <!-- WhatsApp Catalog Link Option Box -->
+                            <div id="wa-catalog-link-box" class="hidden p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-2">
+                                <label class="block text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <i class="fa-brands fa-whatsapp text-emerald-400"></i> WhatsApp Business Catalog Link
+                                </label>
+                                <input type="url" id="product-catalog-link" placeholder="e.g. https://wa.me/p/29314254551504915/917007849080" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-emerald-300 outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600">
+                                <p class="text-[10px] text-slate-400">Paste your official WhatsApp business catalog product URL here.</p>
+                            </div>
+
+                            <!-- Manual Options Container (Unit & Variants) -->
+                            <div id="manual-catalog-details-box" class="space-y-4">
+                                <!-- UNIT Selection -->
                                 <div>
                                     <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">UNIT</label>
                                     <select id="product-unit" onchange="handleUnitChange()" class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 font-medium">
@@ -483,57 +524,28 @@
                                         <option value="custom">Custom Variety / Custom Unit</option>
                                     </select>
                                 </div>
-                            </div>
 
-                            <!-- Dynamic Variants / Variety & Pricing (in ₹) -->
-                            <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
-                                <div class="flex items-center justify-between">
-                                    <label class="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                                        <i class="fa-solid fa-tags"></i> Variants / Variety & Pricing (in ₹)
-                                    </label>
-                                    <button type="button" onclick="addVariantRow('', '')" class="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer">
-                                        <i class="fa-solid fa-plus text-xs"></i> Add Variety / Variant
-                                    </button>
-                                </div>
+                                <!-- Dynamic Variants / Variety & Pricing (in ₹) -->
+                                <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                                    <div class="flex items-center justify-between">
+                                        <label class="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                            <i class="fa-solid fa-tags"></i> Variants / Variety & Pricing (in ₹)
+                                        </label>
+                                        <button type="button" onclick="addVariantRow('', '')" class="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer">
+                                            <i class="fa-solid fa-plus text-xs"></i> Add Variety / Variant
+                                        </button>
+                                    </div>
 
-                                <div id="variant-rows-container" class="space-y-2">
-                                    <!-- Dynamic Variant Rows render here -->
+                                    <div id="variant-rows-container" class="space-y-2">
+                                        <!-- Dynamic Variant Rows render here -->
+                                    </div>
                                 </div>
                             </div>
 
                             <!-- Description -->
                             <div>
-                                <label id="lbl-item-desc" class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
-                                <textarea id="product-desc" rows="2" placeholder="Enter product description, specifications, or notes..." required class="w-full p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"></textarea>
-                            </div>
-
-                            <!-- Product Image Upload to Neon DB (BYTEA Binary) with Auto-Tag Preview -->
-                            <div class="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
-                                <div class="flex items-center justify-between">
-                                    <label class="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload Image to Neon DB (Binary)
-                                    </label>
-                                    <span class="text-[10px] font-mono text-emerald-400 font-semibold" id="product-tag-preview-hint">Auto Tag: &lt;IMG_N&gt;</span>
-                                </div>
-                                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                                    <label class="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold border border-slate-700 hover:border-amber-500/50 cursor-pointer flex items-center justify-center gap-2 transition shrink-0 shadow-sm">
-                                        <i class="fa-solid fa-file-image text-amber-400"></i>
-                                        <span id="product-file-label-text">Select Image File</span>
-                                        <input type="file" id="product-img-file" class="hidden" accept="image/*" onchange="handleProductImgSelect(event)">
-                                    </label>
-                                    <div id="product-img-preview-card" class="hidden flex items-center gap-3 bg-slate-900 p-2 rounded-xl border border-amber-500/30 overflow-hidden">
-                                        <img id="product-img-thumb" src="" alt="Thumbnail" class="w-9 h-9 rounded-lg object-cover border border-slate-700 shrink-0">
-                                        <div class="truncate">
-                                            <p id="product-img-name" class="text-xs font-bold text-white truncate max-w-[150px]">image.jpg</p>
-                                            <p id="product-img-size" class="text-[9px] font-mono text-emerald-400">0 KB · Neon Binary</p>
-                                        </div>
-                                        <button type="button" onclick="clearProductImgUpload()" class="p-1 rounded text-rose-400 hover:text-rose-300 transition cursor-pointer ml-1" title="Remove image">
-                                            <i class="fa-solid fa-xmark text-sm"></i>
-                                        </button>
-                                    </div>
-                                    <span class="text-[10px] text-slate-500">Binary BYTEA storage in PostgreSQL. The AI Auto-Responder replaces tags like &lt;IMG_1&gt; with this image.</span>
-                                </div>
-                                <input type="hidden" id="product-img-data">
+                                <label id="lbl-item-desc" class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description / Catalog Notes</label>
+                                <textarea id="product-desc" rows="2" placeholder="Enter product description, specifications, or notes..." class="w-full p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 placeholder-slate-600"></textarea>
                             </div>
 
                             <div class="flex items-center justify-between gap-3 pt-2">
@@ -606,17 +618,48 @@
                                 </div>
                             </div>
 
-                            <!-- Multiple API Key Input (Round-Robin Rotation) -->
-                            <div class="sm:col-span-2">
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">AI API Keys (Round-Robin Multi-Key Rotation)</label>
-                                    <span class="text-[10px] text-emerald-400 font-mono font-bold"><i class="fa-solid fa-arrows-rotate mr-1 animate-spin"></i>Auto Key Rotation Active</span>
+                            <!-- Individual API Key Entry & Saved Keys List -->
+                            <div class="sm:col-span-2 space-y-3 p-4 rounded-2xl bg-slate-950/80 border border-slate-800">
+                                <div class="flex items-center justify-between">
+                                    <label class="block text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                                        <i class="fa-solid fa-key text-purple-400"></i> AI API Keys Management (Add One-by-One)
+                                    </label>
+                                    <span class="text-[10px] text-emerald-400 font-mono font-bold"><i class="fa-solid fa-arrows-rotate mr-1 animate-spin"></i>Auto Rotation Active</span>
                                 </div>
-                                <textarea id="ai-api-key" rows="2" placeholder="Enter single or multiple API keys separated by comma or newline (e.g. key_1, key_2, key_3)" class="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600 leading-relaxed"></textarea>
-                                <p class="text-[10px] text-slate-400 mt-1">
-                                    <span class="text-purple-400 font-bold">Round-Robin Request Rotation:</span> Add multiple API keys (separated by comma `,` or newline). Every incoming WhatsApp request will cycle to the next key sequentially (Key 1 → Key 2 → Key 3 → Key 1) to avoid rate limits!
+
+                                <!-- Add API Key Input & Button -->
+                                <div class="flex flex-col sm:flex-row gap-2">
+                                    <input type="password" id="new-api-key-input" placeholder="Enter new API Key (e.g. AIzaSy... or gsk_...)" class="flex-1 px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600">
+                                    <button type="button" onclick="addIndividualAPIKey()" class="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0 shadow-md">
+                                        <i class="fa-solid fa-plus text-xs"></i>
+                                        <span>Add API Key</span>
+                                    </button>
+                                </div>
+
+                                <!-- Saved API Keys List Container -->
+                                <div id="api-keys-list-container" class="space-y-2 pt-1">
+                                    <!-- Dynamic API Key Cards render here -->
+                                </div>
+
+                                <textarea id="ai-api-key" class="hidden"></textarea>
+                                <p class="text-[10px] text-slate-400">
+                                    <span class="text-purple-400 font-bold">Round-Robin Multi-Key Rotation:</span> You can add multiple API keys one by one. Incoming requests automatically rotate through keys sequentially to prevent rate limits!
                                 </p>
                             </div>
+                        </div>
+
+                        <!-- Import Product Catalog Details Checkbox (NEW) -->
+                        <div class="p-4 rounded-2xl bg-purple-950/30 border border-purple-500/30 space-y-2">
+                            <div class="flex items-center gap-3">
+                                <input type="checkbox" id="ai-import-catalog-check" checked class="w-5 h-5 rounded accent-purple-500 cursor-pointer">
+                                <label for="ai-import-catalog-check" class="text-xs font-bold text-white cursor-pointer flex items-center gap-2">
+                                    <i class="fa-solid fa-boxes-stacked text-amber-400"></i>
+                                    <span>Import Product Catalog Details into AI Replies</span>
+                                </label>
+                            </div>
+                            <p class="text-[11px] text-slate-300 pl-8">
+                                When enabled, the AI Auto-Responder automatically fetches your live product & service catalog items, pricing, and descriptions from the database and feeds them into the AI prompt context.
+                            </p>
                         </div>
 
                         <!-- System Prompt Textarea -->
@@ -783,10 +826,23 @@
                                 <div id="prof-email" class="text-xs font-bold text-white break-all">—</div>
                             </div>
                             <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
-                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">WhatsApp Phone</div>
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">WhatsApp Device Phone</div>
                                 <div id="prof-phone" class="text-xs font-bold font-mono text-emerald-400 flex items-center gap-1.5">
                                     <i class="fa-brands fa-whatsapp"></i>
                                     <span id="prof-phone-text">Not Linked</span>
+                                </div>
+                            </div>
+                            <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-2">
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                                    <span>Lead Alert Notification Phone (WhatsApp)</span>
+                                    <span class="text-[9px] font-mono text-emerald-400 font-bold"><i class="fa-solid fa-arrows-rotate mr-1"></i>Synced with DB</span>
+                                </div>
+                                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                    <input type="text" id="prof-notif-phone-input" placeholder="e.g. 919876543202" class="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-emerald-300 outline-none focus:ring-2 focus:ring-emerald-500">
+                                    <button type="button" onclick="saveProfileNotificationPhone()" id="btn-save-prof-notif" class="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1 shrink-0 shadow">
+                                        <i class="fa-solid fa-floppy-disk"></i>
+                                        <span>Save</span>
+                                    </button>
                                 </div>
                             </div>
                             <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
@@ -796,8 +852,13 @@
                                 </div>
                             </div>
                             <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
-                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">AI Automation Provider</div>
-                                <div id="prof-ai-provider" class="text-xs font-bold text-purple-400 uppercase font-mono">Gemini (Active)</div>
+                                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">AI Automation Platform & Model Name</div>
+                                <div class="flex items-center justify-between gap-2">
+                                    <div id="prof-ai-provider" class="text-xs font-bold text-purple-400 font-mono truncate">—</div>
+                                    <button type="button" onclick="switchTab('ai')" class="px-2 py-0.5 rounded text-[10px] bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 transition shrink-0 cursor-pointer">
+                                        <i class="fa-solid fa-robot"></i> Configure
+                                    </button>
+                                </div>
                             </div>
                             <div class="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-1">
                                 <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Member Since</div>
@@ -1172,6 +1233,10 @@
                     if (pairingSection) pairingSection.classList.add('hidden');
                     if (sessionActions) sessionActions.classList.add('hidden');
 
+                    const chatsCard = document.getElementById('biz-customer-chats-container');
+                    if (chatsCard) chatsCard.classList.remove('hidden');
+                    loadCustomerConversationsList();
+
                     box.innerHTML = `
                         <div class="text-center p-6 space-y-3">
                             <div class="w-16 h-16 mx-auto rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center justify-center text-3xl shadow-lg">
@@ -1190,9 +1255,12 @@
                     `;
                     if (deskPill) deskPill.innerText = 'Connected';
                 } else {
-                    // Account is Disconnected: Show Pairing Section & Session Actions
+                    // Account is Disconnected: Show Pairing Section & Session Actions, Hide Chats
                     if (pairingSection) pairingSection.classList.remove('hidden');
                     if (sessionActions) sessionActions.classList.remove('hidden');
+                    const chatsCard = document.getElementById('biz-customer-chats-container');
+                    if (chatsCard) chatsCard.classList.add('hidden');
+                    backToContactList();
 
                     if (data.qr) {
                         box.innerHTML = '';
@@ -1242,6 +1310,8 @@
                 console.warn('WhatsApp service notice:', err);
                 if (pairingSection) pairingSection.classList.remove('hidden');
                 if (sessionActions) sessionActions.classList.remove('hidden');
+                const chatsCard = document.getElementById('biz-customer-chats-container');
+                if (chatsCard) chatsCard.classList.add('hidden');
                 box.innerHTML = `
                     <div class="text-center p-4">
                         <div class="w-10 h-10 mx-auto mb-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center text-lg">
@@ -1317,6 +1387,9 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username })
                 });
+                const chatsCard = document.getElementById('biz-customer-chats-container');
+                if (chatsCard) chatsCard.classList.add('hidden');
+                backToContactList();
                 fetchWhatsAppQR();
             } catch (err) {
                 alert('Failed to unlink');
@@ -1326,6 +1399,18 @@
         // --- 5B. LIVE CUSTOMER CHATS & DB LAST 10 CHATS MANAGER ---
         let currentActiveChatPhone = '';
 
+        function formatPhoneNumberDisplay(phone) {
+            const clean = String(phone).replace(/\D/g, '');
+            if (!clean) return 'Unknown Contact';
+            if (clean.length === 12 && clean.startsWith('91')) {
+                return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
+            }
+            if (clean.length === 10) {
+                return `+${clean.slice(0, 5)} ${clean.slice(5)}`;
+            }
+            return `+${clean}`;
+        }
+
         async function loadCustomerConversationsList() {
             const listEl = document.getElementById('chat-contact-list');
             if (!listEl) return;
@@ -1333,62 +1418,111 @@
             try {
                 const res = await fetch(`/api/chats?username=${encodeURIComponent(username)}`);
                 const data = await res.json();
-                const conversations = data.conversations || [];
+                let conversations = data.conversations || [];
+
+                // Strict filtering for valid customer phone numbers (exclude newsletter/channels like 120363...)
+                conversations = conversations.filter(c => {
+                    const phoneStr = String(c.customer_phone || '').replace(/\D/g, '');
+                    return phoneStr.length >= 8 && phoneStr.length <= 15 && !phoneStr.startsWith('120363');
+                });
+
+                const counterEl = document.getElementById('chat-contacts-counter');
+                if (counterEl) counterEl.innerText = conversations.length;
 
                 if (conversations.length === 0) {
-                    listEl.innerHTML = `<div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 text-slate-500 text-xs text-center">No active chats in DB.<br>When customers message your WhatsApp, chats show here!</div>`;
+                    listEl.innerHTML = `
+                        <div class="p-6 rounded-2xl bg-slate-950 border border-slate-800/80 text-slate-500 text-xs text-center leading-relaxed">
+                            <i class="fa-solid fa-inbox text-3xl text-slate-700 mb-2.5 block"></i>
+                            <p class="font-bold text-slate-400">No Inbound Chats Yet</p>
+                            <p class="text-[11px] text-slate-600 mt-1">When customers message your linked WhatsApp, they will appear in this contact list in real time!</p>
+                        </div>
+                    `;
                     return;
                 }
 
                 listEl.innerHTML = conversations.map(c => {
-                    const isSelected = currentActiveChatPhone === c.customer_phone;
+                    const formattedPhone = formatPhoneNumberDisplay(c.customer_phone);
+                    const lastMsg = c.last_message || 'Inbound customer message';
+                    
                     return `
-                        <button type="button" onclick="selectCustomerChat('${c.customer_phone}')" class="w-full p-2.5 rounded-xl text-left transition cursor-pointer flex items-center justify-between border ${isSelected ? 'bg-emerald-500/10 border-emerald-500/50 text-white' : 'bg-slate-950 hover:bg-slate-900 border-slate-800 text-slate-300'}">
-                            <div class="truncate pr-2">
-                                <div class="font-mono font-bold text-xs flex items-center gap-1.5 text-emerald-400">
-                                    <i class="fa-brands fa-whatsapp text-xs"></i> +${c.customer_phone}
+                        <button type="button" onclick="openCustomerChat('${c.customer_phone}')" class="w-full p-3.5 rounded-2xl text-left transition cursor-pointer flex items-center justify-between border bg-slate-950 hover:bg-slate-900 border-slate-800/80 hover:border-emerald-500/40 text-slate-300 group shadow-sm">
+                            <div class="flex items-center gap-3.5 min-w-0 pr-2">
+                                <div class="w-10 h-10 rounded-2xl bg-slate-900 group-hover:bg-emerald-500/10 text-emerald-400 border border-slate-800 group-hover:border-emerald-500/30 flex items-center justify-center text-sm font-mono shrink-0 transition">
+                                    <i class="fa-solid fa-user"></i>
                                 </div>
-                                <div class="text-[10px] text-slate-400 truncate mt-0.5">${c.last_message || 'Inbound message'}</div>
+                                <div class="truncate">
+                                    <div class="font-mono font-bold text-xs flex items-center gap-2 text-white group-hover:text-emerald-300 transition">
+                                        <span>${formattedPhone}</span>
+                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                    </div>
+                                    <div class="text-[11px] text-slate-400 truncate mt-0.5 font-sans">${lastMsg}</div>
+                                </div>
                             </div>
-                            <span class="text-[9px] font-mono text-slate-500 shrink-0">${c.total_count} msgs</span>
+                            <div class="flex flex-col items-end gap-1.5 shrink-0">
+                                <span class="px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">${c.total_count || 1} msgs</span>
+                                <span class="text-[10px] text-slate-500 font-mono group-hover:text-emerald-400 transition flex items-center gap-1">Open <i class="fa-solid fa-chevron-right text-[9px]"></i></span>
+                            </div>
                         </button>
                     `;
                 }).join('');
 
-                if (!currentActiveChatPhone && conversations.length > 0) {
-                    selectCustomerChat(conversations[0].customer_phone);
+                // If user is currently inside a chat view, refresh that active chat history
+                if (currentActiveChatPhone) {
+                    loadCustomerChatHistory(currentActiveChatPhone);
                 }
             } catch (err) {
                 console.warn('Failed to fetch customer conversations:', err);
             }
         }
 
-        async function selectCustomerChat(phone) {
-            currentActiveChatPhone = phone;
+        function openCustomerChat(phone) {
+            const cleanPhone = String(phone).replace(/\D/g, '');
+            currentActiveChatPhone = cleanPhone;
+
+            const contactsView = document.getElementById('chat-contacts-view');
+            const convoView = document.getElementById('chat-conversation-view');
+            if (contactsView) contactsView.classList.add('hidden');
+            if (convoView) convoView.classList.remove('hidden');
+
             const titleEl = document.getElementById('chat-active-phone');
-            if (titleEl) titleEl.innerText = `+${phone}`;
+            if (titleEl) {
+                titleEl.innerHTML = formatPhoneNumberDisplay(cleanPhone);
+            }
+            loadCustomerChatHistory(cleanPhone);
+        }
+
+        function backToContactList() {
+            currentActiveChatPhone = '';
+            const contactsView = document.getElementById('chat-contacts-view');
+            const convoView = document.getElementById('chat-conversation-view');
+            if (convoView) convoView.classList.add('hidden');
+            if (contactsView) contactsView.classList.remove('hidden');
             loadCustomerConversationsList();
-            loadCustomerChatHistory(phone);
+        }
+
+        function selectCustomerChat(phone) {
+            openCustomerChat(phone);
         }
 
         async function loadCustomerChatHistory(phone) {
             const box = document.getElementById('chat-messages-box');
             if (!box) return;
-            if (!phone) {
+            const cleanPhone = String(phone).replace(/\D/g, '');
+            if (!cleanPhone) {
                 box.innerHTML = `<div class="text-center text-slate-500 py-12">Select a lead or customer from the left list to view their last 10 recent messages.</div>`;
                 return;
             }
 
             const username = getActiveUsername();
-            box.innerHTML = `<div class="text-center text-emerald-400 py-12"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading last 10 DB chats...</div>`;
+            box.innerHTML = `<div class="text-center text-emerald-400 py-12"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading DB chat context...</div>`;
 
             try {
-                const res = await fetch(`/api/chats/messages?username=${encodeURIComponent(username)}&phone=${encodeURIComponent(phone)}`);
+                const res = await fetch(`/api/chats/messages?username=${encodeURIComponent(username)}&phone=${encodeURIComponent(cleanPhone)}`);
                 const data = await res.json();
                 const messages = data.messages || [];
 
                 if (messages.length === 0) {
-                    box.innerHTML = `<div class="text-center text-slate-500 py-12">No chat history recorded yet for +${phone}.</div>`;
+                    box.innerHTML = `<div class="text-center text-slate-500 py-12">No chat history recorded yet for ${formatPhoneNumberDisplay(cleanPhone)}.</div>`;
                     return;
                 }
 
@@ -1396,11 +1530,16 @@
                     const isUser = m.role === 'customer' || m.role === 'user';
                     const rawMsg = m.text || m.message_text || '';
                     const parsedHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(rawMsg) : rawMsg.replace(/\n/g, '<br>');
+                    const timeStr = m.time || 'Recent';
+
                     return `
-                        <div class="flex flex-col ${isUser ? 'items-start' : 'items-end'}">
-                            <div class="max-w-[85%] p-3.5 rounded-2xl text-xs ${isUser ? 'bg-slate-900 text-slate-200 border border-slate-800 rounded-tl-none' : 'bg-emerald-600 text-white rounded-tr-none shadow-md'}">
+                        <div class="flex flex-col ${isUser ? 'items-start' : 'items-end'} mb-2">
+                            <div class="max-w-[85%] sm:max-w-[75%] p-3.5 rounded-2xl text-xs ${isUser ? 'bg-slate-900 text-slate-100 border border-slate-800 rounded-tl-none shadow-sm' : 'bg-emerald-700/90 text-white rounded-tr-none shadow-md border border-emerald-600/40'}">
                                 <div class="prose prose-invert max-w-none text-xs leading-relaxed font-sans break-words">${parsedHtml}</div>
-                                <div class="text-[9px] font-mono mt-1 ${isUser ? 'text-slate-500' : 'text-emerald-200'} text-right">${m.time || 'Recent'}</div>
+                                <div class="text-[9px] font-mono mt-1.5 ${isUser ? 'text-slate-400' : 'text-emerald-200'} flex items-center justify-end gap-1">
+                                    <span>${timeStr}</span>
+                                    ${!isUser ? '<i class="fa-solid fa-check-double text-[10px] text-emerald-300"></i>' : ''}
+                                </div>
                             </div>
                         </div>
                     `;
@@ -1424,7 +1563,7 @@
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.2s]"></span>
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.4s]"></span>
                 </div>
-                <span class="text-[10px] font-mono text-slate-400">Groq AI is thinking & formatting variants...</span>
+                <span class="text-[10px] font-mono text-slate-400">AI Responder is processing message...</span>
             `;
             box.appendChild(typingDiv);
             box.scrollTop = box.scrollHeight;
@@ -1462,7 +1601,7 @@
                 setTimeout(() => {
                     hideChatTypingIndicator();
                     loadCustomerChatHistory(currentActiveChatPhone);
-                }, 1000);
+                }, 800);
             } catch (err) {
                 hideChatTypingIndicator();
                 alert('Failed to dispatch message');
@@ -1475,20 +1614,29 @@
             selectCustomerChat(clean);
         }
 
-        // 6. LAUNCH BULK CAMPAIGN (WITH EPHEMERAL IMAGE THAT AUTO-DELETES ON SEND)
+        // 6. LAUNCH BULK CAMPAIGN (WITH EPHEMERAL IMAGE THAT AUTO-DELETES ON SEND & MULTI-SEPARATOR PHONE PARSING)
         async function launchBulkCampaign() {
-            const phones = document.getElementById('bulk-phones').value.trim();
+            const rawPhones = document.getElementById('bulk-phones').value.trim();
             const message = document.getElementById('bulk-message').value.trim();
             const antiBan = document.getElementById('bulk-antiban-check').checked;
             const dataUrl = document.getElementById('bulk-ephemeral-data-url')?.value || '';
 
-            if (!phones || (!message && !dataUrl)) {
-                alert('Please enter target phone numbers and a message or image');
+            if (!rawPhones || (!message && !dataUrl)) {
+                alert('Please enter target phone numbers and a message or image.');
                 return;
             }
-            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
-            const username = getActiveUsername();
 
+            // Split on newlines, commas, or semicolons, clean non-digit chars
+            const phoneList = rawPhones.split(/[\r\n,;]+/)
+                .map(p => p.trim().replace(/\D/g, ''))
+                .filter(p => p.length >= 8 && p.length <= 15 && !p.startsWith('120363'));
+
+            if (phoneList.length === 0) {
+                alert('No valid target phone numbers found. Please check phone numbers (e.g. 919876543202).');
+                return;
+            }
+
+            const username = getActiveUsername();
             let tempUrl = '';
             let tempPath = '';
 
@@ -1519,7 +1667,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        phones,
+                        phones: phoneList,
                         message,
                         image_url: tempUrl,
                         temp_file_path: tempPath,
@@ -1529,13 +1677,13 @@
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    // IMMEDIATELY clear the attached image from UI ("turant hat jayega")
+                    // IMMEDIATELY clear the attached image from UI
                     clearBulkImageAttachment();
 
-                    alert(`Broadcast launched! ${data.message || ''}`);
+                    alert(`Broadcast launched for ${phoneList.length} numbers! ${data.message || ''}`);
                     fetchCampaignLogs();
                 } else {
-                    alert(data.message || 'Campaign launch failed');
+                    alert(data.message || data.error || 'Campaign launch failed');
                 }
             } catch (err) {
                 alert('Server error launching campaign');
@@ -1639,6 +1787,36 @@
             ]
         };
 
+        function setCatalogCreationMode(mode) {
+            const manualBtn = document.getElementById('mode-manual-btn');
+            const waBtn = document.getElementById('mode-wa-btn');
+            const modeInput = document.getElementById('creation-mode-input');
+            const manualBox = document.getElementById('manual-catalog-details-box');
+            const waBox = document.getElementById('wa-catalog-link-box');
+
+            if (modeInput) modeInput.value = mode;
+
+            if (mode === 'wa_link') {
+                if (waBtn) {
+                    waBtn.className = "p-2.5 rounded-xl border border-emerald-500 bg-emerald-500/10 text-emerald-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm";
+                }
+                if (manualBtn) {
+                    manualBtn.className = "p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer";
+                }
+                if (waBox) waBox.classList.remove('hidden');
+                if (manualBox) manualBox.classList.add('hidden');
+            } else {
+                if (manualBtn) {
+                    manualBtn.className = "p-2.5 rounded-xl border border-amber-500 bg-amber-500/10 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-sm";
+                }
+                if (waBtn) {
+                    waBtn.className = "p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-slate-400 hover:text-white text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer";
+                }
+                if (manualBox) manualBox.classList.remove('hidden');
+                if (waBox) waBox.classList.add('hidden');
+            }
+        }
+
         function handleUnitChange() {
             const unitType = document.getElementById('product-unit')?.value || 'weight';
             const presets = UNIT_PRESETS[unitType] || UNIT_PRESETS.custom;
@@ -1668,73 +1846,47 @@
             container.appendChild(div);
         }
 
-        // 8B. PRODUCT IMAGE UPLOAD HANDLERS (BYTEA BINARY IN NEON DB)
-        function handleProductImgSelect(event) {
-            const file = event.target.files && event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const dataUrl = e.target.result;
-                const hiddenInput = document.getElementById('product-img-data');
-                const previewCard = document.getElementById('product-img-preview-card');
-                const thumb = document.getElementById('product-img-thumb');
-                const nameEl = document.getElementById('product-img-name');
-                const sizeEl = document.getElementById('product-img-size');
-                const labelText = document.getElementById('product-file-label-text');
-
-                if (hiddenInput) hiddenInput.value = dataUrl;
-                if (thumb) thumb.src = dataUrl;
-                if (nameEl) nameEl.innerText = file.name;
-                if (sizeEl) sizeEl.innerText = `${(file.size / 1024).toFixed(1)} KB · Neon BYTEA`;
-                if (previewCard) previewCard.classList.remove('hidden');
-                if (labelText) labelText.innerText = 'Change Image';
-            };
-            reader.readAsDataURL(file);
-        }
-
-        function clearProductImgUpload() {
-            const fileInput = document.getElementById('product-img-file');
-            const hiddenInput = document.getElementById('product-img-data');
-            const previewCard = document.getElementById('product-img-preview-card');
-            const thumb = document.getElementById('product-img-thumb');
-            const labelText = document.getElementById('product-file-label-text');
-
-            if (fileInput) fileInput.value = '';
-            if (hiddenInput) hiddenInput.value = '';
-            if (thumb) thumb.src = '';
-            if (previewCard) previewCard.classList.add('hidden');
-            if (labelText) labelText.innerText = 'Select Image File';
-        }
-
         async function addProduct() {
             const name = document.getElementById('product-name').value.trim();
+            const creationMode = document.getElementById('creation-mode-input')?.value || 'manual';
             const unitType = document.getElementById('product-unit')?.value || 'weight';
             const details = document.getElementById('product-desc').value.trim();
             const itemType = document.getElementById('item-type-input')?.value || 'product';
-            const imageData = document.getElementById('product-img-data')?.value || '';
-
-            const nameInputs = document.querySelectorAll('.variant-name-input');
-            const priceInputs = document.querySelectorAll('.variant-price-input');
-            const variants = [];
-
-            nameInputs.forEach((input, i) => {
-                const vName = input.value.trim();
-                let vPrice = priceInputs[i]?.value.trim() || '0';
-                if (vName) {
-                    if (!vPrice.startsWith('₹')) vPrice = '₹' + vPrice.replace(/^₹/, '');
-                    variants.push({ variant: vName, price: vPrice });
-                }
-            });
+            const catalogLink = document.getElementById('product-catalog-link')?.value.trim() || '';
 
             if (!name) {
-                alert('Please enter Product Name');
+                alert('Product Name is compulsory!');
+                document.getElementById('product-name')?.focus();
                 return;
             }
 
-            if (variants.length === 0) {
-                alert('Please enter at least one Variant and Price in ₹');
-                return;
+            let summaryPrice = '';
+            let variants = [];
+
+            if (creationMode === 'wa_link') {
+                if (!catalogLink) {
+                    alert('Please enter a valid WhatsApp Business Catalog Link!');
+                    return;
+                }
+                summaryPrice = 'WhatsApp Catalog Item';
+            } else {
+                const nameInputs = document.querySelectorAll('.variant-name-input');
+                const priceInputs = document.querySelectorAll('.variant-price-input');
+
+                nameInputs.forEach((input, i) => {
+                    const vName = input.value.trim();
+                    let vPrice = priceInputs[i]?.value.trim() || '0';
+                    if (vName) {
+                        if (!vPrice.startsWith('₹')) vPrice = '₹' + vPrice.replace(/^₹/, '');
+                        variants.push({ variant: vName, price: vPrice });
+                    }
+                });
+
+                if (variants.length === 0) {
+                    summaryPrice = 'Standard Pricing';
+                } else {
+                    summaryPrice = variants.map(v => `${v.variant}: ${v.price}`).join(' | ');
+                }
             }
 
             const username = getActiveUsername();
@@ -1742,7 +1894,6 @@
             if (btn) btn.disabled = true;
 
             try {
-                const summaryPrice = variants.map(v => `${v.variant}: ${v.price}`).join(' | ');
                 const res = await fetch('/api/products', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1753,7 +1904,7 @@
                         variants,
                         details,
                         item_type: itemType,
-                        image_data: imageData,
+                        whatsapp_catalog_link: catalogLink,
                         username
                     })
                 });
@@ -1761,7 +1912,9 @@
                 if (data.status === 'success') {
                     document.getElementById('product-name').value = '';
                     document.getElementById('product-desc').value = '';
-                    clearProductImgUpload();
+                    if (document.getElementById('product-catalog-link')) {
+                        document.getElementById('product-catalog-link').value = '';
+                    }
                     handleUnitChange();
                     loadProductCatalog();
                 } else {
@@ -1791,7 +1944,7 @@
             }
         }
 
-        // 10. LOAD PRODUCT CATALOG (WITH AUTO-TAGS <IMG_N> & IMAGES)
+        // 10. LOAD PRODUCT CATALOG
         async function loadProductCatalog() {
             const grid = document.getElementById('catalog-grid');
             if (!grid) return;
@@ -1807,10 +1960,6 @@
                 // Store in window cache for instant fast recall
                 window._loadedProducts = products;
 
-                // Update auto-tag counter hint
-                const tagHint = document.getElementById('product-tag-preview-hint');
-                if (tagHint) tagHint.innerText = `Next Auto Tag: <IMG_${products.length + 1}>`;
-
                 if (products.length === 0) {
                     grid.innerHTML = `
                         <div class="col-span-full py-12 text-center text-slate-500 border border-dashed border-slate-800 rounded-2xl">
@@ -1822,7 +1971,7 @@
                     return;
                 }
 
-                grid.innerHTML = products.map((item, idx) => {
+                grid.innerHTML = products.map((item) => {
                     const isService = item.item_type === 'service';
                     const badgeClass = isService 
                         ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' 
@@ -1830,9 +1979,8 @@
                     const badgeIcon = isService ? 'fa-bolt' : 'fa-box';
                     const badgeLabel = isService ? 'Service' : 'Product';
                     const unitLabel = (item.unit_type || 'custom').toUpperCase();
-                    const tag = item.ai_tag || ('<IMG_' + (idx + 1) + '>');
                     const vars = Array.isArray(item.variants) && item.variants.length > 0 ? item.variants : [];
-                    const img = item.image_url || item.image_data || '';
+                    const waCatalogLink = item.whatsapp_catalog_link || '';
 
                     const variantBadges = vars.map(v => `
                         <div class="flex items-center justify-between text-[11px] font-mono py-1 border-b border-slate-800/60 last:border-0">
@@ -1841,6 +1989,17 @@
                         </div>
                     `).join('');
 
+                    const linkButtonHtml = waCatalogLink ? `
+                        <div class="mt-2 p-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center justify-between">
+                            <span class="text-[10px] font-mono text-emerald-400 font-bold flex items-center gap-1">
+                                <i class="fa-brands fa-whatsapp"></i> WA Catalog Item
+                            </span>
+                            <a href="${waCatalogLink}" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-lg text-[10px] transition flex items-center gap-1 shadow-sm">
+                                <span>Open Link</span> <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
+                            </a>
+                        </div>
+                    ` : '';
+
                     return `
                         <div class="glass-card rounded-2xl border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition space-y-3">
                             <div class="space-y-2.5">
@@ -1848,19 +2007,7 @@
                                     <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold border flex items-center gap-1.5 ${badgeClass}">
                                         <i class="fa-solid ${badgeIcon}"></i> ${badgeLabel}
                                     </span>
-                                    <span class="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30" title="Use this tag in your AI System Prompt">
-                                        ${tag}
-                                    </span>
                                 </div>
-
-                                ${img ? `
-                                    <div class="relative w-full h-32 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
-                                        <img src="${img}" alt="${item.name}" class="w-full h-full object-cover">
-                                        <span class="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-950/80 backdrop-blur text-[9px] font-mono font-bold text-amber-300 border border-slate-700">
-                                            BYTEA Binary
-                                        </span>
-                                    </div>
-                                ` : ''}
 
                                 <div>
                                     <div class="flex items-center justify-between">
@@ -1869,8 +2016,10 @@
                                             ${unitLabel}
                                         </span>
                                     </div>
-                                    <p class="text-[11px] text-slate-400 leading-relaxed mt-1 line-clamp-2">${item.details || 'No description provided.'}</p>
+                                    <p class="text-[11px] text-slate-400 leading-relaxed mt-1 line-clamp-2">${item.details || item.description || 'No description provided.'}</p>
                                 </div>
+
+                                ${linkButtonHtml}
 
                                 ${vars.length > 0 ? `
                                     <div class="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-0.5 mt-2">
@@ -1897,18 +2046,100 @@
             }
         }
 
+        // 11. INDIVIDUAL API KEYS LIST MANAGER
+        window._savedApiKeys = [];
+
+        function renderAPIKeysList() {
+            const container = document.getElementById('api-keys-list-container');
+            const hiddenTextarea = document.getElementById('ai-api-key');
+            if (!container) return;
+
+            if (!window._savedApiKeys || window._savedApiKeys.length === 0) {
+                container.innerHTML = `
+                    <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 text-xs text-center">
+                        No API Keys added yet. Enter a key above and click "Add API Key".
+                    </div>
+                `;
+                if (hiddenTextarea) hiddenTextarea.value = '';
+                return;
+            }
+
+            container.innerHTML = window._savedApiKeys.map((key, idx) => {
+                const mask = key.length > 10 ? key.slice(0, 6) + '...' + key.slice(-4) : key;
+                return `
+                    <div class="p-2.5 rounded-xl bg-slate-900 border border-slate-800/80 flex items-center justify-between gap-3 text-xs font-mono">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-300 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                ${idx + 1}
+                            </span>
+                            <span class="text-slate-200 truncate font-semibold">${mask}</span>
+                        </div>
+                        <button type="button" onclick="deleteIndividualAPIKey(${idx})" class="p-1 text-rose-400 hover:text-rose-300 cursor-pointer transition" title="Delete API Key">
+                            <i class="fa-solid fa-trash-can text-xs"></i>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+
+            if (hiddenTextarea) {
+                hiddenTextarea.value = window._savedApiKeys.join('\n');
+            }
+        }
+
+        function addIndividualAPIKey() {
+            const input = document.getElementById('new-api-key-input');
+            const val = input ? input.value.trim() : '';
+            if (!val) {
+                alert('Please enter an API Key first.');
+                return;
+            }
+            if (!window._savedApiKeys) window._savedApiKeys = [];
+            if (!window._savedApiKeys.includes(val)) {
+                window._savedApiKeys.push(val);
+            }
+            if (input) input.value = '';
+            renderAPIKeysList();
+        }
+
+        function deleteIndividualAPIKey(index) {
+            if (!window._savedApiKeys) return;
+            window._savedApiKeys.splice(index, 1);
+            renderAPIKeysList();
+        }
+
         // 12. SAVE AI SETTINGS & LEAD NOTIFICATION PHONE
         async function saveAISettings() {
-            const platform = document.getElementById('ai-platform').value;
-            const model = document.getElementById('ai-model').value.trim();
-            const temperature = parseFloat(document.getElementById('ai-temperature').value) || 0.7;
+            const platform = document.getElementById('ai-platform')?.value || 'Groq';
+            const modelInput = document.getElementById('ai-model');
+            const model = modelInput ? modelInput.value.trim() : '';
+            const temperature = parseFloat(document.getElementById('ai-temperature')?.value) || 0.7;
             const notifPhone = document.getElementById('ai-notif-phone')?.value.trim() || '';
-            const apiKey = document.getElementById('ai-api-key').value.trim();
-            const systemPrompt = document.getElementById('ai-system-prompt').value.trim();
-            const autoReply = document.getElementById('ai-autoreply-check').checked;
+            const systemPrompt = document.getElementById('ai-system-prompt')?.value.trim() || '';
+            const autoReply = document.getElementById('ai-autoreply-check')?.checked ?? true;
+            const importCatalog = document.getElementById('ai-import-catalog-check')?.checked ?? true;
 
-            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            // Automatically catch typed key from new input if user forgot to click Add
+            const newKeyInput = document.getElementById('new-api-key-input');
+            if (newKeyInput && newKeyInput.value.trim()) {
+                const typedKey = newKeyInput.value.trim();
+                if (!window._savedApiKeys) window._savedApiKeys = [];
+                if (!window._savedApiKeys.includes(typedKey)) {
+                    window._savedApiKeys.push(typedKey);
+                }
+                newKeyInput.value = '';
+                renderAPIKeysList();
+            }
+
+            const apiKey = (window._savedApiKeys && window._savedApiKeys.length > 0) ? window._savedApiKeys.join('\n') : (document.getElementById('ai-api-key')?.value.trim() || '');
             const username = getActiveUsername();
+
+            // Find save button for loading state feedback
+            const saveBtn = document.querySelector("button[onclick='saveAISettings()']");
+            const originalHtml = saveBtn ? saveBtn.innerHTML : '<span>Save AI Settings</span>';
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i><span>Saving...</span>';
+            }
 
             try {
                 const res = await fetch('/api/ai/settings', {
@@ -1916,23 +2147,34 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         platform,
+                        ai_provider: platform,
                         model,
+                        ai_model: model,
                         temperature,
+                        ai_temperature: temperature,
                         notification_phone: notifPhone,
                         api_key: apiKey,
                         system_prompt: systemPrompt,
                         auto_reply: autoReply,
+                        import_catalog_details: importCatalog,
                         username
                     })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('AI Settings & Lead Notification Phone saved successfully!');
+                    alert('✅ AI Settings & Lead Notification Phone saved successfully!');
+                    loadAISettings();
+                    loadUserProfile();
                 } else {
-                    alert(data.message || 'Failed to save AI settings');
+                    alert(data.message || data.error || 'Failed to save AI settings');
                 }
             } catch (err) {
                 alert('Server error saving AI settings');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = originalHtml;
+                }
             }
         }
 
@@ -1944,7 +2186,6 @@
                 return;
             }
 
-            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
             const username = getActiveUsername();
 
             try {
@@ -1962,26 +2203,41 @@
 
         // 13. LOAD AI SETTINGS & LEAD NOTIFICATION PHONE
         async function loadAISettings() {
-            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
             const username = getActiveUsername();
             try {
                 const res = await fetch(`/api/ai/settings?username=${encodeURIComponent(username)}`);
                 const data = await res.json();
-                if (data.platform && document.getElementById('ai-platform')) document.getElementById('ai-platform').value = data.platform;
-                if (data.model && document.getElementById('ai-model')) document.getElementById('ai-model').value = data.model;
-                if (data.temperature !== undefined && document.getElementById('ai-temperature')) {
-                    document.getElementById('ai-temperature').value = data.temperature;
-                    const disp = document.getElementById('temp-display-val');
-                    if (disp) disp.innerText = data.temperature;
+
+                const platformEl = document.getElementById('ai-platform');
+                const modelEl = document.getElementById('ai-model');
+                const tempEl = document.getElementById('ai-temperature');
+                const dispTemp = document.getElementById('temp-display-val');
+                const notifEl = document.getElementById('ai-notif-phone');
+                const promptEl = document.getElementById('ai-system-prompt');
+                const autoReplyEl = document.getElementById('ai-autoreply-check');
+                const importCatalogEl = document.getElementById('ai-import-catalog-check');
+
+                if (platformEl) platformEl.value = data.ai_provider || data.platform || 'Gemini';
+                if (modelEl) modelEl.value = data.ai_model || data.model || '';
+                if (tempEl) {
+                    const t = data.ai_temperature ?? data.temperature ?? 0.7;
+                    tempEl.value = t;
+                    if (dispTemp) dispTemp.innerText = t;
                 }
-                if (data.notification_phone !== undefined && document.getElementById('ai-notif-phone')) {
-                    document.getElementById('ai-notif-phone').value = data.notification_phone;
+                if (notifEl) notifEl.value = data.notification_phone || '';
+                if (promptEl) promptEl.value = data.system_prompt || '';
+                if (autoReplyEl) autoReplyEl.checked = data.auto_reply ?? true;
+                if (importCatalogEl) importCatalogEl.checked = data.import_catalog_details ?? true;
+
+                if (data.api_key !== undefined) {
+                    const raw = String(data.api_key || '').trim();
+                    if (raw) {
+                        window._savedApiKeys = raw.split(/[\n,\s]+/).map(k => k.trim()).filter(Boolean);
+                    } else {
+                        window._savedApiKeys = [];
+                    }
+                    renderAPIKeysList();
                 }
-                if (data.api_key !== undefined && document.getElementById('ai-api-key')) {
-                    document.getElementById('ai-api-key').value = data.api_key;
-                }
-                if (data.system_prompt && document.getElementById('ai-system-prompt')) document.getElementById('ai-system-prompt').value = data.system_prompt;
-                if (data.auto_reply !== undefined && document.getElementById('ai-autoreply-check')) document.getElementById('ai-autoreply-check').checked = data.auto_reply;
             } catch (err) {
                 console.warn('AI settings load error:', err);
             }
@@ -2073,18 +2329,6 @@
                 if (replyEl) {
                     replyEl.innerText = rawReply;
                 }
-
-                // Check if reply references an image tag <IMG_N> or [IMAGE: url]
-                const tagMatch = rawReply.match(/<IMG_(\d+)>/i);
-                if (tagMatch && window._loadedProducts) {
-                    const tagStr = `<IMG_${tagMatch[1]}>`;
-                    const matchedProd = window._loadedProducts.find(p => p.ai_tag === tagStr || String(p.id) === tagMatch[1]);
-                    if (matchedProd && (matchedProd.image_url || matchedProd.image_data)) {
-                        if (imgThumb) imgThumb.src = matchedProd.image_url || matchedProd.image_data;
-                        if (imgTag) imgTag.innerText = `📸 Product Image attached: ${matchedProd.name} (${matchedProd.price})`;
-                        if (imgPreview) imgPreview.classList.remove('hidden');
-                    }
-                }
             } catch (err) {
                 if (errorBox && errorText) {
                     errorText.innerText = 'Network error contacting AI simulation engine. Please check connection.';
@@ -2123,9 +2367,14 @@
                             if (deskPill) deskPill.innerText = 'Disconnected';
                             const display = document.getElementById('eight-digit-display-box');
                             if (display) display.classList.add('hidden');
+                            const chatsCard = document.getElementById('biz-customer-chats-container');
+                            if (chatsCard) chatsCard.classList.add('hidden');
+                            backToContactList();
                             fetchWhatsAppQR();
                             loadUserProfile();
                         } else if (data.type === 'session_connected') {
+                            const chatsCard = document.getElementById('biz-customer-chats-container');
+                            if (chatsCard) chatsCard.classList.remove('hidden');
                             fetchWhatsAppQR();
                             loadUserProfile();
                         }
@@ -2162,6 +2411,50 @@
             banner.classList.remove('hidden');
         }
 
+        async function saveProfileNotificationPhone() {
+            const input = document.getElementById('prof-notif-phone-input');
+            const notifPhone = input ? input.value.trim() : '';
+            const username = getActiveUsername();
+            const btn = document.getElementById('btn-save-prof-notif');
+
+            if (!notifPhone) {
+                alert('Please enter a valid Lead Alert Notification WhatsApp Phone Number (e.g. 919876543202).');
+                return;
+            }
+
+            const originalHtml = btn ? btn.innerHTML : 'Save';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            }
+
+            try {
+                const res = await fetch('/api/user/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, notification_phone: notifPhone })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert('✅ Lead Alert Notification Phone saved and synced in DB!');
+                    // Keep AI tab input in sync too!
+                    const aiNotifEl = document.getElementById('ai-notif-phone');
+                    if (aiNotifEl) aiNotifEl.value = notifPhone;
+                    loadUserProfile();
+                    loadAISettings();
+                } else {
+                    alert(data.message || 'Failed to save notification phone');
+                }
+            } catch (err) {
+                alert('Server error saving notification phone');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            }
+        }
+
         async function loadUserProfile() {
             const username = getActiveUsername();
             if (!username) return;
@@ -2172,12 +2465,14 @@
             const uName = document.getElementById('prof-username');
             const email = document.getElementById('prof-email');
             const phone = document.getElementById('prof-phone-text');
+            const notifInput = document.getElementById('prof-notif-phone-input');
             const typeBadge = document.getElementById('prof-type-badge');
 
             if (dispName) dispName.innerText = user.account_name || `${username} Workspace`;
             if (uName) uName.innerText = `@${username}`;
             if (email && user.email) email.innerText = user.email;
             if (phone && user.phone) phone.innerText = `+${user.phone}`;
+            if (notifInput && user.notification_phone) notifInput.value = user.notification_phone;
             if (typeBadge) typeBadge.innerText = (user.user_type === 'library_owner' || user.user_type === 'library_partner') ? 'Library Partner' : 'Business Suite';
 
             try {
@@ -2193,6 +2488,12 @@
                 if (uName) uName.innerText = `@${data.username}`;
                 if (email) email.innerText = data.email || '—';
                 if (phone) phone.innerText = data.phone ? `+${data.phone}` : 'Not Linked';
+                if (notifInput) notifInput.value = data.notification_phone || '';
+
+                // Bi-directional sync with AI Responder input as well
+                const aiNotifEl = document.getElementById('ai-notif-phone');
+                if (aiNotifEl && data.notification_phone) aiNotifEl.value = data.notification_phone;
+
                 if (typeBadge) typeBadge.innerText = data.user_type === 'library_owner' ? 'Library Partner' : 'Business Suite';
                 
                 if (statusPill) {
@@ -2207,7 +2508,7 @@
                     }
                 }
 
-                if (aiProv) aiProv.innerText = `${data.ai_provider || 'Gemini'} (${data.ai_model || 'Active'})`;
+                if (aiProv) aiProv.innerText = `${data.ai_provider || 'Gemini'} / ${data.ai_model || 'Standard'}`;
                 if (createdAt) createdAt.innerText = data.created_at || 'Active';
             } catch (err) {
                 console.warn('Failed to load profile details:', err);

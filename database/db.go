@@ -122,8 +122,10 @@ func migrateSchema() {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_temperature NUMERIC(3, 1) DEFAULT 0.7;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS import_catalog_details BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS automation_access BOOLEAN DEFAULT true;`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`,
 		`CREATE TABLE IF NOT EXISTS email_verifications (
 			email VARCHAR(255) PRIMARY KEY,
 			code VARCHAR(10) NOT NULL,
@@ -139,12 +141,14 @@ func migrateSchema() {
 			item_type VARCHAR(50) DEFAULT 'product',
 			unit_type VARCHAR(50) DEFAULT 'custom',
 			variants JSONB DEFAULT '[]'::jsonb,
+			whatsapp_catalog_link TEXT DEFAULT '',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_catalog_link TEXT DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_data TEXT DEFAULT '';`,
 		`CREATE TABLE IF NOT EXISTS customer_chats (
@@ -187,6 +191,8 @@ func migrateSchema() {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_products_usr ON products(username);`,
 		`CREATE INDEX IF NOT EXISTS idx_leads_usr ON leads(username);`,
+		`DELETE FROM customer_chats WHERE LENGTH(customer_phone) > 15 OR customer_phone LIKE '120363%';`,
+		`DELETE FROM leads WHERE LENGTH(customer_phone) > 15 OR customer_phone LIKE '120363%';`,
 	}
 
 	for _, q := range queries {

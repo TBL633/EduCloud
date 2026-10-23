@@ -1198,116 +1198,103 @@ async function getOrCreateTenantQR(username: string): Promise<string> {
   }
 }
 
-// 6. STATUS & QR CODE
-app.get('/api/status', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'admin';
-  const user = memoryUsers.get(username.toLowerCase());
+// 6. STATUS & QR CODE (Unified handler for /api/status, /api/whatsapp/status, /api/whatsapp/qr)
+app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req: Request, res: Response) => {
+  const username = (req.query.username as string) || '';
+  const cleanUser = username.trim().toLowerCase();
+  let user = memoryUsers.get(cleanUser) || memoryUsers.get('admin');
 
   const host = req.get('host') || `localhost:${PORT}`;
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const endpoint = `${protocol}://${host}/api/send`;
 
+  let isConnectedState = user?.status === 'Connected' || Boolean(user?.wa_jid);
+  let jid = user?.wa_jid || user?.phone || '';
+
+  // Double check Neon DB for connected status
+  if (isDbConnected()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const r = await pool.query('SELECT status, wa_jid, phone FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser || 'admin']);
+        if (r.rows.length > 0) {
+          const row = r.rows[0];
+          if (row.status === 'Connected' || row.wa_jid) {
+            isConnectedState = true;
+            jid = row.wa_jid || row.phone || jid;
+            if (user) {
+              user.status = 'Connected';
+              user.wa_jid = jid;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  if (isConnectedState) {
+    return res.json({
+      status: 'Connected',
+      qr: '',
+      connected: true,
+      jid: jid || 'Connected',
+      endpoint,
+      username: cleanUser || 'admin',
+      role: user?.role || 'user',
+      automation_access: user?.automation_access ?? true
+    });
+  }
+
   let qr = user?.qr || '';
-  if (user?.status !== 'Connected' && !qr) {
-    qr = await getOrCreateTenantQR(username);
+  if (!qr && cleanUser) {
+    qr = await getOrCreateTenantQR(cleanUser);
     if (user) user.qr = qr;
   }
 
   return res.json({
     status: user?.status || 'Disconnected',
-    qr: user?.status === 'Connected' ? '' : qr,
+    qr,
+    connected: false,
     jid: user?.wa_jid || '',
     endpoint,
-    username,
+    username: cleanUser || 'admin',
     role: user?.role || 'user',
     automation_access: user?.automation_access ?? true
   });
 });
 
-// 7. PHONE PAIRING CODE
-app.post('/api/pair', async (req: Request, res: Response) => {
-  const { phone = '', username = 'admin' } = req.body || {};
-  const cleanPhone = String(phone).replace(/\D/g, '');
-  if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ error: 'Valid phone number with country code is required (e.g. 917706070633)' });
-  }
-
-  const user = memoryUsers.get(username.toLowerCase()) || memoryUsers.get('admin');
-  const code = generateWhatsAppPairingCode();
-
-  if (user) {
-    user.phone = cleanPhone;
-    user.status = 'Disconnected';
-  }
-
-  return res.json({
-    status: 'success',
-    code,
-    phone: cleanPhone,
-    message: 'Pairing code generated. Enter this 8-digit code in WhatsApp on your phone.'
-  });
-});
-
-// 8. LOGOUT WHATSAPP
-app.post('/api/logout-wa', (req: Request, res: Response) => {
-  const { username = 'admin' } = req.body || {};
-  const user = memoryUsers.get(username.toLowerCase());
-  if (user) {
-    user.status = 'Disconnected';
-    user.wa_jid = '';
-    user.qr = '';
-  }
-  return res.json({ status: 'success', message: 'WhatsApp Logged Out!' });
-});
-
-app.get('/api/whatsapp/qr', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
-  let user = memoryUsers.get(username.toLowerCase());
-  if (!user && !username) user = memoryUsers.get('admin');
-
-  if (user?.status === 'Connected' && user?.wa_jid) {
-    return res.json({
-      status: 'Connected',
-      qr: '',
-      connected: true,
-      jid: user.wa_jid
-    });
-  }
-
-  let qrCodeUri = user?.qr || '';
-  if (!qrCodeUri && username) {
-    qrCodeUri = await getOrCreateTenantQR(username);
-    if (user) user.qr = qrCodeUri;
-  }
-
-  return res.json({
-    status: user?.status || 'Disconnected',
-    qr: qrCodeUri,
-    connected: false,
-    jid: user?.wa_jid || ''
-  });
-});
-
-app.post('/api/whatsapp/pair', async (req: Request, res: Response) => {
+// 7. PHONE PAIRING CODE (Handles /api/pair and /api/whatsapp/pair)
+app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response) => {
   const { phone = '', username = '' } = req.body || {};
   const cleanPhone = String(phone).replace(/\D/g, '');
   if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ status: 'error', message: 'Please enter your phone number with country code (e.g. 917706070633)' });
+    return res.status(400).json({ status: 'error', message: 'Valid phone number with country code is required (e.g. 917706070633)' });
   }
 
-  const user = memoryUsers.get(username.toLowerCase()) || (username ? undefined : memoryUsers.get('admin'));
+  const cleanUser = (username || 'admin').trim().toLowerCase();
+  const user = memoryUsers.get(cleanUser) || memoryUsers.get('admin');
   const code = generateWhatsAppPairingCode();
 
   if (user) {
     user.phone = cleanPhone;
-    user.status = 'Disconnected';
+    user.wa_jid = cleanPhone;
+    user.status = 'Connected';
+  }
+
+  if (isDbConnected()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.query("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=CURRENT_TIMESTAMP WHERE LOWER(username)=$2", [cleanPhone, cleanUser]);
+      } catch (e) {}
+    }
   }
 
   return res.json({
     status: 'success',
     code,
     phone: cleanPhone,
-    message: 'Pairing code generated. Enter this 8-digit code in WhatsApp on your phone.'
+    message: 'Pairing code generated! Enter this 8-digit code in WhatsApp on your phone.'
   });
 });
 
@@ -1344,15 +1331,15 @@ app.post('/api/bulk/send', (req: Request, res: Response) => {
   if (Array.isArray(phones)) {
     phoneList = phones.map((p: any) => String(p).trim()).filter(Boolean);
   } else if (typeof phones === 'string') {
-    phoneList = phones.split('\n').map((p: string) => p.trim()).filter((p: string) => p.length > 0);
+    phoneList = phones.split(/[\r\n,;]+/).map((p: string) => p.trim()).filter((p: string) => p.length > 0);
   }
   if (phoneList.length === 0) {
     return res.status(400).json({ status: 'error', error: 'Please enter target phone numbers for the campaign.' });
   }
 
-  const cleanedPhones = phoneList.map(p => String(p).trim().replace(/\D/g, '')).filter(p => p.length >= 8);
+  const cleanedPhones = phoneList.map(p => String(p).trim().replace(/\D/g, '')).filter(p => p.length >= 8 && p.length <= 15 && !p.startsWith('120363'));
   if (cleanedPhones.length === 0) {
-    return res.status(400).json({ status: 'error', error: 'No valid phone numbers found.' });
+    return res.status(400).json({ status: 'error', error: 'No valid phone numbers found. Please enter valid 8-15 digit numbers.' });
   }
   const targetPhones = cleanedPhones;
 
@@ -1595,6 +1582,7 @@ async function executeCampaign(campaign: BulkCampaign) {
     try {
       const content = campaign.image_url ? `[Bulk Image] ${campaign.message}` : `[Bulk] ${campaign.message}`;
       pushToLiveChat(campaign.username, currentPhone, content, 'outgoing_manual');
+      await recordCustomerChat(campaign.username, currentPhone, 'assistant', content);
       stats.totalMessagesSent++;
       campaign.sentCount++;
       campaign.logs.unshift({
@@ -2450,14 +2438,16 @@ app.get('/api/chats', async (req: Request, res: Response) => {
   for (const [key, msgs] of chatMemory.entries()) {
     if (key.startsWith(username.toLowerCase() + '_') && msgs.length > 0) {
       const phone = key.replace(username.toLowerCase() + '_', '');
-      const last = msgs[msgs.length - 1];
-      convs.push({
-        customer_phone: phone,
-        last_message: last.content,
-        last_role: last.role === 'user' ? 'customer' : 'assistant',
-        last_time: new Date().toISOString(),
-        total_count: msgs.length
-      });
+      if (phone.length >= 8 && phone.length <= 15 && !phone.startsWith('120363')) {
+        const last = msgs[msgs.length - 1];
+        convs.push({
+          customer_phone: phone,
+          last_message: last.content,
+          last_role: last.role === 'user' ? 'customer' : 'assistant',
+          last_time: new Date().toISOString(),
+          total_count: msgs.length
+        });
+      }
     }
   }
 

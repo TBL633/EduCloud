@@ -128,6 +128,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
     `);
 
     await pool.query(`
@@ -348,7 +349,7 @@ export async function unpairWhatsAppFromNeon(username: string): Promise<void> {
   const clean = username.toLowerCase();
   try {
     // Only clear WhatsApp session details from DB, keep user account intact
-    await pool.query("UPDATE users SET wa_jid = '', qr = '', status = 'Disconnected' WHERE LOWER(username) = $1", [clean]);
+    await pool.query("UPDATE users SET wa_jid = '', qr = '', status = 'Disconnected', linked_at = NULL WHERE LOWER(username) = $1", [clean]);
     console.log(`📱 [Neon DB] WhatsApp session wiped for @${clean}, user account kept active.`);
   } catch (err: any) {
     console.error('Failed to unpair WhatsApp in Neon DB:', err.message);
@@ -428,6 +429,7 @@ export async function getLast10Chats(
       `SELECT id, role, message_text, created_at
        FROM customer_chats
        WHERE LOWER(username) = $1 AND customer_phone = $2
+         AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username) = $1)
        ORDER BY id ASC
        LIMIT 10`,
       [cleanUser, cleanPhone]
@@ -461,7 +463,8 @@ export async function getCustomerConversations(
               MAX(created_at) as last_time,
               COUNT(*) as total_count
        FROM customer_chats c
-       WHERE LOWER(username) = $1
+       WHERE LOWER(username) = $1 AND LENGTH(customer_phone) <= 15 AND customer_phone NOT LIKE '120363%'
+         AND created_at >= (SELECT COALESCE(linked_at, '1970-01-01'::timestamptz) FROM users WHERE LOWER(username) = $1)
        GROUP BY customer_phone, username
        ORDER BY MAX(created_at) DESC
        LIMIT 50`,

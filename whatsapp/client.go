@@ -281,7 +281,7 @@ func GetOrGenerateQR(username string) string {
 				ClientsLock.Unlock()
 				if client.Store.ID != nil && DB != nil {
 					jidUser := client.Store.ID.User
-					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, cleanUsr)
+					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2)", jidUser, cleanUsr)
 				}
 			} else if evt.Event == "timeout" {
 				ClientsLock.Lock()
@@ -354,11 +354,19 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
-		if v.Info.IsFromMe || v.Info.IsGroup {
+		if v.Info.IsFromMe || v.Info.IsGroup || v.Info.IsStatus {
 			return
 		}
 
-		senderPhone := v.Info.Sender.User
+		if v.Info.Sender.Server != types.DefaultUserServer {
+			return // Ignore newsletters, channels, status broadcasts
+		}
+
+		senderPhone := FormatPhone(v.Info.Sender.User)
+		if len(senderPhone) < 8 || len(senderPhone) > 15 || strings.HasPrefix(senderPhone, "120363") {
+			return // Ignore non-mobile newsletter channel JIDs
+		}
+
 		msgText := v.Message.GetConversation()
 		if msgText == "" && v.Message.ExtendedTextMessage != nil {
 			msgText = v.Message.ExtendedTextMessage.GetText()
@@ -383,6 +391,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			err := DB.QueryRow("SELECT ai_provider, api_key, system_prompt, auto_reply, COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", strings.ToLower(username)).
 				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &notifPhone)
 
+			// Always save captured lead inquiry directly into Neon Postgres DB
+			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
+				username, senderPhone, msgText)
+
 			if err == nil && autoReply && apiKey != "" {
 				replyText, imgURL := GenerateAIReply(username, senderPhone, msgText, provider, apiKey, sysPrompt)
 				if imgURL != "" {
@@ -395,18 +407,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					PushToLiveChat(username, senderPhone, replyText, "outgoing_ai")
 				}
 
-				// 4. LEAD CREATION: A lead is ONLY created in DB when AI Lead Responder dispatches a lead alert to notification_phone!
+				// If Lead Alert Notification Phone is set, dispatch automated alert message!
 				cleanNotif := FormatPhone(notifPhone)
 				if cleanNotif != "" && client != nil && client.IsLoggedIn() {
 					alertText := fmt.Sprintf("🚨 *NEW AI QUALIFIED LEAD ALERT* 🚨\n\n• Account: @%s\n• Customer Phone: +%s\n• Last Message: %s\n• Time: %s",
 						username, senderPhone, msgText, time.Now().Format("02 Jan 15:04:05"))
-					errAlert := SendMessage(client, cleanNotif, alertText)
-					if errAlert == nil {
-						// SUCCESSFUL LEAD ALERT DISPATCHED TO SAVED NUMBER -> CREATE RECORD IN LEADS TABLE!
-						_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Qualified Lead', NOW())",
-							username, senderPhone, msgText)
-						PushToLiveChat(username, cleanNotif, alertText, "lead_alert")
-					}
+					_ = SendMessage(client, cleanNotif, alertText)
+					PushToLiveChat(username, cleanNotif, alertText, "lead_alert")
 				}
 			}
 		}()
@@ -434,7 +441,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 	case *events.Connected:
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidStr, username)
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=COALESCE(linked_at, NOW()) WHERE LOWER(username)=LOWER($2)", jidStr, username)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
 		}
@@ -442,7 +449,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 	case *events.PairSuccess:
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidStr, username)
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2)", jidStr, username)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
