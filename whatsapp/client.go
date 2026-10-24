@@ -268,13 +268,13 @@ func EnsureConnected(client *whatsmeow.Client) error {
 	return fmt.Errorf("whatsapp connection timeout (websocket connecting)")
 }
 
-// ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs and filters out LID JIDs (117... / 223...)
+// ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs
 func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.JID) string {
 	// 1. Try Chat JID if it is a standard phone user server
 	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us" || chatJID.Server == "s.whatsapp.net") && chatJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(chatJID.User, "")
 		clean = strings.Split(clean, ".")[0]
-		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+		if len(clean) >= 8 {
 			return FormatPhone(clean)
 		}
 	}
@@ -283,28 +283,49 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us" || senderJID.Server == "s.whatsapp.net") && senderJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(senderJID.User, "")
 		clean = strings.Split(clean, ".")[0]
-		if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+		if len(clean) >= 8 {
 			return FormatPhone(clean)
 		}
 	}
 
-	// 3. Fallback: Check if user is a standard phone number
+	// 3. If LID JID, check Whatsmeow client store for mapped Phone Number JID (PN)
+	if client != nil && client.Store != nil && client.Store.Contacts != nil {
+		if senderJID.Server == "lid" || strings.HasPrefix(senderJID.User, "117") || strings.HasPrefix(senderJID.User, "223") {
+			if contact, err := client.Store.Contacts.GetContact(context.Background(), senderJID); err == nil && contact.Found && contact.PhoneNumber != "" {
+				clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.PhoneNumber, "")
+				if formatted := FormatPhone(clean); formatted != "" {
+					return formatted
+				}
+			}
+		}
+		if chatJID.Server == "lid" || strings.HasPrefix(chatJID.User, "117") || strings.HasPrefix(chatJID.User, "223") {
+			if contact, err := client.Store.Contacts.GetContact(context.Background(), chatJID); err == nil && contact.Found && contact.PhoneNumber != "" {
+				clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.PhoneNumber, "")
+				if formatted := FormatPhone(clean); formatted != "" {
+					return formatted
+				}
+			}
+		}
+	}
+
+	// 4. Fallback: extract numeric portion from sender or chat user ID
 	rawUser := senderJID.User
-	if rawUser == "" || strings.HasPrefix(rawUser, "117") || strings.HasPrefix(rawUser, "223") {
+	if rawUser == "" {
 		rawUser = chatJID.User
 	}
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(rawUser, "")
 	clean = strings.Split(clean, ".")[0]
-	if len(clean) >= 10 && len(clean) <= 13 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
+	if len(clean) >= 8 {
 		return FormatPhone(clean)
 	}
+
 	return ""
 }
 
 // FormatPhone cleans and adds India '91' prefix if 10-digit number is provided
 func FormatPhone(phone string) string {
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
-	if clean == "" || strings.HasPrefix(clean, "117") || strings.HasPrefix(clean, "223") || len(clean) > 13 {
+	if clean == "" {
 		return ""
 	}
 	clean = strings.Split(clean, ".")[0]
@@ -524,8 +545,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 
 		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
-		if len(senderPhone) < 10 || len(senderPhone) > 13 || strings.HasPrefix(senderPhone, "117") || strings.HasPrefix(senderPhone, "223") || strings.HasPrefix(senderPhone, "120363") {
-			return // Ignore non-mobile, LID, newsletter, broadcast JIDs
+		if senderPhone == "" || len(senderPhone) < 8 || strings.HasPrefix(senderPhone, "120363") {
+			return // Ignore invalid or broadcast JIDs
 		}
 
 		msgText := extractMessageText(v.Message)
@@ -533,7 +554,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return
 		}
 
-		log.Printf("📩 Incoming message from +%s (@%s): %s", senderPhone, username, msgText)
+		log.Printf("📩 Incoming message received from +%s (@%s): %s", senderPhone, username, msgText)
 
 		// Auto-mark message as read on WhatsApp so blue ticks appear and connection stays active
 		if client != nil {
