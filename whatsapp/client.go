@@ -270,7 +270,7 @@ func EnsureConnected(client *whatsmeow.Client) error {
 
 // ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs
 func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.JID) string {
-	// 1. Try Chat JID if it is a standard phone user server
+	// 1. Try Chat JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
 	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us" || chatJID.Server == "s.whatsapp.net") && chatJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(chatJID.User, "")
 		clean = strings.Split(clean, ".")[0]
@@ -279,7 +279,7 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 		}
 	}
 
-	// 2. Try Sender JID if it is a standard phone user server
+	// 2. Try Sender JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
 	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us" || senderJID.Server == "s.whatsapp.net") && senderJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(senderJID.User, "")
 		clean = strings.Split(clean, ".")[0]
@@ -288,31 +288,17 @@ func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.J
 		}
 	}
 
-	// 3. If LID JID, check Whatsmeow client store for mapped Phone Number JID (PN)
-	if client != nil && client.Store != nil && client.Store.Contacts != nil {
-		if senderJID.Server == "lid" || strings.HasPrefix(senderJID.User, "117") || strings.HasPrefix(senderJID.User, "223") {
-			if contact, err := client.Store.Contacts.GetContact(context.Background(), senderJID); err == nil && contact.Found && contact.PhoneNumber != "" {
-				clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.PhoneNumber, "")
-				if formatted := FormatPhone(clean); formatted != "" {
-					return formatted
-				}
-			}
-		}
-		if chatJID.Server == "lid" || strings.HasPrefix(chatJID.User, "117") || strings.HasPrefix(chatJID.User, "223") {
-			if contact, err := client.Store.Contacts.GetContact(context.Background(), chatJID); err == nil && contact.Found && contact.PhoneNumber != "" {
-				clean := regexp.MustCompile(`\D`).ReplaceAllString(contact.PhoneNumber, "")
-				if formatted := FormatPhone(clean); formatted != "" {
-					return formatted
-				}
-			}
+	// 3. Fallback: Extract numeric phone digits from chat or sender user ID (handles LID & custom JIDs)
+	rawUser := senderJID.User
+	if rawUser == "" || senderJID.Server == "lid" || strings.HasPrefix(senderJID.User, "117") || strings.HasPrefix(senderJID.User, "223") {
+		if chatJID.User != "" && chatJID.Server != "lid" && !strings.HasPrefix(chatJID.User, "117") && !strings.HasPrefix(chatJID.User, "223") {
+			rawUser = chatJID.User
 		}
 	}
-
-	// 4. Fallback: extract numeric portion from sender or chat user ID
-	rawUser := senderJID.User
 	if rawUser == "" {
 		rawUser = chatJID.User
 	}
+
 	clean := regexp.MustCompile(`\D`).ReplaceAllString(rawUser, "")
 	clean = strings.Split(clean, ".")[0]
 	if len(clean) >= 8 {
