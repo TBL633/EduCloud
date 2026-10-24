@@ -203,24 +203,48 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 				}
 			}()
 		}
-		go func() {
-			if err := client.Connect(); err != nil {
-				log.Printf("⚠️ Client connect error for @%s: %v", username, err)
-			}
-		}()
+		ConnectWithAutoRetry(client, username)
 	} else {
-		go func() {
-			if err := client.Connect(); err != nil {
-				log.Printf("⚠️ Client reconnect error for @%s: %v", username, err)
-			}
-			if DB != nil && client.Store.ID != nil {
-				jidUser := client.Store.ID.User
-				_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
-			}
-		}()
+		ConnectWithAutoRetry(client, username)
+		if DB != nil && client.Store.ID != nil {
+			jidUser := client.Store.ID.User
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+		}
 	}
 
 	return client
+}
+
+// ConnectWithAutoRetry attempts to connect the WhatsApp client with automatic exponential retries
+func ConnectWithAutoRetry(client *whatsmeow.Client, username string) {
+	if client == nil {
+		return
+	}
+	if client.IsConnected() {
+		return
+	}
+
+	go func() {
+		for attempt := 1; attempt <= 10; attempt++ {
+			if client.IsConnected() {
+				log.Printf("✅ WhatsApp WebSocket connected for @%s", username)
+				return
+			}
+
+			err := client.Connect()
+			if err == nil && client.IsConnected() {
+				log.Printf("✅ WhatsApp WebSocket connected successfully for @%s (Attempt %d)", username, attempt)
+				if DB != nil && client.Store != nil && client.Store.ID != nil {
+					jidUser := client.Store.ID.User
+					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+				}
+				return
+			}
+
+			log.Printf("⏳ Connect retry %d/10 for @%s (notice: %v)", attempt, username, err)
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+	}()
 }
 
 // EnsureConnected ensures the WhatsApp WebSocket is actively connected before sending messages
@@ -518,15 +542,20 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}()
 		}
 
-		// Ultra-Fast Concurrent Server RAM Execution (0ms DB Latency for Reply Delivery)
+		// 1. SAVE RECEIVED CUSTOMER MESSAGE TO DB IMMEDIATELY
+		SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
+		if DB != nil {
+			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
+				username, senderPhone, msgText)
+		}
+
+		// 2. PUSH RECEIVED MESSAGE TO LIVE CHAT SSE UI INSTANTLY
+		PushToLiveChat(username, senderPhone, msgText, "incoming")
+
+		// Concurrent Ultra-Fast AI Reply Generation & Delivery Pipeline
 		go func() {
-			// 1. PUSH INCOMING MESSAGE TO LIVE CHAT SSE UI INSTANTLY
-			PushToLiveChat(username, senderPhone, msgText, "incoming")
-
-			// 2. FETCH USER AI CONFIGURATION FROM INSTANT RAM CACHE
+			// FETCH USER AI CONFIGURATION FROM INSTANT RAM CACHE
 			cfg := GetUserConfigRAM(username)
-
-			var deliveredReply string
 
 			if cfg != nil && cfg.AutoReply {
 				activeClient := client
@@ -537,6 +566,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				// 3. GENERATE AI REPLY INSTANTLY IN SERVER RAM
 				replyText, imgURL := GenerateAIReplyRAM(username, senderPhone, msgText, cfg)
 
+				var deliveredReply string
+
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, replyText)
 					if sendErr != nil {
@@ -545,7 +576,6 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						log.Printf("⚡ AI image reply delivered to +%s", senderPhone)
 					}
 					deliveredReply = "[Image Sent] " + replyText
-					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendMessage(activeClient, senderPhone, replyText)
 					if sendErr != nil {
@@ -554,22 +584,19 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, replyText)
 					}
 					deliveredReply = replyText
+				}
+
+				if deliveredReply != "" {
+					// 4. WHEN REPLY IS DELIVERED TO CUSTOMER -> SAVE AI REPLY TO DB & PUSH TO LIVE CHAT UI
+					SaveCustomerChatAndPrune(username, senderPhone, "assistant", deliveredReply)
 					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
 				}
 			}
-
-			// 4. AFTER PROCESSING & DELIVERING INSTANTLY ON SERVER, SYNC TO DB ASYNCHRONOUSLY IN BACKGROUND
-			AsyncDBSync(username, senderPhone, msgText, deliveredReply)
 		}()
 
 	case *events.Disconnected:
-		log.Printf("⚠️ WebSocket disconnected (EOF/Frame header drop) for @%s. Triggering auto-reconnect...", username)
-		go func() {
-			time.Sleep(1 * time.Second)
-			if client != nil && client.IsLoggedIn() && !client.IsConnected() {
-				_ = client.Connect()
-			}
-		}()
+		log.Printf("⚠️ WebSocket disconnected for @%s. Triggering auto-reconnect retry loop...", username)
+		ConnectWithAutoRetry(client, username)
 
 	case *events.LoggedOut:
 		fmt.Printf("⚠️ User @%s unlinked from phone. Auto-cleaning WhatsApp session details...\n", username)
@@ -628,7 +655,7 @@ func AutoConnectAllSessions() {
 			go func(usr string) {
 				c := GetOrCreateClient(usr)
 				if c != nil && c.IsLoggedIn() && !c.IsConnected() {
-					_ = c.Connect()
+					ConnectWithAutoRetry(c, usr)
 				}
 			}(username)
 			count++
@@ -639,10 +666,10 @@ func AutoConnectAllSessions() {
 	}
 }
 
-// StartKeepAliveMonitor checks active clients every 15 seconds and re-establishes broken WebSockets
+// StartKeepAliveMonitor checks active clients every 10 seconds and re-establishes broken WebSockets
 func StartKeepAliveMonitor() {
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		for range ticker.C {
 			ClientsLock.Lock()
 			var activeUsers []string
@@ -656,15 +683,9 @@ func StartKeepAliveMonitor() {
 				client := ActiveClients[usr]
 				ClientsLock.Unlock()
 
-				if client != nil && client.IsLoggedIn() && !client.IsConnected() {
-					log.Printf("🔄 [KeepAlive] Client @%s WebSocket dropped; re-connecting...", usr)
-					go func(c *whatsmeow.Client, u string) {
-						if err := c.Connect(); err != nil {
-							log.Printf("⚠️ [KeepAlive] Reconnect attempt error for @%s: %v", u, err)
-						} else {
-							log.Printf("✅ [KeepAlive] Successfully re-connected WebSocket for @%s!", u)
-						}
-					}(client, usr)
+				if client != nil && client.Store != nil && client.Store.ID != nil && !client.IsConnected() {
+					log.Printf("🔄 [KeepAlive] Client @%s WebSocket dropped; reconnecting...", usr)
+					ConnectWithAutoRetry(client, usr)
 				}
 			}
 		}
