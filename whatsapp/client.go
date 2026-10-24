@@ -718,7 +718,7 @@ func PushToLiveChat(username, phone, text, msgType string) {
 	}
 }
 
-// 1. Text Message Bhejna
+// 1. Text Message Bhejna (Supports both Standard PN and LID JIDs with fallback)
 func SendMessage(client *whatsmeow.Client, phone string, message string) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
@@ -732,13 +732,26 @@ func SendMessage(client *whatsmeow.Client, phone string, message string) error {
 		return err
 	}
 
-	targetJID := types.NewJID(cleanPhone, types.DefaultUserServer)
+	primaryServer := types.DefaultUserServer
+	if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") {
+		primaryServer = "lid"
+	}
+
+	targetJID := types.NewJID(cleanPhone, primaryServer)
 	msg := &waE2E.Message{Conversation: proto.String(message)}
 	_, err := client.SendMessage(context.Background(), targetJID, msg)
+	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
+		altServer := "lid"
+		if primaryServer == "lid" {
+			altServer = types.DefaultUserServer
+		}
+		targetJID = types.NewJID(cleanPhone, altServer)
+		_, err = client.SendMessage(context.Background(), targetJID, msg)
+	}
 	return err
 }
 
-// 2. Image URL or Base64 Data URI Se Photo + Caption Bhejna
+// 2. Image URL or Base64 Data URI Se Photo + Caption Bhejna (Supports both Standard PN and LID JIDs)
 func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
@@ -757,7 +770,6 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 
 	imageURL = strings.TrimSpace(imageURL)
 	if strings.HasPrefix(imageURL, "data:image/") {
-		// Handle Base64 Data URI
 		parts := strings.SplitN(imageURL, ",", 2)
 		if len(parts) == 2 {
 			imgBytes, err = base64.StdEncoding.DecodeString(parts[1])
@@ -766,7 +778,6 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 			}
 		}
 	} else if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
-		// Neon Storage ya URL se image bytes download karna
 		clientHttp := &http.Client{Timeout: 20 * time.Second}
 		resp, fetchErr := clientHttp.Get(imageURL)
 		if fetchErr != nil {
@@ -785,14 +796,19 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 		return fmt.Errorf("empty image payload")
 	}
 
-	// WhatsApp Server par encrypt karke upload karna
 	uploaded, err := client.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("whatsapp media upload failed: %v", err)
 	}
 
 	mimeType := http.DetectContentType(imgBytes)
-	targetJID := types.NewJID(cleanPhone, types.DefaultUserServer)
+
+	primaryServer := types.DefaultUserServer
+	if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") {
+		primaryServer = "lid"
+	}
+
+	targetJID := types.NewJID(cleanPhone, primaryServer)
 
 	msg := &waE2E.Message{
 		ImageMessage: &waE2E.ImageMessage{
@@ -808,6 +824,14 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 	}
 
 	_, err = client.SendMessage(context.Background(), targetJID, msg)
+	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
+		altServer := "lid"
+		if primaryServer == "lid" {
+			altServer = types.DefaultUserServer
+		}
+		targetJID = types.NewJID(cleanPhone, altServer)
+		_, err = client.SendMessage(context.Background(), targetJID, msg)
+	}
 	return err
 }
 

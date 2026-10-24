@@ -35,11 +35,8 @@ func ChatsHandler(w http.ResponseWriter, r *http.Request) {
 			       COUNT(*)
 			FROM customer_chats c1
 			WHERE LOWER(username)=LOWER($1) 
-			  AND LENGTH(customer_phone) >= 10
-			  AND LENGTH(customer_phone) <= 13 
-			  AND customer_phone NOT LIKE '117%'
-			  AND customer_phone NOT LIKE '223%'
-			  AND customer_phone NOT LIKE '120363%'
+			  AND LENGTH(customer_phone) >= 8
+			  AND LENGTH(customer_phone) <= 20
 			GROUP BY customer_phone, username
 			ORDER BY MAX(id) DESC LIMIT 50`, username)
 		if err == nil {

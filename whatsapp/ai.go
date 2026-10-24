@@ -297,12 +297,12 @@ func GetCatalogContext(username string) string {
 }
 
 // 2. Main AI Auto-Reply Generator
+// 2. Main AI Auto-Reply Generator
 func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, systemPrompt string) (string, string) {
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
 	cleanPhone := FormatPhone(customerPhone)
 	selectedApiKey := getRotatedAPIKey(cleanUsr, apiKey)
 
-	// Fallback to environment variables if no user API key configured
 	if selectedApiKey == "" {
 		selectedApiKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
 		if selectedApiKey == "" {
@@ -313,7 +313,7 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		}
 	}
 	if selectedApiKey == "" {
-		log.Printf("⚠️ No API key found for @%s (neither user configured nor environment variable set)", cleanUsr)
+		log.Printf("⚠️ No API key found for @%s", cleanUsr)
 		return "", ""
 	}
 
@@ -328,35 +328,17 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		systemPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
 	}
 
-	// Re-hydrate / Update RAM sliding window (Max 10 messages, 5-min inactivity eviction)
+	// Update sliding window in RAM
 	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 
+	// Build STABLE System Prompt for Prompt Caching
 	catalogContext := ""
 	if importCatalog {
 		catalogContext = GetCatalogContext(cleanUsr)
 	}
-	fullPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
+	stableSysPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
 
-	// Build conversation history for AI model
-	var lastUserMsg string
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString(fullPrompt)
-	contextBuilder.WriteString("\n\n=== RECENT CHAT HISTORY (LAST 10 MESSAGES) ===\n")
-	for _, m := range history {
-		if m.Role == "user" {
-			contextBuilder.WriteString(fmt.Sprintf("Customer: %s\n", m.Content))
-			lastUserMsg = m.Content
-		} else {
-			contextBuilder.WriteString(fmt.Sprintf("Assistant: %s\n", m.Content))
-		}
-	}
-	contextBuilder.WriteString("=== END RECENT HISTORY ===\nAnswer the customer's latest query accurately:")
-
-	if lastUserMsg == "" {
-		lastUserMsg = incomingText
-	}
-
-	aiResponse, err := CallAIModel(provider, model, temp, selectedApiKey, contextBuilder.String(), lastUserMsg)
+	aiResponse, err := CallAIModelWithHistory(provider, model, temp, selectedApiKey, stableSysPrompt, history)
 	if err != nil || aiResponse == "" {
 		log.Printf("⚠️ GenerateAIReply error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""
@@ -368,7 +350,7 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	return aiResponse, ""
 }
 
-// 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & context execution)
+// 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & Prompt Caching)
 func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserConfigRAM) (string, string) {
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
 	cleanPhone := FormatPhone(customerPhone)
@@ -400,31 +382,14 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 	// Update RAM sliding window instantly in 0ms
 	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 
-	fullPrompt := sysPrompt
+	// STABLE System Prompt (enables LLM server Prompt Caching for near-zero token cost)
+	stableSysPrompt := sysPrompt
 	if cfg.ImportCatalog && cfg.CatalogText != "" {
-		fullPrompt += cfg.CatalogText
+		stableSysPrompt += cfg.CatalogText
 	}
-	fullPrompt += "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
+	stableSysPrompt += "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
 
-	var lastUserMsg string
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString(fullPrompt)
-	contextBuilder.WriteString("\n\n=== RECENT CHAT HISTORY (LAST 10 MESSAGES) ===\n")
-	for _, m := range history {
-		if m.Role == "user" {
-			contextBuilder.WriteString(fmt.Sprintf("Customer: %s\n", m.Content))
-			lastUserMsg = m.Content
-		} else {
-			contextBuilder.WriteString(fmt.Sprintf("Assistant: %s\n", m.Content))
-		}
-	}
-	contextBuilder.WriteString("=== END RECENT HISTORY ===\nAnswer the customer's latest query accurately:")
-
-	if lastUserMsg == "" {
-		lastUserMsg = incomingText
-	}
-
-	aiResponse, err := CallAIModel(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, contextBuilder.String(), lastUserMsg)
+	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
 	if err != nil || aiResponse == "" {
 		log.Printf("⚠️ GenerateAIReplyRAM error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""
@@ -448,22 +413,26 @@ func AsyncDBSync(username, customerPhone, incomingText, aiReplyText string) {
 			return
 		}
 
-		// Sync customer incoming message to DB
 		if incomingText != "" {
 			SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "customer", incomingText)
 			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
 				cleanUsr, cleanPhone, incomingText)
 		}
 
-		// Sync AI reply to DB
 		if aiReplyText != "" {
 			SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", aiReplyText)
 		}
 	}()
 }
 
-// Unified multi-provider AI model caller (Groq, Gemini, OpenAI, DeepSeek, OpenRouter)
+// Backward compatibility wrapper
 func CallAIModel(provider, model string, temperature float64, rawApiKey, sysPrompt, userQuery string) (string, error) {
+	history := []ChatMessage{{Role: "user", Content: userQuery}}
+	return CallAIModelWithHistory(provider, model, temperature, rawApiKey, sysPrompt, history)
+}
+
+// Unified multi-provider AI model caller with structured Chat History & Prompt Caching
+func CallAIModelWithHistory(provider, model string, temperature float64, rawApiKey, sysPrompt string, history []ChatMessage) (string, error) {
 	apiKey := strings.TrimSpace(rawApiKey)
 	if apiKey == "" {
 		return "", fmt.Errorf("empty API key")
@@ -474,7 +443,7 @@ func CallAIModel(provider, model string, temperature float64, rawApiKey, sysProm
 		prov = "openai"
 	}
 
-	// Smart key prefix auto-detection to prevent provider mismatches
+	// Smart key prefix auto-detection
 	if strings.HasPrefix(apiKey, "gsk_") {
 		prov = "groq"
 	} else if strings.HasPrefix(apiKey, "sk-") {
@@ -487,23 +456,21 @@ func CallAIModel(provider, model string, temperature float64, rawApiKey, sysProm
 		prov = "groq"
 	}
 
-	// Sanitize model parameter: if purely numeric (e.g. phone number saved in model column) or invalid, clear it
 	cleanModel := strings.TrimSpace(model)
 	if isNumericOrPhone(cleanModel) {
 		cleanModel = ""
 	}
 
 	if prov == "gemini" {
-		res, err := callGeminiAPIWithModel(apiKey, cleanModel, temperature, sysPrompt, userQuery)
+		res, err := callGeminiAPIWithHistory(apiKey, cleanModel, temperature, sysPrompt, history)
 		if err == nil && res != "" {
 			return res, nil
 		}
-		// If Gemini failed with key gsk_ or model mismatch, fallback to Groq if possible
 		log.Printf("⚠️ Gemini call failed (%v). Attempting fallback to Groq/OpenAI...", err)
-		return callOpenAIFormat("groq", "llama-3.3-70b-versatile", temperature, apiKey, sysPrompt, userQuery)
+		return callOpenAIFormatWithHistory("groq", "llama-3.3-70b-versatile", temperature, apiKey, sysPrompt, history)
 	}
 
-	return callOpenAIFormat(prov, cleanModel, temperature, apiKey, sysPrompt, userQuery)
+	return callOpenAIFormatWithHistory(prov, cleanModel, temperature, apiKey, sysPrompt, history)
 }
 
 func isNumericOrPhone(s string) bool {
@@ -514,7 +481,7 @@ func isNumericOrPhone(s string) bool {
 	return len(clean) >= 8 && (len(clean) == len(s) || strings.HasPrefix(clean, "117") || strings.HasPrefix(clean, "223") || strings.HasPrefix(clean, "91"))
 }
 
-func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPrompt, userQuery string) (string, error) {
+func callOpenAIFormatWithHistory(provider, model string, temperature float64, apiKey, sysPrompt string, history []ChatMessage) (string, error) {
 	url := "https://api.groq.com/openai/v1/chat/completions"
 	reqModel := strings.TrimSpace(model)
 
@@ -536,17 +503,27 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 	}
 
 	if reqModel != "" && !isNumericOrPhone(reqModel) {
-		// Prepend requested model to candidate list
 		candidateModels = append([]string{reqModel}, candidateModels...)
+	}
+
+	// Prepare structured messages array: System prompt FIRST (cachable), followed by sliding window messages
+	messages := []ChatMessage{
+		{Role: "system", Content: sysPrompt},
+	}
+	for _, m := range history {
+		role := m.Role
+		if role == "customer" {
+			role = "user"
+		} else if role == "outgoing" || role == "outgoing_ai" {
+			role = "assistant"
+		}
+		if strings.TrimSpace(m.Content) != "" {
+			messages = append(messages, ChatMessage{Role: role, Content: m.Content})
+		}
 	}
 
 	var lastErr error
 	for _, m := range candidateModels {
-		messages := []ChatMessage{
-			{Role: "system", Content: sysPrompt},
-			{Role: "user", Content: userQuery},
-		}
-
 		payload := map[string]interface{}{
 			"model":       m,
 			"messages":    messages,
@@ -605,8 +582,7 @@ func callOpenAIFormat(provider, model string, temperature float64, apiKey, sysPr
 	return "", fmt.Errorf("empty AI reply received")
 }
 
-func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt, userText string) (string, error) {
-	// Candidate models list in priority order to handle deprecated/renamed models gracefully
+func callGeminiAPIWithHistory(apiKey, model string, temperature float64, sysPrompt string, history []ChatMessage) (string, error) {
 	candidateModels := []string{"gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"}
 
 	reqModel := strings.TrimSpace(model)
@@ -614,14 +590,38 @@ func callGeminiAPIWithModel(apiKey, model string, temperature float64, sysPrompt
 		candidateModels = append([]string{reqModel}, candidateModels...)
 	}
 
+	// Prepare Gemini API structured contents
+	var contents []map[string]interface{}
+	for _, m := range history {
+		role := "user"
+		if m.Role == "assistant" || m.Role == "outgoing" || m.Role == "outgoing_ai" {
+			role = "model"
+		}
+		if strings.TrimSpace(m.Content) != "" {
+			contents = append(contents, map[string]interface{}{
+				"role": role,
+				"parts": []map[string]string{
+					{"text": m.Content},
+				},
+			})
+		}
+	}
+
+	if len(contents) == 0 {
+		return "", fmt.Errorf("empty chat history for Gemini")
+	}
+
 	var lastErr error
 	for _, mdl := range candidateModels {
 		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", mdl, apiKey)
 
 		payload := map[string]interface{}{
-			"contents": []map[string]interface{}{
-				{"role": "user", "parts": []map[string]string{{"text": sysPrompt + "\n\nCustomer Inquiry: " + userText}}},
+			"system_instruction": map[string]interface{}{
+				"parts": []map[string]string{
+					{"text": sysPrompt},
+				},
 			},
+			"contents": contents,
 			"generationConfig": map[string]interface{}{
 				"temperature": temperature,
 			},
