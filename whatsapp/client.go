@@ -554,7 +554,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		if client != nil {
 			go func() {
 				_ = client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-				_ = client.SendChatPresence(v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+				_ = client.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 			}()
 		}
 
@@ -586,7 +586,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				// Clear typing indicator before dispatch
 				if activeClient != nil {
-					_ = activeClient.SendChatPresence(v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
+					_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
 				}
 
 				var deliveredReply string
