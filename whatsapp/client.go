@@ -817,13 +817,19 @@ func extractMessageText(username string, msg *waE2E.Message) string {
 		}
 	}
 	if btnResp := msg.GetButtonsResponseMessage(); btnResp != nil {
-		if text := strings.TrimSpace(btnResp.GetResponseDisplayText()); text != "" {
+		if text := strings.TrimSpace(btnResp.GetSelectedDisplayText()); text != "" {
 			return text
+		}
+		if id := strings.TrimSpace(btnResp.GetSelectedButtonId()); id != "" {
+			return id
 		}
 	}
 	if tmplResp := msg.GetTemplateButtonReplyMessage(); tmplResp != nil {
 		if text := strings.TrimSpace(tmplResp.GetSelectedDisplayText()); text != "" {
 			return text
+		}
+		if id := strings.TrimSpace(tmplResp.GetSelectedId()); id != "" {
+			return id
 		}
 	}
 
