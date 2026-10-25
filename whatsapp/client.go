@@ -820,7 +820,7 @@ func extractMessageText(username string, msg *waE2E.Message) string {
 		if text := strings.TrimSpace(btnResp.GetSelectedDisplayText()); text != "" {
 			return text
 		}
-		if id := strings.TrimSpace(btnResp.GetSelectedButtonId()); id != "" {
+		if id := strings.TrimSpace(btnResp.GetSelectedButtonID()); id != "" {
 			return id
 		}
 	}
@@ -828,7 +828,7 @@ func extractMessageText(username string, msg *waE2E.Message) string {
 		if text := strings.TrimSpace(tmplResp.GetSelectedDisplayText()); text != "" {
 			return text
 		}
-		if id := strings.TrimSpace(tmplResp.GetSelectedId()); id != "" {
+		if id := strings.TrimSpace(tmplResp.GetSelectedID()); id != "" {
 			return id
 		}
 	}
