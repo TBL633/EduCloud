@@ -32,10 +32,72 @@ var (
 	ClientsLock    sync.Mutex
 	DB             *sql.DB
 
+	// 0ms In-Memory LID-to-RealPhone & Phone-to-JID Mappings
+	lidToPnRAM   = make(map[string]string)
+	phoneToJID   = make(map[string]types.JID)
+	lidCacheLock sync.RWMutex
+
 	// Live Chat Listeners (Browser SSE channels per user)
 	LiveChatStreams = make(map[string]chan map[string]string)
 	StreamLock      sync.Mutex
 )
+
+// LoadLIDMapCache loads all LID -> Real Phone Number mappings from Neon DB into 0ms RAM
+func LoadLIDMapCache() {
+	if DB == nil {
+		return
+	}
+	rows, err := DB.Query("SELECT lid, pn FROM whatsmeow_lid_map WHERE pn != ''")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	lidCacheLock.Lock()
+	count := 0
+	for rows.Next() {
+		var lid, pn string
+		if err := rows.Scan(&lid, &pn); err == nil && lid != "" && pn != "" {
+			lidToPnRAM[lid] = pn
+			count++
+		}
+	}
+	lidCacheLock.Unlock()
+
+	if count > 0 {
+		log.Printf("⚡ [RAM Cache]: Loaded %d LID-to-RealPhone mappings for instant 0ms number resolution.", count)
+	}
+}
+
+// GetRealPhoneFromLID resolves a LID (e.g. 117..., 100...) to a real phone number
+func GetRealPhoneFromLID(lid string) string {
+	cleanLID := regexp.MustCompile(`\D`).ReplaceAllString(lid, "")
+	if cleanLID == "" {
+		return ""
+	}
+
+	lidCacheLock.RLock()
+	pn, exists := lidToPnRAM[cleanLID]
+	lidCacheLock.RUnlock()
+
+	if exists && pn != "" {
+		return FormatPhone(pn)
+	}
+
+	// Fallback: Query Neon DB whatsmeow_lid_map directly on cache miss
+	if DB != nil {
+		var dbPN string
+		err := DB.QueryRow("SELECT pn FROM whatsmeow_lid_map WHERE lid = $1 LIMIT 1", cleanLID).Scan(&dbPN)
+		if err == nil && dbPN != "" {
+			lidCacheLock.Lock()
+			lidToPnRAM[cleanLID] = dbPN
+			lidCacheLock.Unlock()
+			return FormatPhone(dbPN)
+		}
+	}
+
+	return ""
+}
 
 func InitStore(dbURL string, dbConn *sql.DB) {
 	DB = dbConn
@@ -69,20 +131,22 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 	dbLog := waLog.Stdout("WhatsAppStore", "ERROR", false)
 	var err error
 
-	// 1. Primary: Use dedicated direct sqlstore connection
+	// 1. Primary: Use dedicated direct sqlstore connection with optimized pool
 	if directURL != "" {
 		dedicatedDB, dbErr := sql.Open("postgres", directURL)
 		if dbErr == nil && dedicatedDB != nil {
-			dedicatedDB.SetMaxOpenConns(6)
-			dedicatedDB.SetMaxIdleConns(2)
-			dedicatedDB.SetConnMaxLifetime(10 * time.Minute)
-			dedicatedDB.SetConnMaxIdleTime(2 * time.Minute)
+			// Higher connection limit so Whatsmeow cryptographic operations don't queue
+			dedicatedDB.SetMaxOpenConns(16)
+			dedicatedDB.SetMaxIdleConns(6)
+			dedicatedDB.SetConnMaxLifetime(15 * time.Minute)
+			dedicatedDB.SetConnMaxIdleTime(3 * time.Minute)
 
 			StoreContainer = sqlstore.NewWithDB(dedicatedDB, "postgres", dbLog)
 			if StoreContainer != nil {
 				err = StoreContainer.Upgrade(context.Background())
 				if err == nil {
-					log.Println("✅ Whatsmeow Store initialized with dedicated direct PostgreSQL connection!")
+					log.Println("✅ Whatsmeow Store initialized with dedicated direct PostgreSQL connection (Pool: 16 Conns)!")
+					go LoadLIDMapCache()
 					return
 				}
 				log.Printf("⚠️ StoreContainer.Upgrade notice: %v", err)
@@ -92,6 +156,7 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 		StoreContainer, err = sqlstore.New(context.Background(), "postgres", directURL, dbLog)
 		if err == nil && StoreContainer != nil {
 			log.Println("✅ Whatsmeow Store initialized with direct PostgreSQL connection string!")
+			go LoadLIDMapCache()
 			return
 		}
 		log.Printf("⚠️ Direct Whatsmeow Store connection notice: %v. Trying active pool fallback...", err)
@@ -104,6 +169,7 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 			err = StoreContainer.Upgrade(context.Background())
 			if err == nil {
 				log.Println("✅ Whatsmeow Store initialized with active PostgreSQL pool!")
+				go LoadLIDMapCache()
 				return
 			}
 			log.Printf("⚠️ StoreContainer.Upgrade notice: %v", err)
@@ -270,25 +336,37 @@ func EnsureConnected(client *whatsmeow.Client) error {
 
 // ResolveRealPhoneNumber resolves real phone numbers (+91 / global) from Whatsmeow JIDs
 func ResolveRealPhoneNumber(client *whatsmeow.Client, senderJID, chatJID types.JID) string {
-	// 1. Try Chat JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
+	// 1. Resolve LID to Real Phone Number using whatsmeow_lid_map (0ms RAM cache)
+	if senderJID.Server == "lid" || strings.HasPrefix(senderJID.User, "117") || strings.HasPrefix(senderJID.User, "223") || strings.HasPrefix(senderJID.User, "100") {
+		if realPhone := GetRealPhoneFromLID(senderJID.User); realPhone != "" {
+			return realPhone
+		}
+	}
+	if chatJID.Server == "lid" || strings.HasPrefix(chatJID.User, "117") || strings.HasPrefix(chatJID.User, "223") || strings.HasPrefix(chatJID.User, "100") {
+		if realPhone := GetRealPhoneFromLID(chatJID.User); realPhone != "" {
+			return realPhone
+		}
+	}
+
+	// 2. Try Chat JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
 	if (chatJID.Server == types.DefaultUserServer || chatJID.Server == "c.us" || chatJID.Server == "s.whatsapp.net") && chatJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(chatJID.User, "")
 		clean = strings.Split(clean, ".")[0]
-		if len(clean) >= 8 {
+		if len(clean) >= 8 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
 			return FormatPhone(clean)
 		}
 	}
 
-	// 2. Try Sender JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
+	// 3. Try Sender JID if it is a standard phone user server (@s.whatsapp.net or @c.us)
 	if (senderJID.Server == types.DefaultUserServer || senderJID.Server == "c.us" || senderJID.Server == "s.whatsapp.net") && senderJID.User != "" {
 		clean := regexp.MustCompile(`\D`).ReplaceAllString(senderJID.User, "")
 		clean = strings.Split(clean, ".")[0]
-		if len(clean) >= 8 {
+		if len(clean) >= 8 && !strings.HasPrefix(clean, "117") && !strings.HasPrefix(clean, "223") {
 			return FormatPhone(clean)
 		}
 	}
 
-	// 3. Fallback: Extract numeric phone digits from chat or sender user ID (handles LID & custom JIDs)
+	// 4. Fallback: Extract numeric phone digits from chat or sender user ID (handles LID & custom JIDs)
 	rawUser := senderJID.User
 	if rawUser == "" || senderJID.Server == "lid" || strings.HasPrefix(senderJID.User, "117") || strings.HasPrefix(senderJID.User, "223") {
 		if chatJID.User != "" && chatJID.Server != "lid" && !strings.HasPrefix(chatJID.User, "117") && !strings.HasPrefix(chatJID.User, "223") {
@@ -550,6 +628,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		log.Printf("📩 Incoming message received from +%s (@%s): %s", senderPhone, username, msgText)
 
+		// Record exact WhatsApp JID mapping for direct reply delivery
+		lidCacheLock.Lock()
+		phoneToJID[senderPhone] = v.Info.Sender
+		if senderPhone != v.Info.Sender.User {
+			phoneToJID[v.Info.Sender.User] = v.Info.Sender
+		}
+		lidCacheLock.Unlock()
+
 		// 1. Instant Asynchronous Blue Ticks (MarkRead) & Typing Status Indicator
 		if client != nil {
 			go func() {
@@ -749,17 +835,27 @@ func SendMessage(client *whatsmeow.Client, phone string, message string) error {
 		return err
 	}
 
+	// 1. Check if we have exact sender JID cached from incoming message
+	lidCacheLock.RLock()
+	targetJID, hasTargetJID := phoneToJID[cleanPhone]
+	if !hasTargetJID {
+		targetJID, hasTargetJID = phoneToJID[phone]
+	}
+	lidCacheLock.RUnlock()
+
 	primaryServer := types.DefaultUserServer
-	if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") {
-		primaryServer = "lid"
+	if !hasTargetJID {
+		if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") || strings.HasPrefix(cleanPhone, "100") {
+			primaryServer = "lid"
+		}
+		targetJID = types.NewJID(cleanPhone, primaryServer)
 	}
 
-	targetJID := types.NewJID(cleanPhone, primaryServer)
 	msg := &waE2E.Message{Conversation: proto.String(message)}
 	_, err := client.SendMessage(context.Background(), targetJID, msg)
 	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
 		altServer := "lid"
-		if primaryServer == "lid" {
+		if targetJID.Server == "lid" {
 			altServer = types.DefaultUserServer
 		}
 		targetJID = types.NewJID(cleanPhone, altServer)
@@ -820,12 +916,21 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 
 	mimeType := http.DetectContentType(imgBytes)
 
-	primaryServer := types.DefaultUserServer
-	if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") {
-		primaryServer = "lid"
+	// Check exact sender JID
+	lidCacheLock.RLock()
+	targetJID, hasTargetJID := phoneToJID[cleanPhone]
+	if !hasTargetJID {
+		targetJID, hasTargetJID = phoneToJID[phone]
 	}
+	lidCacheLock.RUnlock()
 
-	targetJID := types.NewJID(cleanPhone, primaryServer)
+	primaryServer := types.DefaultUserServer
+	if !hasTargetJID {
+		if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") || strings.HasPrefix(cleanPhone, "100") {
+			primaryServer = "lid"
+		}
+		targetJID = types.NewJID(cleanPhone, primaryServer)
+	}
 
 	msg := &waE2E.Message{
 		ImageMessage: &waE2E.ImageMessage{
