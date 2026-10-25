@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS customer_chats (
     customer_phone VARCHAR(50) NOT NULL,
     role VARCHAR(20) NOT NULL, -- 'customer' or 'assistant'
     message_text TEXT NOT NULL,
+    sender_type VARCHAR(20) DEFAULT 'incoming', -- 'incoming' or 'outgoing'
+    incoming_msg TEXT DEFAULT '',
+    outgoing_msg TEXT DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

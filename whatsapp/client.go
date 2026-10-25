@@ -433,20 +433,28 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 
 	// Standardize role names: 'customer' for user input, 'assistant' for AI/agent replies
 	normalRole := strings.ToLower(role)
-	if normalRole == "user" || normalRole == "client" {
+	senderType := "incoming"
+	incMsg := ""
+	outMsg := ""
+
+	if normalRole == "user" || normalRole == "client" || normalRole == "customer" || normalRole == "incoming" {
 		normalRole = "customer"
-	} else if normalRole == "outgoing" || normalRole == "outgoing_ai" || normalRole == "assistant" {
+		senderType = "incoming"
+		incMsg = messageText
+	} else {
 		normalRole = "assistant"
+		senderType = "outgoing"
+		outMsg = messageText
 	}
 
-	// 1. Insert chat record into customer_chats table with explicit customer_phone
-	_, err := DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, created_at)
-		VALUES ($1, $2, $3, $4, NOW())`, cleanUsr, cleanPhone, normalRole, messageText)
+	// 1. Insert chat record into customer_chats table with explicit incoming_msg and outgoing_msg columns per customer phone
+	_, err := DB.Exec(`INSERT INTO customer_chats (username, customer_phone, role, message_text, sender_type, incoming_msg, outgoing_msg, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`, cleanUsr, cleanPhone, normalRole, messageText, senderType, incMsg, outMsg)
 	if err != nil {
 		log.Printf("⚠️ SaveCustomerChat error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 	}
 
-	// 2. Prune DB to strictly retain last 10 messages per customer (Sliding Window in DB)
+	// 2. Prune DB to strictly retain latest 10 messages per customer phone (Sliding Window in DB)
 	_, _ = DB.Exec(`DELETE FROM customer_chats 
 		WHERE LOWER(username)=LOWER($1) 
 		  AND customer_phone=$2 
@@ -542,26 +550,29 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		log.Printf("📩 Incoming message received from +%s (@%s): %s", senderPhone, username, msgText)
 
-		// Auto-mark message as read on WhatsApp so blue ticks appear and connection stays active
+		// 1. Instant Asynchronous Blue Ticks (MarkRead) & Typing Status Indicator
 		if client != nil {
 			go func() {
 				_ = client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+				_ = client.SendChatPresence(v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 			}()
 		}
 
-		// 1. SAVE RECEIVED CUSTOMER MESSAGE TO DB IMMEDIATELY
-		SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
-		if DB != nil {
-			_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
-				username, senderPhone, msgText)
-		}
-
-		// 2. PUSH RECEIVED MESSAGE TO LIVE CHAT SSE UI INSTANTLY
+		// 2. RAM-First Processing & Instant Live Chat SSE UI Dispatch (0ms latency)
+		_ = updateSlidingWindowRAM(username, senderPhone, "customer", msgText)
 		PushToLiveChat(username, senderPhone, msgText, "incoming")
 
-		// Concurrent Ultra-Fast AI Reply Generation & Delivery Pipeline
+		// 3. Asynchronous Non-Blocking DB Persistence (0ms delay to AI execution pipeline)
 		go func() {
-			// FETCH USER AI CONFIGURATION FROM INSTANT RAM CACHE
+			SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
+			if DB != nil {
+				_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
+					username, senderPhone, msgText)
+			}
+		}()
+
+		// 4. Concurrent Ultra-Fast AI Reply Generation & Delivery Pipeline
+		go func() {
 			cfg := GetUserConfigRAM(username)
 
 			if cfg != nil && cfg.AutoReply {
@@ -570,8 +581,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					activeClient = GetOrCreateClient(username)
 				}
 
-				// 3. GENERATE AI REPLY INSTANTLY IN SERVER RAM
+				// Generate AI reply instantly from RAM sliding window and cached system prompt
 				replyText, imgURL := GenerateAIReplyRAM(username, senderPhone, msgText, cfg)
+
+				// Clear typing indicator before dispatch
+				if activeClient != nil {
+					_ = activeClient.SendChatPresence(v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
+				}
 
 				var deliveredReply string
 
@@ -594,9 +610,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 
 				if deliveredReply != "" {
-					// 4. WHEN REPLY IS DELIVERED TO CUSTOMER -> SAVE AI REPLY TO DB & PUSH TO LIVE CHAT UI
-					SaveCustomerChatAndPrune(username, senderPhone, "assistant", deliveredReply)
 					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
+					go func() {
+						SaveCustomerChatAndPrune(username, senderPhone, "assistant", deliveredReply)
+					}()
 				}
 			}
 		}()

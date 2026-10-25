@@ -81,9 +81,14 @@ func ChatMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	var messages []ChatMsgItem
 
 	if DB != nil {
-		rows, err := DB.Query(`SELECT id, role, message_text, COALESCE(TO_CHAR(created_at, 'HH24:MI'), 'Recent')
+		rows, err := DB.Query(`SELECT id, role, 
+			CASE 
+				WHEN sender_type = 'outgoing' OR role = 'assistant' THEN COALESCE(NULLIF(outgoing_msg, ''), message_text)
+				ELSE COALESCE(NULLIF(incoming_msg, ''), message_text)
+			END AS txt,
+			COALESCE(TO_CHAR(created_at, 'HH24:MI'), 'Recent')
 			FROM (
-				SELECT id, role, message_text, created_at 
+				SELECT id, role, message_text, COALESCE(sender_type, 'incoming') AS sender_type, COALESCE(incoming_msg, '') AS incoming_msg, COALESCE(outgoing_msg, '') AS outgoing_msg, created_at 
 				FROM customer_chats 
 				WHERE LOWER(username)=LOWER($1) AND customer_phone=$2
 				ORDER BY id DESC LIMIT 10

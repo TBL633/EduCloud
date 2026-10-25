@@ -193,15 +193,16 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 	defer ramCacheLock.Unlock()
 
 	session, exists := chatMemoryRAM[sessionKey]
+	rehydrated := false
 
 	// If session not in RAM (e.g. initial message OR evicted after 5 min inactivity),
 	// re-hydrate last 10 messages directly from Neon PostgreSQL DB into RAM!
 	if !exists || session == nil || len(session.Messages) == 0 {
 		var dbMessages []ChatMessage
 		if DB != nil {
-			rows, err := DB.Query(`SELECT role, message_text 
+			rows, err := DB.Query(`SELECT role, message_text, COALESCE(sender_type, ''), COALESCE(incoming_msg, ''), COALESCE(outgoing_msg, '') 
 				FROM (
-					SELECT id, role, message_text 
+					SELECT id, role, message_text, sender_type, incoming_msg, outgoing_msg 
 					FROM customer_chats 
 					WHERE LOWER(username)=LOWER($1) AND customer_phone=$2 
 					ORDER BY id DESC LIMIT 10
@@ -209,14 +210,26 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 			if err == nil {
 				defer rows.Close()
 				for rows.Next() {
-					var r, m string
-					if err := rows.Scan(&r, &m); err == nil {
-						if r == "customer" {
-							r = "user"
-						} else if r == "assistant" || r == "outgoing" || r == "outgoing_ai" {
-							r = "assistant"
+					var r, m, st, inc, out string
+					if err := rows.Scan(&r, &m, &st, &inc, &out); err == nil {
+						msgContent := m
+						msgRole := "user"
+
+						if st == "incoming" || r == "customer" || r == "user" {
+							msgRole = "user"
+							if inc != "" {
+								msgContent = inc
+							}
+						} else if st == "outgoing" || r == "assistant" || r == "outgoing" || r == "outgoing_ai" {
+							msgRole = "assistant"
+							if out != "" {
+								msgContent = out
+							}
 						}
-						dbMessages = append(dbMessages, ChatMessage{Role: r, Content: m})
+
+						if strings.TrimSpace(msgContent) != "" {
+							dbMessages = append(dbMessages, ChatMessage{Role: msgRole, Content: msgContent})
+						}
 					}
 				}
 			}
@@ -226,18 +239,30 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 			Messages:     dbMessages,
 		}
 		chatMemoryRAM[sessionKey] = session
+		rehydrated = true
 		log.Printf("📥 [RAM Re-Hydration]: Loaded %d prior messages from DB into RAM for %s", len(dbMessages), sessionKey)
 	}
 
-	// Append current message if non-empty
+	// Append current message if non-empty and not already present from re-hydration
 	if text != "" {
 		normalRole := role
-		if normalRole == "customer" {
+		if normalRole == "customer" || normalRole == "incoming" {
 			normalRole = "user"
 		} else if normalRole == "outgoing" || normalRole == "outgoing_ai" {
 			normalRole = "assistant"
 		}
-		session.Messages = append(session.Messages, ChatMessage{Role: normalRole, Content: text})
+
+		alreadyPresent := false
+		if rehydrated && len(session.Messages) > 0 {
+			lastMsg := session.Messages[len(session.Messages)-1]
+			if lastMsg.Role == normalRole && lastMsg.Content == text {
+				alreadyPresent = true
+			}
+		}
+
+		if !alreadyPresent {
+			session.Messages = append(session.Messages, ChatMessage{Role: normalRole, Content: text})
+		}
 	}
 
 	// Maintain strictly max 10 messages in RAM
@@ -245,11 +270,32 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 		session.Messages = session.Messages[len(session.Messages)-10:]
 	}
 
-	// Update last activity timestamp to reset 5-minute inactivity timer
 	session.LastActivity = time.Now()
 
 	copied := make([]ChatMessage, len(session.Messages))
 	copy(copied, session.Messages)
+	return copied
+}
+
+func getSlidingWindowRAM(username, customerPhone string) []ChatMessage {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	sessionKey := cleanUsr + "_" + cleanPhone
+
+	ramCacheLock.Lock()
+	session, exists := chatMemoryRAM[sessionKey]
+	ramCacheLock.Unlock()
+
+	if !exists || session == nil || len(session.Messages) == 0 {
+		return updateSlidingWindowRAM(cleanUsr, cleanPhone, "", "")
+	}
+
+	ramCacheLock.Lock()
+	session.LastActivity = time.Now()
+	copied := make([]ChatMessage, len(session.Messages))
+	copy(copied, session.Messages)
+	ramCacheLock.Unlock()
+
 	return copied
 }
 
@@ -297,7 +343,6 @@ func GetCatalogContext(username string) string {
 }
 
 // 2. Main AI Auto-Reply Generator
-// 2. Main AI Auto-Reply Generator
 func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, systemPrompt string) (string, string) {
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
 	cleanPhone := FormatPhone(customerPhone)
@@ -328,10 +373,11 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		systemPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
 	}
 
-	// Update sliding window in RAM
-	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
+	if len(history) == 0 || history[len(history)-1].Content != incomingText {
+		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+	}
 
-	// Build STABLE System Prompt for Prompt Caching
 	catalogContext := ""
 	if importCatalog {
 		catalogContext = GetCatalogContext(cleanUsr)
@@ -343,9 +389,6 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		log.Printf("⚠️ GenerateAIReply error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""
 	}
-
-	// Save AI reply in RAM sliding window
-	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
 
 	return aiResponse, ""
 }
@@ -379,10 +422,12 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		sysPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
 	}
 
-	// Update RAM sliding window instantly in 0ms
-	history := updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+	// Fetch current sliding window (contains prior messages + latest incoming customer message)
+	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
+	if len(history) == 0 || history[len(history)-1].Content != incomingText {
+		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+	}
 
-	// STABLE System Prompt (enables LLM server Prompt Caching for near-zero token cost)
 	stableSysPrompt := sysPrompt
 	if cfg.ImportCatalog && cfg.CatalogText != "" {
 		stableSysPrompt += cfg.CatalogText
@@ -394,9 +439,6 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		log.Printf("⚠️ GenerateAIReplyRAM error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""
 	}
-
-	// Update RAM sliding window with AI response
-	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, "assistant", aiResponse)
 
 	return aiResponse, ""
 }

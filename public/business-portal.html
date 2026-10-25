@@ -1401,7 +1401,7 @@
 
         function formatPhoneNumberDisplay(phone) {
             const clean = String(phone).replace(/\D/g, '');
-            if (!clean || clean.startsWith('117') || clean.startsWith('223') || clean.length > 13) {
+            if (!clean) {
                 return 'Customer';
             }
             if (clean.length === 12 && clean.startsWith('91')) {
@@ -1422,10 +1422,10 @@
                 const data = await res.json();
                 let conversations = data.conversations || [];
 
-                // Strict filtering for valid customer phone numbers (exclude fake/LID/channels)
+                // Filter for valid customer contacts (exclude broadcast channel IDs)
                 conversations = conversations.filter(c => {
                     const phoneStr = String(c.customer_phone || '').replace(/\D/g, '');
-                    return phoneStr.length >= 10 && phoneStr.length <= 13 && !phoneStr.startsWith('117') && !phoneStr.startsWith('223') && !phoneStr.startsWith('120363');
+                    return phoneStr.length >= 8 && !phoneStr.startsWith('120363');
                 });
 
                 const counterEl = document.getElementById('chat-contacts-counter');

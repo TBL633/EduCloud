@@ -166,9 +166,15 @@ func migrateSchema() {
 			customer_phone VARCHAR(50) NOT NULL,
 			role VARCHAR(50) NOT NULL,
 			message_text TEXT NOT NULL,
+			sender_type VARCHAR(20) DEFAULT 'incoming',
+			incoming_msg TEXT DEFAULT '',
+			outgoing_msg TEXT DEFAULT '',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_chats_usr_ph ON customer_chats(username, customer_phone);`,
+		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS sender_type VARCHAR(20) DEFAULT 'incoming';`,
+		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS incoming_msg TEXT DEFAULT '';`,
+		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS outgoing_msg TEXT DEFAULT '';`,
+		`CREATE INDEX IF NOT EXISTS idx_chats_usr_ph ON customer_chats(username, customer_phone, id DESC);`,
 		`CREATE TABLE IF NOT EXISTS leads (
 			id SERIAL PRIMARY KEY,
 			username VARCHAR(100) NOT NULL,
@@ -200,8 +206,6 @@ func migrateSchema() {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_products_usr ON products(username);`,
 		`CREATE INDEX IF NOT EXISTS idx_leads_usr ON leads(username);`,
-		`DELETE FROM customer_chats WHERE LENGTH(customer_phone) > 13 OR LENGTH(customer_phone) < 10 OR customer_phone LIKE '117%' OR customer_phone LIKE '223%' OR customer_phone LIKE '120363%';`,
-		`DELETE FROM leads WHERE LENGTH(customer_phone) > 13 OR LENGTH(customer_phone) < 10 OR customer_phone LIKE '117%' OR customer_phone LIKE '223%' OR customer_phone LIKE '120363%';`,
 	}
 
 	for _, q := range queries {
