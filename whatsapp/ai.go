@@ -64,7 +64,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	userConfigLock.Lock()
 	cached, exists := userConfigCache[cleanUsr]
-	if exists && cached != nil && time.Since(cached.LastCached) < 1*time.Minute {
+	if exists && cached != nil && time.Since(cached.LastCached) < 5*time.Minute {
 		userConfigLock.Unlock()
 		return cached
 	}
@@ -74,7 +74,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 		Provider:      "groq",
 		APIKey:        "",
 		SystemPrompt:  "",
-		Model:         "llama-3.3-70b-versatile",
+		Model:         "llama-3.1-8b-instant",
 		Temperature:   0.7,
 		AutoReply:     true,
 		ImportCatalog: true,
@@ -90,7 +90,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(ai_provider, 'groq'), 
 			COALESCE(api_key, ''), 
 			COALESCE(system_prompt, ''), 
-			COALESCE(ai_model, 'llama-3.3-70b-versatile'), 
+			COALESCE(ai_model, 'llama-3.1-8b-instant'), 
 			COALESCE(ai_temperature, 0.7), 
 			COALESCE(auto_reply, true), 
 			COALESCE(import_catalog_details, true) 
@@ -100,6 +100,9 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.APIKey = k
 			cfg.SystemPrompt = s
 			cfg.Model = m
+			if p == "groq" && (m == "llama-3.3-70b-versatile" || m == "") {
+				cfg.Model = "llama-3.1-8b-instant"
+			}
 			cfg.Temperature = t
 			cfg.AutoReply = ar
 			cfg.ImportCatalog = ic
@@ -108,6 +111,8 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 
 	if cfg.ImportCatalog {
 		cfg.CatalogText = GetCatalogContext(cleanUsr)
+	} else {
+		cfg.CatalogText = ""
 	}
 
 	userConfigLock.Lock()
@@ -183,6 +188,16 @@ func getRotatedAPIKey(username, rawKeys string) string {
 	return selectedKey
 }
 
+// compactText trims whitespace and caps max character length to minimize token consumption
+func compactText(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) > maxRunes {
+		return string(r[:maxRunes]) + "..."
+	}
+	return s
+}
+
 // 1. Sliding Window RAM Cache Manager (Max 10 messages per customer, 5-min inactivity eviction, auto re-hydration from DB)
 func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMessage {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
@@ -227,8 +242,9 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 							}
 						}
 
-						if strings.TrimSpace(msgContent) != "" {
-							dbMessages = append(dbMessages, ChatMessage{Role: msgRole, Content: msgContent})
+						cleanMsg := compactText(msgContent, 400)
+						if cleanMsg != "" {
+							dbMessages = append(dbMessages, ChatMessage{Role: msgRole, Content: cleanMsg})
 						}
 					}
 				}
@@ -252,16 +268,17 @@ func updateSlidingWindowRAM(username, customerPhone, role, text string) []ChatMe
 			normalRole = "assistant"
 		}
 
+		cleanText := compactText(text, 400)
 		alreadyPresent := false
 		if rehydrated && len(session.Messages) > 0 {
 			lastMsg := session.Messages[len(session.Messages)-1]
-			if lastMsg.Role == normalRole && lastMsg.Content == text {
+			if lastMsg.Role == normalRole && lastMsg.Content == cleanText {
 				alreadyPresent = true
 			}
 		}
 
-		if !alreadyPresent {
-			session.Messages = append(session.Messages, ChatMessage{Role: normalRole, Content: text})
+		if !alreadyPresent && cleanText != "" {
+			session.Messages = append(session.Messages, ChatMessage{Role: normalRole, Content: cleanText})
 		}
 	}
 
@@ -314,7 +331,7 @@ func GetCatalogContext(username string) string {
 		return ""
 	}
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
-	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, 'custom'), COALESCE(whatsapp_catalog_link, '') 
+	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, ''), COALESCE(whatsapp_catalog_link, '') 
 		FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, cleanUsr)
 	if err != nil {
 		return ""
@@ -322,24 +339,37 @@ func GetCatalogContext(username string) string {
 	defer rows.Close()
 
 	var sb strings.Builder
-	sb.WriteString("\n\n=== LIVE BUSINESS PRODUCT CATALOG & PRICING ===\n")
-	count := 0
+	hasProducts := false
 	for rows.Next() {
 		var name, price, desc, unitType, waCatalogLink string
 		if err := rows.Scan(&name, &price, &desc, &unitType, &waCatalogLink); err == nil {
-			count++
-			linkStr := ""
-			if waCatalogLink != "" {
-				linkStr = fmt.Sprintf(" [WhatsApp Catalog Link: %s]", waCatalogLink)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
 			}
-			sb.WriteString(fmt.Sprintf("%d. %s (Price: %s) [Unit: %s]%s - Details: %s\n", count, name, price, unitType, linkStr, desc))
+			if !hasProducts {
+				sb.WriteString("Products:\n")
+				hasProducts = true
+			}
+			price = strings.TrimSpace(price)
+			line := "- " + name
+			if price != "" {
+				line += ": " + price
+				unitType = strings.TrimSpace(unitType)
+				if unitType != "" && unitType != "custom" {
+					line += "/" + unitType
+				}
+			}
+			if desc = strings.TrimSpace(desc); desc != "" {
+				line += " - " + desc
+			}
+			if waCatalogLink = strings.TrimSpace(waCatalogLink); waCatalogLink != "" {
+				line += " (" + waCatalogLink + ")"
+			}
+			sb.WriteString(line + "\n")
 		}
 	}
-	if count == 0 {
-		return ""
-	}
-	sb.WriteString("=== END OF PRODUCT CATALOG (Use this exact pricing and details when customers ask.) ===\n")
-	return sb.String()
+	return strings.TrimSpace(sb.String())
 }
 
 // 2. Main AI Auto-Reply Generator
@@ -362,15 +392,16 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		return "", ""
 	}
 
-	model := "llama-3.3-70b-versatile"
+	model := "llama-3.1-8b-instant"
 	temp := 0.7
 	importCatalog := true
 	if DB != nil {
-		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, true) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
+		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.1-8b-instant'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, true) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
 	}
 
-	if strings.TrimSpace(systemPrompt) == "" {
-		systemPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
+	sysPrompt := strings.TrimSpace(systemPrompt)
+	if sysPrompt == "" {
+		sysPrompt = fmt.Sprintf("Assistant for @%s.", cleanUsr)
 	}
 
 	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
@@ -382,7 +413,10 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	if importCatalog {
 		catalogContext = GetCatalogContext(cleanUsr)
 	}
-	stableSysPrompt := systemPrompt + catalogContext + "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
+	stableSysPrompt := sysPrompt
+	if importCatalog && catalogContext != "" {
+		stableSysPrompt += "\n\n" + catalogContext
+	}
 
 	aiResponse, err := CallAIModelWithHistory(provider, model, temp, selectedApiKey, stableSysPrompt, history)
 	if err != nil || aiResponse == "" {
@@ -393,7 +427,7 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 	return aiResponse, ""
 }
 
-// 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & Prompt Caching)
+// 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & Minimal Token Prompt Caching)
 func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserConfigRAM) (string, string) {
 	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
 	cleanPhone := FormatPhone(customerPhone)
@@ -417,9 +451,9 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		return "", ""
 	}
 
-	sysPrompt := cfg.SystemPrompt
-	if strings.TrimSpace(sysPrompt) == "" {
-		sysPrompt = fmt.Sprintf("You are the 24/7 AI assistant for account @%s. Answer customer questions, provide pricing and product catalog information politely, and assist them in placing orders or getting help.", cleanUsr)
+	sysPrompt := strings.TrimSpace(cfg.SystemPrompt)
+	if sysPrompt == "" {
+		sysPrompt = fmt.Sprintf("Assistant for @%s.", cleanUsr)
 	}
 
 	// Fetch current sliding window (contains prior messages + latest incoming customer message)
@@ -430,9 +464,8 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 
 	stableSysPrompt := sysPrompt
 	if cfg.ImportCatalog && cfg.CatalogText != "" {
-		stableSysPrompt += cfg.CatalogText
+		stableSysPrompt += "\n\n" + cfg.CatalogText
 	}
-	stableSysPrompt += "\n\nYou are answering an inbound WhatsApp customer inquiry. Format pricing in rupees (₹), keep answers concise, helpful, and professional."
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
 	if err != nil || aiResponse == "" {
@@ -625,7 +658,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 }
 
 func callGeminiAPIWithHistory(apiKey, model string, temperature float64, sysPrompt string, history []ChatMessage) (string, error) {
-	candidateModels := []string{"gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"}
+	candidateModels := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"}
 
 	reqModel := strings.TrimSpace(model)
 	if reqModel != "" && !isNumericOrPhone(reqModel) && !strings.Contains(reqModel, "gemini-1.0") && !strings.Contains(reqModel, "gemini-pro") {

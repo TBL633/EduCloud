@@ -37,10 +37,59 @@ var (
 	phoneToJID   = make(map[string]types.JID)
 	lidCacheLock sync.RWMutex
 
+	// In-Flight Per-Customer AI Concurrency Lock (prevents overlapping replies until reply delivers)
+	customerInFlightMap  = make(map[string]bool)
+	customerInFlightLock sync.Mutex
+
 	// Live Chat Listeners (Browser SSE channels per user)
 	LiveChatStreams = make(map[string]chan map[string]string)
 	StreamLock      sync.Mutex
 )
+
+// formatQuotedWhatsAppMessage prepends a clean WhatsApp italic blockquote (> _"..."_) of the customer's message
+func formatQuotedWhatsAppMessage(customerMsg, aiReply string) string {
+	cleanCustomer := strings.TrimSpace(customerMsg)
+	cleanReply := strings.TrimSpace(aiReply)
+	if cleanReply == "" {
+		return ""
+	}
+	if cleanCustomer == "" {
+		return cleanReply
+	}
+
+	// Avoid duplicate blockquotes if already present
+	if strings.HasPrefix(cleanReply, ">") {
+		return cleanReply
+	}
+
+	// If customer sent a catalog order, make the quote block clean and readable
+	quoteSnippet := cleanCustomer
+	if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Order]:") {
+		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Order]:")
+		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
+			quoteSnippet = quoteSnippet[:idx]
+		}
+		quoteSnippet = "Catalog Order: " + strings.TrimSpace(quoteSnippet)
+	} else if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:") {
+		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:")
+		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
+			quoteSnippet = quoteSnippet[:idx]
+		}
+		quoteSnippet = "Catalog Inquiry: " + strings.TrimSpace(quoteSnippet)
+	}
+
+	// Flatten newlines into a compact single-line quote snippet
+	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\r\n", " ")
+	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\n", " ")
+	quoteSnippet = strings.Join(strings.Fields(quoteSnippet), " ")
+
+	runes := []rune(quoteSnippet)
+	if len(runes) > 95 {
+		quoteSnippet = string(runes[:92]) + "..."
+	}
+
+	return fmt.Sprintf("> _\"%s\"_\n\n%s", quoteSnippet, cleanReply)
+}
 
 // LoadLIDMapCache loads all LID -> Real Phone Number mappings from Neon DB into 0ms RAM
 func LoadLIDMapCache() {
@@ -546,59 +595,250 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, normalRole, messageText)
 }
 
-// Helper to extract text or label from any incoming WhatsApp message payload type
-func extractMessageText(msg *waE2E.Message) string {
+// isMediaMessage detects if an incoming WhatsApp payload contains media (photo, video, audio, sticker, doc, location, contact)
+func isMediaMessage(msg *waE2E.Message) bool {
 	if msg == nil {
-		return ""
+		return false
 	}
-	if text := msg.GetConversation(); text != "" {
-		return text
-	}
-	if ext := msg.GetExtendedTextMessage(); ext != nil && ext.GetText() != "" {
-		return ext.GetText()
-	}
-	if img := msg.GetImageMessage(); img != nil {
-		if img.GetCaption() != "" {
-			return img.GetCaption()
-		}
-		return "[Photo received]"
-	}
-	if vid := msg.GetVideoMessage(); vid != nil {
-		if vid.GetCaption() != "" {
-			return vid.GetCaption()
-		}
-		return "[Video received]"
-	}
-	if doc := msg.GetDocumentMessage(); doc != nil {
-		if doc.GetCaption() != "" {
-			return doc.GetCaption()
-		}
-		if doc.GetTitle() != "" {
-			return "[Document received: " + doc.GetTitle() + "]"
-		}
-		return "[Document received]"
-	}
-	if audio := msg.GetAudioMessage(); audio != nil {
-		return "[Voice message received]"
-	}
-	if sticker := msg.GetStickerMessage(); sticker != nil {
-		return "[Sticker received]"
-	}
-	if loc := msg.GetLocationMessage(); loc != nil {
-		return "[Location shared]"
+	if msg.GetImageMessage() != nil ||
+		msg.GetVideoMessage() != nil ||
+		msg.GetAudioMessage() != nil ||
+		msg.GetDocumentMessage() != nil ||
+		msg.GetStickerMessage() != nil ||
+		msg.GetLocationMessage() != nil ||
+		msg.GetContactMessage() != nil ||
+		msg.GetContactsArrayMessage() != nil {
+		return true
 	}
 	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
-		return extractMessageText(ephem.GetMessage())
+		return isMediaMessage(ephem.GetMessage())
 	}
 	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
-		return extractMessageText(viewOnce.GetMessage())
+		return isMediaMessage(viewOnce.GetMessage())
 	}
 	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
-		return extractMessageText(viewOnceV2.GetMessage())
+		return isMediaMessage(viewOnceV2.GetMessage())
 	}
 	if edited := msg.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
 		if protoMsg := edited.GetMessage().GetProtocolMessage(); protoMsg != nil && protoMsg.GetEditedMessage() != nil {
-			return extractMessageText(protoMsg.GetEditedMessage())
+			return isMediaMessage(protoMsg.GetEditedMessage())
+		}
+	}
+	return false
+}
+
+// findCatalogProductMatch looks up product in Neon DB by name to fetch price, description, and whatsapp_catalog_link
+func findCatalogProductMatch(username, title string) (string, string, string) {
+	if DB == nil || strings.TrimSpace(title) == "" {
+		return "", "", ""
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanTitle := strings.TrimSpace(title)
+
+	var price, desc, waCatalogLink string
+	err := DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
+		FROM products 
+		WHERE LOWER(username)=LOWER($1) AND LOWER(TRIM(name))=LOWER($2) LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
+	if err != nil {
+		_ = DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
+			FROM products 
+			WHERE LOWER(username)=LOWER($1) AND (LOWER($2) LIKE '%' || LOWER(TRIM(name)) || '%' OR LOWER(TRIM(name)) LIKE '%' || LOWER($2) || '%') LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
+	}
+	return price, desc, waCatalogLink
+}
+
+// Helper to extract text or label from any incoming WhatsApp message payload type, including Catalog Orders and Products
+func extractMessageText(username string, msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
+	}
+
+	// If message is media, return empty so no reply is triggered
+	if isMediaMessage(msg) {
+		return ""
+	}
+
+	if text := msg.GetConversation(); text != "" {
+		return text
+	}
+
+	if ext := msg.GetExtendedTextMessage(); ext != nil {
+		text := strings.TrimSpace(ext.GetText())
+		cfg := GetUserConfigRAM(username)
+		importCat := cfg == nil || cfg.ImportCatalog
+
+		// If message quotes a catalog item or order
+		if ctx := ext.GetContextInfo(); ctx != nil && ctx.GetQuotedMessage() != nil {
+			quoted := ctx.GetQuotedMessage()
+			if order := quoted.GetOrderMessage(); order != nil {
+				title := strings.TrimSpace(order.GetOrderTitle())
+				if title != "" {
+					linkPart := ""
+					if importCat {
+						_, _, waLink := findCatalogProductMatch(username, title)
+						if waLink != "" {
+							linkPart = fmt.Sprintf(" (Catalog Link: %s)", waLink)
+						}
+					}
+					if text != "" {
+						return fmt.Sprintf("[Inquiry for Catalog Item: %s%s] %s", title, linkPart, text)
+					}
+					return fmt.Sprintf("[Inquiry for Catalog Item: %s%s]", title, linkPart)
+				}
+			}
+			if prod := quoted.GetProductMessage(); prod != nil && prod.GetProduct() != nil {
+				title := strings.TrimSpace(prod.GetProduct().GetTitle())
+				if title != "" {
+					linkPart := ""
+					if importCat {
+						_, _, waLink := findCatalogProductMatch(username, title)
+						if waLink != "" {
+							linkPart = fmt.Sprintf(" (Catalog Link: %s)", waLink)
+						}
+					}
+					if text != "" {
+						return fmt.Sprintf("[Inquiry for Catalog Item: %s%s] %s", title, linkPart, text)
+					}
+					return fmt.Sprintf("[Inquiry for Catalog Item: %s%s]", title, linkPart)
+				}
+			}
+		}
+		if text != "" {
+			return text
+		}
+	}
+
+	// 1. WhatsApp Catalog / Cart OrderMessage
+	if order := msg.GetOrderMessage(); order != nil {
+		var parts []string
+		title := strings.TrimSpace(order.GetOrderTitle())
+		if title != "" {
+			parts = append(parts, fmt.Sprintf("Product: \"%s\"", title))
+		}
+		itemCount := order.GetItemCount()
+		if itemCount > 0 {
+			parts = append(parts, fmt.Sprintf("Qty: %d", itemCount))
+		}
+		amt := order.GetTotalAmount1000()
+		currency := order.GetTotalCurrencyCode()
+		orderPrice := ""
+		if amt > 0 {
+			price := float64(amt) / 1000.0
+			if currency == "INR" || currency == "" {
+				orderPrice = fmt.Sprintf("₹%.2f", price)
+			} else {
+				orderPrice = fmt.Sprintf("%s %.2f", currency, price)
+			}
+			parts = append(parts, fmt.Sprintf("Price: %s", orderPrice))
+		}
+
+		cfg := GetUserConfigRAM(username)
+		importCat := cfg == nil || cfg.ImportCatalog
+
+		// Match product with database catalog to fetch description & WhatsApp catalog link ONLY if user enabled import_catalog_details
+		if importCat && title != "" && username != "" {
+			matchedPrice, desc, waLink := findCatalogProductMatch(username, title)
+			if waLink != "" {
+				parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
+			}
+			if desc != "" {
+				parts = append(parts, fmt.Sprintf("Details: %s", desc))
+			}
+			if orderPrice == "" && matchedPrice != "" {
+				parts = append(parts, fmt.Sprintf("Catalog Price: %s", matchedPrice))
+			}
+		}
+
+		userNote := strings.TrimSpace(order.GetMessage())
+		if userNote != "" {
+			parts = append(parts, fmt.Sprintf("Customer Note: \"%s\"", userNote))
+		}
+		if len(parts) > 0 {
+			return "[WhatsApp Catalog Order]: " + strings.Join(parts, " | ")
+		}
+		return "[WhatsApp Catalog Order received]"
+	}
+
+	// 2. WhatsApp Single Product Message from Catalog
+	if prod := msg.GetProductMessage(); prod != nil {
+		var parts []string
+		title := ""
+		if snapshot := prod.GetProduct(); snapshot != nil {
+			title = strings.TrimSpace(snapshot.GetTitle())
+			if title != "" {
+				parts = append(parts, fmt.Sprintf("Product: \"%s\"", title))
+			}
+			amt := snapshot.GetPriceAmount1000()
+			currency := snapshot.GetCurrencyCode()
+			if amt > 0 {
+				price := float64(amt) / 1000.0
+				if currency == "INR" || currency == "" {
+					parts = append(parts, fmt.Sprintf("Price: ₹%.2f", price))
+				} else {
+					parts = append(parts, fmt.Sprintf("Price: %s %.2f", currency, price))
+				}
+			}
+			desc := strings.TrimSpace(snapshot.GetDescription())
+			if desc != "" {
+				parts = append(parts, fmt.Sprintf("Details: %s", desc))
+			}
+		}
+
+		cfg := GetUserConfigRAM(username)
+		importCat := cfg == nil || cfg.ImportCatalog
+		if importCat && title != "" && username != "" {
+			_, _, waLink := findCatalogProductMatch(username, title)
+			if waLink != "" {
+				parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
+			}
+		}
+
+		if body := strings.TrimSpace(prod.GetBody()); body != "" {
+			parts = append(parts, fmt.Sprintf("Customer Note: \"%s\"", body))
+		}
+		if len(parts) > 0 {
+			return "[WhatsApp Catalog Product Inquiry]: " + strings.Join(parts, " | ")
+		}
+		return "[WhatsApp Catalog Product Inquiry received]"
+	}
+
+	// 3. Interactive or List Response
+	if listResp := msg.GetListResponseMessage(); listResp != nil {
+		title := strings.TrimSpace(listResp.GetTitle())
+		desc := strings.TrimSpace(listResp.GetDescription())
+		if title != "" && desc != "" {
+			return title + " - " + desc
+		}
+		if title != "" {
+			return title
+		}
+		if desc != "" {
+			return desc
+		}
+	}
+	if btnResp := msg.GetButtonsResponseMessage(); btnResp != nil {
+		if text := strings.TrimSpace(btnResp.GetResponseDisplayText()); text != "" {
+			return text
+		}
+	}
+	if tmplResp := msg.GetTemplateButtonReplyMessage(); tmplResp != nil {
+		if text := strings.TrimSpace(tmplResp.GetSelectedDisplayText()); text != "" {
+			return text
+		}
+	}
+
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return extractMessageText(username, ephem.GetMessage())
+	}
+	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
+		return extractMessageText(username, viewOnce.GetMessage())
+	}
+	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
+		return extractMessageText(username, viewOnceV2.GetMessage())
+	}
+	if edited := msg.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
+		if protoMsg := edited.GetMessage().GetProtocolMessage(); protoMsg != nil && protoMsg.GetEditedMessage() != nil {
+			return extractMessageText(username, protoMsg.GetEditedMessage())
 		}
 	}
 	return ""
@@ -621,10 +861,29 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return // Ignore invalid or broadcast JIDs
 		}
 
-		msgText := extractMessageText(v.Message)
+		// 1. Requirement 1: Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Location, Contact) without reply
+		if isMediaMessage(v.Message) {
+			log.Printf("🚫 Incoming message from +%s (@%s) contains media (photo/video/audio/sticker/doc). Ignored without reply as requested.", senderPhone, username)
+			return
+		}
+
+		msgText := extractMessageText(username, v.Message)
 		if msgText == "" {
 			return
 		}
+
+		lockKey := username + "_" + senderPhone
+
+		// 0. Concurrency Lock: While reply is in-flight for this customer, ignore incoming messages
+		// to maintain polite conversational order and prevent overlapping AI replies
+		customerInFlightLock.Lock()
+		if customerInFlightMap[lockKey] {
+			customerInFlightLock.Unlock()
+			log.Printf("⏳ [Customer Concurrency Lock] Inbound message from +%s (@%s) dropped/ignored while previous reply is in-flight: %s", senderPhone, username, msgText)
+			return
+		}
+		customerInFlightMap[lockKey] = true
+		customerInFlightLock.Unlock()
 
 		log.Printf("📩 Incoming message received from +%s (@%s): %s", senderPhone, username, msgText)
 
@@ -636,11 +895,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 		lidCacheLock.Unlock()
 
-		// 1. Instant Asynchronous Blue Ticks (MarkRead) & Typing Status Indicator
+		// 1. Instant Asynchronous Blue Ticks (MarkRead)
 		if client != nil {
 			go func() {
 				_ = client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-				_ = client.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 			}()
 		}
 
@@ -657,8 +915,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}
 		}()
 
-		// 4. Concurrent Ultra-Fast AI Reply Generation & Delivery Pipeline
+		// 4. Concurrent Ultra-Fast AI Reply Generation with Continuous WhatsApp Typing Loop
 		go func() {
+			defer func() {
+				customerInFlightLock.Lock()
+				delete(customerInFlightMap, lockKey)
+				customerInFlightLock.Unlock()
+			}()
+
 			cfg := GetUserConfigRAM(username)
 
 			if cfg != nil && cfg.AutoReply {
@@ -667,32 +931,52 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					activeClient = GetOrCreateClient(username)
 				}
 
+				// Continuous WhatsApp Typing Loop: pulses every 2.0s so WhatsApp NEVER hides the "typing..." logo until final delivery
+				stopTyping := make(chan struct{})
+				if activeClient != nil {
+					go func() {
+						ticker := time.NewTicker(2 * time.Second)
+						defer ticker.Stop()
+						_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+						for {
+							select {
+							case <-stopTyping:
+								_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
+								return
+							case <-ticker.C:
+								_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+							}
+						}
+					}()
+				}
+
 				// Generate AI reply instantly from RAM sliding window and cached system prompt
 				replyText, imgURL := GenerateAIReplyRAM(username, senderPhone, msgText, cfg)
 
-				// Clear typing indicator before dispatch
-				if activeClient != nil {
-					_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
-				}
+				// Stop continuous typing indicator
+				close(stopTyping)
 
 				var deliveredReply string
 
+				// Format reply with top italic blockquote: > _"customer message"_
+				formattedWhatsAppReply := formatQuotedWhatsAppMessage(msgText, replyText)
+
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, replyText)
+					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, formattedWhatsAppReply)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
 					} else {
 						log.Printf("⚡ AI image reply delivered to +%s", senderPhone)
 					}
-					deliveredReply = "[Image Sent] " + replyText
+					deliveredReply = "[Image Sent] " + formattedWhatsAppReply
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendMessage(activeClient, senderPhone, replyText)
+					sendErr := SendMessage(activeClient, senderPhone, formattedWhatsAppReply)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI text reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, replyText)
+						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, formattedWhatsAppReply)
 					}
-					deliveredReply = replyText
+					deliveredReply = formattedWhatsAppReply
 				}
 
 				if deliveredReply != "" {

@@ -162,6 +162,9 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// Invalidate RAM cache so updated product catalog updates in AI memory immediately
+			whatsapp.InvalidateUserConfigCache(username)
+
 			respondJSON(w, 200, map[string]interface{}{
 				"status":  "success",
 				"id":      newID,
@@ -181,6 +184,7 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		if idStr != "" && DB != nil {
 			_, err := DB.Exec("DELETE FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username)
 			if err == nil {
+				whatsapp.InvalidateUserConfigCache(username)
 				respondJSON(w, 200, map[string]string{"status": "success", "message": "Product deleted from database"})
 				return
 			}
