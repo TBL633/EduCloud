@@ -1166,7 +1166,7 @@
                 const res = await fetch(`/api/business/dashboard?username=${encodeURIComponent(username)}`);
                 const data = await res.json();
                 if (document.getElementById('biz-stat-campaigns')) document.getElementById('biz-stat-campaigns').innerText = data.active_campaigns ?? 0;
-                if (document.getElementById('biz-stat-leads')) document.getElementById('biz-stat-leads').innerText = data.leads_captured ?? 0;
+                if (document.getElementById('biz-stat-leads')) document.getElementById('biz-stat-leads').innerText = data.leads_captured ?? data.total_leads ?? 0;
                 if (document.getElementById('biz-stat-delivered')) document.getElementById('biz-stat-delivered').innerText = (data.delivered_messages ?? 0).toLocaleString();
                 if (document.getElementById('biz-stat-ai')) document.getElementById('biz-stat-ai').innerText = (data.ai_replies ?? 0).toLocaleString();
             } catch (err) {
@@ -1185,7 +1185,7 @@
                 const data = await res.json();
                 const leads = data.leads || [];
                 if (leads.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-500">No leads captured yet. Your WhatsApp AI will automatically qualify inbound inquiries.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-500">No leads captured yet. Leads will appear automatically when customers purchase or order catalog items!</td></tr>`;
                     return;
                 }
                 tbody.innerHTML = leads.map(l => `
@@ -1193,13 +1193,13 @@
                         <td class="p-3 font-mono font-bold text-white flex items-center gap-2">
                             <i class="fa-brands fa-whatsapp text-emerald-400"></i> ${l.phone || l.customer_phone}
                         </td>
-                        <td class="p-3 text-slate-300 max-w-xs truncate">${l.inquiry || l.inquiry_text || 'Inquired about pricing'}</td>
+                        <td class="p-3 text-slate-300 max-w-xs truncate" title="${(l.inquiry || l.inquiry_text || '').replace(/"/g, '&quot;')}">${l.inquiry || l.inquiry_text || 'Order / Inquiry'}</td>
                         <td class="p-3">
                             <span class="px-2 py-0.5 text-[10px] font-mono rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                ${l.status || 'Captured'}
+                                ${l.status || 'Order Placed'}
                             </span>
                         </td>
-                        <td class="p-3 font-mono text-[11px] text-slate-500">${l.time || 'Today'}</td>
+                        <td class="p-3 font-mono text-[11px] text-slate-500">${l.created_at || l.time || 'Today'}</td>
                         <td class="p-3 text-right">
                             <button type="button" onclick="openLeadChatInWhatsAppSection('${(l.phone || l.customer_phone).replace(/\D/g, '')}')" class="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition cursor-pointer">
                                 <i class="fa-solid fa-comments text-[10px]"></i> Open Chat (Last 10)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -605,7 +606,6 @@ func isMediaMessage(msg *waE2E.Message) bool {
 		msg.GetAudioMessage() != nil ||
 		msg.GetDocumentMessage() != nil ||
 		msg.GetStickerMessage() != nil ||
-		msg.GetLocationMessage() != nil ||
 		msg.GetContactMessage() != nil ||
 		msg.GetContactsArrayMessage() != nil {
 		return true
@@ -647,13 +647,94 @@ func findCatalogProductMatch(username, title string) (string, string, string) {
 	return price, desc, waCatalogLink
 }
 
-// Helper to extract text or label from any incoming WhatsApp message payload type, including Catalog Orders and Products
-func extractMessageText(username string, msg *waE2E.Message) string {
+// Reverse Geocoding API response struct (OpenStreetMap Nominatim)
+type NominatimResponse struct {
+	DisplayName string `json:"display_name"`
+	Address     struct {
+		Road          string `json:"road"`
+		Neighbourhood string `json:"neighbourhood"`
+		Suburb        string `json:"suburb"`
+		City          string `json:"city"`
+		Town          string `json:"town"`
+		Village       string `json:"village"`
+		County        string `json:"county"`
+		State         string `json:"state"`
+		Postcode      string `json:"postcode"`
+		Country       string `json:"country"`
+	} `json:"address"`
+}
+
+var nominatimHTTPClient = &http.Client{
+	Timeout: 4 * time.Second,
+}
+
+// FetchReverseGeocodeLocation resolves GPS coordinates (lat, lon) to human-readable address & place name via OpenStreetMap Nominatim
+func FetchReverseGeocodeLocation(lat, lon float64) (shortPlace string, fullAddress string) {
+	if lat == 0 && lon == 0 {
+		return "", ""
+	}
+
+	apiURL := fmt.Sprintf("https://nominatim.openstreetmap.org/reverse?format=json&lat=%f&lon=%f&zoom=18&addressdetails=1", lat, lon)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", ""
+	}
+	// OpenStreetMap requires a distinctive User-Agent header
+	req.Header.Set("User-Agent", "EduCloud-WhatsApp-Bot/1.0 (Location-Resolver)")
+
+	resp, err := nominatimHTTPClient.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", ""
+	}
+
+	var geoData NominatimResponse
+	if err := json.Unmarshal(body, &geoData); err != nil {
+		return "", ""
+	}
+
+	if geoData.DisplayName == "" {
+		return "", ""
+	}
+
+	// Concise short place name for quick display
+	short := geoData.Address.City
+	if short == "" {
+		short = geoData.Address.Town
+	}
+	if short == "" {
+		short = geoData.Address.Neighbourhood
+	}
+	if short == "" {
+		short = geoData.Address.Suburb
+	}
+	if short == "" {
+		short = geoData.Address.Village
+	}
+	if short == "" {
+		short = geoData.Address.Road
+	}
+
+	return short, geoData.DisplayName
+}
+
+// Helper to extract text or label from any incoming WhatsApp message payload type, including Catalog Orders, Products, and Locations
+func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
 	}
 
-	// If message is media, return empty so no reply is triggered
+	// If message is media (photo/video/audio/sticker/doc/contact), return empty so no reply is triggered
 	if isMediaMessage(msg) {
 		return ""
 	}
@@ -708,44 +789,159 @@ func extractMessageText(username string, msg *waE2E.Message) string {
 		}
 	}
 
+	// 0. WhatsApp Shared Location (GPS coordinates, landmark, address, Google Maps link, and OpenStreetMap reverse geocoding)
+	if loc := msg.GetLocationMessage(); loc != nil {
+		lat := loc.GetDegreesLatitude()
+		lng := loc.GetDegreesLongitude()
+		name := strings.TrimSpace(loc.GetName())
+		addr := strings.TrimSpace(loc.GetAddress())
+		mapsURL := fmt.Sprintf("https://maps.google.com/?q=%.6f,%.6f", lat, lng)
+
+		// Case 1: If WhatsApp provided the place name / searched landmark
+		// Case 2: If customer sent "Current Location", name & address are empty. Resolve exact name & full address via OpenStreetMap Nominatim!
+		if name == "" || addr == "" {
+			shortLoc, fullAddr := FetchReverseGeocodeLocation(lat, lng)
+			if name == "" && shortLoc != "" {
+				name = shortLoc
+			}
+			if addr == "" && fullAddr != "" {
+				addr = fullAddr
+			}
+		}
+
+		var parts []string
+		if name != "" {
+			parts = append(parts, fmt.Sprintf("Location / Area: \"%s\"", name))
+		}
+		if addr != "" {
+			parts = append(parts, fmt.Sprintf("Full Address: \"%s\"", addr))
+		}
+		parts = append(parts, fmt.Sprintf("Coordinates: %.6f, %.6f", lat, lng))
+		parts = append(parts, fmt.Sprintf("Google Maps Link: %s", mapsURL))
+
+		return "[Customer Shared Location]: " + strings.Join(parts, " | ")
+	}
+
+	if liveLoc := msg.GetLiveLocationMessage(); liveLoc != nil {
+		lat := liveLoc.GetDegreesLatitude()
+		lng := liveLoc.GetDegreesLongitude()
+		mapsURL := fmt.Sprintf("https://maps.google.com/?q=%.6f,%.6f", lat, lng)
+
+		var parts []string
+		shortLoc, fullAddr := FetchReverseGeocodeLocation(lat, lng)
+		if shortLoc != "" {
+			parts = append(parts, fmt.Sprintf("Location / Area: \"%s\"", shortLoc))
+		}
+		if fullAddr != "" {
+			parts = append(parts, fmt.Sprintf("Full Address: \"%s\"", fullAddr))
+		}
+		parts = append(parts, fmt.Sprintf("Coordinates: %.6f, %.6f", lat, lng))
+		parts = append(parts, fmt.Sprintf("Google Maps Link: %s", mapsURL))
+
+		return "[Customer Shared Live Location]: " + strings.Join(parts, " | ")
+	}
+
 	// 1. WhatsApp Catalog / Cart OrderMessage
 	if order := msg.GetOrderMessage(); order != nil {
 		var parts []string
-		title := strings.TrimSpace(order.GetOrderTitle())
-		if title != "" {
-			parts = append(parts, fmt.Sprintf("Product: \"%s\"", title))
+		orderTitle := strings.TrimSpace(order.GetOrderTitle())
+		orderID := strings.TrimSpace(order.GetOrderID())
+		token := strings.TrimSpace(order.GetToken())
+
+		cfg := GetUserConfigRAM(username)
+		importCat := cfg == nil || cfg.ImportCatalog
+
+		// Step A: Fetch actual itemized products from WhatsApp Commerce API using client.GetOrderDetails
+		var productItems []string
+		if client != nil && orderID != "" && token != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			details, err := client.GetOrderDetails(ctx, orderID, token)
+			cancel()
+			if err == nil && details != nil && len(details.Products) > 0 {
+				for _, p := range details.Products {
+					pName := strings.TrimSpace(p.Name)
+					if pName != "" {
+						qStr := ""
+						if p.Quantity > 1 {
+							qStr = fmt.Sprintf(" (Qty: %d)", p.Quantity)
+						}
+						productItems = append(productItems, pName+qStr)
+						if importCat && username != "" {
+							_, desc, waLink := findCatalogProductMatch(username, pName)
+							if waLink != "" {
+								parts = append(parts, fmt.Sprintf("Catalog Link (%s): %s", pName, waLink))
+							}
+							if desc != "" {
+								parts = append(parts, fmt.Sprintf("Details (%s): %s", pName, desc))
+							}
+						}
+					}
+				}
+			}
 		}
+
+		// Step B: Resolve real product name(s) vs store account name
+		if len(productItems) > 0 {
+			parts = append([]string{fmt.Sprintf("Product: \"%s\"", strings.Join(productItems, ", "))}, parts...)
+		} else {
+			// Fallback: Check if orderTitle is just the store/business account name or a genuine product title
+			var accountName string
+			if DB != nil {
+				_ = DB.QueryRow("SELECT COALESCE(account_name, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&accountName)
+			}
+			isAccountName := strings.EqualFold(orderTitle, strings.TrimSpace(accountName)) ||
+				strings.EqualFold(orderTitle, strings.TrimSpace(username)) ||
+				strings.EqualFold(orderTitle, "Order") || strings.EqualFold(orderTitle, "Cart") ||
+				strings.EqualFold(orderTitle, "Catalog")
+
+			if !isAccountName && orderTitle != "" {
+				parts = append([]string{fmt.Sprintf("Product: \"%s\"", orderTitle)}, parts...)
+				if importCat && username != "" {
+					_, desc, waLink := findCatalogProductMatch(username, orderTitle)
+					if waLink != "" {
+						parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
+					}
+					if desc != "" {
+						parts = append(parts, fmt.Sprintf("Details: %s", desc))
+					}
+				}
+			} else {
+				// orderTitle matched the account name; attempt to resolve product from Neon DB catalog by price
+				amt := order.GetTotalAmount1000()
+				var matchedName, matchedLink, matchedDesc string
+				if DB != nil && amt > 0 {
+					priceStr := fmt.Sprintf("%.2f", float64(amt)/1000.0)
+					intPriceStr := fmt.Sprintf("%d", amt/1000)
+					_ = DB.QueryRow(`SELECT name, COALESCE(whatsapp_catalog_link, ''), COALESCE(description, '') 
+						FROM products WHERE LOWER(username)=LOWER($1) AND (price=$2 OR price=$3 OR price LIKE '%' || $3 || '%') LIMIT 1`,
+						username, priceStr, intPriceStr).Scan(&matchedName, &matchedLink, &matchedDesc)
+				}
+				if matchedName != "" {
+					parts = append([]string{fmt.Sprintf("Product: \"%s\"", matchedName)}, parts...)
+					if importCat && matchedLink != "" {
+						parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", matchedLink))
+					}
+					if importCat && matchedDesc != "" {
+						parts = append(parts, fmt.Sprintf("Details: %s", matchedDesc))
+					}
+				} else if orderTitle != "" {
+					parts = append([]string{fmt.Sprintf("Catalog Order via %s", orderTitle)}, parts...)
+				}
+			}
+		}
+
 		itemCount := order.GetItemCount()
 		if itemCount > 0 {
 			parts = append(parts, fmt.Sprintf("Qty: %d", itemCount))
 		}
 		amt := order.GetTotalAmount1000()
 		currency := order.GetTotalCurrencyCode()
-		orderPrice := ""
 		if amt > 0 {
 			price := float64(amt) / 1000.0
 			if currency == "INR" || currency == "" {
-				orderPrice = fmt.Sprintf("₹%.2f", price)
+				parts = append(parts, fmt.Sprintf("Total Price: ₹%.2f", price))
 			} else {
-				orderPrice = fmt.Sprintf("%s %.2f", currency, price)
-			}
-			parts = append(parts, fmt.Sprintf("Price: %s", orderPrice))
-		}
-
-		cfg := GetUserConfigRAM(username)
-		importCat := cfg == nil || cfg.ImportCatalog
-
-		// Match product with database catalog to fetch description & WhatsApp catalog link ONLY if user enabled import_catalog_details
-		if importCat && title != "" && username != "" {
-			matchedPrice, desc, waLink := findCatalogProductMatch(username, title)
-			if waLink != "" {
-				parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
-			}
-			if desc != "" {
-				parts = append(parts, fmt.Sprintf("Details: %s", desc))
-			}
-			if orderPrice == "" && matchedPrice != "" {
-				parts = append(parts, fmt.Sprintf("Catalog Price: %s", matchedPrice))
+				parts = append(parts, fmt.Sprintf("Total Price: %s %.2f", currency, price))
 			}
 		}
 
@@ -834,20 +1030,139 @@ func extractMessageText(username string, msg *waE2E.Message) string {
 	}
 
 	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
-		return extractMessageText(username, ephem.GetMessage())
+		return extractMessageText(username, client, ephem.GetMessage())
 	}
 	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
-		return extractMessageText(username, viewOnce.GetMessage())
+		return extractMessageText(username, client, viewOnce.GetMessage())
 	}
 	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
-		return extractMessageText(username, viewOnceV2.GetMessage())
+		return extractMessageText(username, client, viewOnceV2.GetMessage())
 	}
 	if edited := msg.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
 		if protoMsg := edited.GetMessage().GetProtocolMessage(); protoMsg != nil && protoMsg.GetEditedMessage() != nil {
-			return extractMessageText(username, protoMsg.GetEditedMessage())
+			return extractMessageText(username, client, protoMsg.GetEditedMessage())
 		}
 	}
 	return ""
+}
+
+// CheckAndProcessLead determines if incoming message represents a product purchase or order, saves it as a lead, and dispatches automated WhatsApp alert to notification_phone
+func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone string, msgText string, msg *waE2E.Message) {
+	if DB == nil || senderPhone == "" || strings.TrimSpace(msgText) == "" {
+		return
+	}
+
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	isLead := false
+	leadStatus := ""
+	leadDetails := ""
+
+	// 1. WhatsApp Catalog Cart / OrderMessage (Direct Product Purchase/Order via Catalog)
+	if msg.GetOrderMessage() != nil || strings.HasPrefix(msgText, "[WhatsApp Catalog Order]") {
+		isLead = true
+		leadStatus = "Order Placed"
+		leadDetails = msgText
+	} else if msg.GetProductMessage() != nil || strings.HasPrefix(msgText, "[WhatsApp Catalog Product Inquiry]") || strings.HasPrefix(msgText, "[Inquiry for Catalog Item:") {
+		// Single product inquiry from catalog
+		isLead = true
+		leadStatus = "Catalog Product Inquiry"
+		leadDetails = msgText
+	} else {
+		// 2. Chat-based Purchase or Order Intent
+		// Only consider as lead if customer clearly expressed intent to buy, order, pay, book, or COD
+		lower := strings.ToLower(msgText)
+		orderPhrases := []string{
+			"order kardo", "order karna", "order place", "confirm order", "order now",
+			"kharidna hai", "lena hai", "buy now", "want to buy", "i want to buy",
+			"purchase", "booking karna", "book kardo", "cod chahiye", "cash on delivery",
+			"payment done", "payment kar diya", "paid", "advance payment", "deliver kardo",
+			"place order", "send invoice", "bill send karo", "mujhe order karna hai",
+		}
+		for _, kw := range orderPhrases {
+			if strings.Contains(lower, kw) {
+				isLead = true
+				leadStatus = "Purchase Request"
+				leadDetails = msgText
+				break
+			}
+		}
+	}
+
+	if !isLead {
+		return
+	}
+
+	// Persist to leads table in DB
+	var leadID int
+	err := DB.QueryRow(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+		VALUES ($1, $2, $3, $4, NOW()) RETURNING id`,
+		cleanUsr, senderPhone, leadDetails, leadStatus).Scan(&leadID)
+	if err != nil {
+		log.Printf("⚠️ Error inserting captured lead into DB: %v", err)
+	} else {
+		log.Printf("🎯 [Lead Captured #%d] +%s (@%s) -> %s", leadID, senderPhone, cleanUsr, leadStatus)
+	}
+
+	// Dispatch Automated WhatsApp Lead Alert directly to the notification_phone configured in AI Responder
+	go dispatchLeadAlertWhatsApp(cleanUsr, client, senderPhone, leadDetails, leadStatus)
+}
+
+// dispatchLeadAlertWhatsApp sends immediate notification to the configured notification_phone in AI Responder settings
+func dispatchLeadAlertWhatsApp(username string, client *whatsmeow.Client, customerPhone, details, status string) {
+	if DB == nil {
+		return
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	var notifPhone string
+	_ = DB.QueryRow("SELECT COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&notifPhone)
+
+	notifPhone = strings.TrimSpace(notifPhone)
+	if notifPhone == "" {
+		log.Printf("ℹ️ [Lead Alert] No notification_phone configured for @%s in AI Responder. Skipping WhatsApp alert dispatch.", cleanUsr)
+		return
+	}
+
+	targetPhone := FormatPhone(notifPhone)
+	if targetPhone == "" || len(targetPhone) < 10 {
+		log.Printf("⚠️ [Lead Alert] Invalid notification_phone (+%s) for @%s", notifPhone, cleanUsr)
+		return
+	}
+
+	// Avoid notifying the customer themselves if customerPhone == targetPhone
+	if targetPhone == customerPhone {
+		return
+	}
+
+	activeClient := client
+	if activeClient == nil || !activeClient.IsLoggedIn() {
+		activeClient = GetOrCreateClient(cleanUsr)
+	}
+
+	cleanCustomer := FormatPhone(customerPhone)
+	locTime := time.Now().Format("02 Jan 15:04")
+
+	alertMsg := fmt.Sprintf("🛍️ *NEW LEAD / ORDER RECEIVED!* 🛍️\n\n"+
+		"• *Account*: @%s\n"+
+		"• *Customer Phone*: +%s\n"+
+		"• *Status*: %s\n"+
+		"• *Time*: %s\n\n"+
+		"📦 *Order / Product Details*:\n%s\n\n"+
+		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s",
+		cleanUsr, cleanCustomer, status, locTime, details, cleanCustomer)
+
+	// Dispatch SSE event for web portal
+	PushToLiveChat(cleanUsr, targetPhone, alertMsg, "lead_alert")
+
+	if activeClient != nil && activeClient.IsLoggedIn() {
+		err := SendMessage(activeClient, targetPhone, alertMsg)
+		if err != nil {
+			log.Printf("⚠️ [Lead Alert] Failed to send WhatsApp lead alert to +%s: %v", targetPhone, err)
+		} else {
+			log.Printf("✅ [Lead Alert] Successfully delivered WhatsApp lead alert to +%s for customer +%s", targetPhone, cleanCustomer)
+		}
+	} else {
+		log.Printf("⚠️ [Lead Alert] WhatsApp client for @%s is not logged in; alert logged to Live Chat stream.", cleanUsr)
+	}
 }
 
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
@@ -867,13 +1182,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return // Ignore invalid or broadcast JIDs
 		}
 
-		// 1. Requirement 1: Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Location, Contact) without reply
+		// 1. Requirement 1: Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact) without reply
 		if isMediaMessage(v.Message) {
 			log.Printf("🚫 Incoming message from +%s (@%s) contains media (photo/video/audio/sticker/doc). Ignored without reply as requested.", senderPhone, username)
 			return
 		}
 
-		msgText := extractMessageText(username, v.Message)
+		msgText := extractMessageText(username, client, v.Message)
 		if msgText == "" {
 			return
 		}
@@ -912,13 +1227,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		_ = updateSlidingWindowRAM(username, senderPhone, "customer", msgText)
 		PushToLiveChat(username, senderPhone, msgText, "incoming")
 
-		// 3. Asynchronous Non-Blocking DB Persistence (0ms delay to AI execution pipeline)
+		// 3. Asynchronous Non-Blocking DB Persistence & Lead Qualification
 		go func() {
 			SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
-			if DB != nil {
-				_, _ = DB.Exec("INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Captured Lead', NOW())",
-					username, senderPhone, msgText)
-			}
+			CheckAndProcessLead(username, client, senderPhone, msgText, v.Message)
 		}()
 
 		// 4. Concurrent Ultra-Fast AI Reply Generation with Continuous WhatsApp Typing Loop

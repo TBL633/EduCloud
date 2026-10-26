@@ -24,7 +24,7 @@ func BusinessDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	if DB != nil {
 		_ = DB.QueryRow("SELECT COUNT(DISTINCT customer_phone) FROM customer_chats WHERE LOWER(username)=LOWER($1)", username).Scan(&totalChats)
 		_ = DB.QueryRow("SELECT COUNT(*) FROM products WHERE LOWER(username)=LOWER($1)", username).Scan(&totalProducts)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM leads WHERE LOWER(username)=LOWER($1)", username).Scan(&totalLeads)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM leads WHERE LOWER(username)=LOWER($1) AND status != 'Captured Lead'", username).Scan(&totalLeads)
 
 		var statusStr string
 		_ = DB.QueryRow("SELECT COALESCE(status, 'Disconnected'), COALESCE(wa_jid, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&statusStr, &waJID)
@@ -46,6 +46,7 @@ func BusinessDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		"total_chats":    totalChats,
 		"total_products": totalProducts,
 		"total_leads":    totalLeads,
+		"leads_captured": totalLeads,
 		"wa_connected":   waConnected,
 		"wa_jid":         waJID,
 	})
@@ -215,8 +216,8 @@ func LeadsHandler(w http.ResponseWriter, r *http.Request) {
 	var leads []LeadItem
 
 	if DB != nil {
-		rows, err := DB.Query(`SELECT id, COALESCE(customer_phone, ''), COALESCE(inquiry_text, ''), COALESCE(status, 'Captured'), COALESCE(TO_CHAR(created_at, 'DD Mon HH24:MI'), 'Recent')
-			FROM leads WHERE LOWER(username)=LOWER($1) AND LENGTH(customer_phone) >= 10 AND LENGTH(customer_phone) <= 13 AND customer_phone NOT LIKE '117%' AND customer_phone NOT LIKE '223%' ORDER BY id DESC LIMIT 50`, username)
+		rows, err := DB.Query(`SELECT id, COALESCE(customer_phone, ''), COALESCE(inquiry_text, ''), COALESCE(status, 'Order Placed'), COALESCE(TO_CHAR(created_at, 'DD Mon HH24:MI'), 'Recent')
+			FROM leads WHERE LOWER(username)=LOWER($1) AND status != 'Captured Lead' AND LENGTH(customer_phone) >= 10 AND LENGTH(customer_phone) <= 13 AND customer_phone NOT LIKE '117%' AND customer_phone NOT LIKE '223%' ORDER BY id DESC LIMIT 50`, username)
 
 		if err == nil {
 			defer rows.Close()
