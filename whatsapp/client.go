@@ -861,11 +861,22 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 				for _, p := range details.Products {
 					pName := strings.TrimSpace(p.Name)
 					if pName != "" {
-						qStr := ""
-						if p.Quantity > 1 {
-							qStr = fmt.Sprintf(" (Qty: %d)", p.Quantity)
+						qty := p.Quantity
+						if qty <= 0 {
+							qty = 1
 						}
-						productItems = append(productItems, pName+qStr)
+						priceStr := ""
+						if p.Price > 0 {
+							unitPrice := float64(p.Price) / 1000.0
+							currency := p.Currency
+							if currency == "INR" || currency == "" {
+								priceStr = fmt.Sprintf(" (₹%.2f)", unitPrice)
+							} else {
+								priceStr = fmt.Sprintf(" (%s %.2f)", currency, unitPrice)
+							}
+						}
+						itemFormat := fmt.Sprintf("%dx %s%s", qty, pName, priceStr)
+						productItems = append(productItems, itemFormat)
 						if importCat && username != "" {
 							_, desc, waLink := findCatalogProductMatch(username, pName)
 							if waLink != "" {
@@ -882,7 +893,7 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 
 		// Step B: Resolve real product name(s) vs store account name
 		if len(productItems) > 0 {
-			parts = append([]string{fmt.Sprintf("Product: \"%s\"", strings.Join(productItems, ", "))}, parts...)
+			parts = append([]string{fmt.Sprintf("Products: %s", strings.Join(productItems, ", "))}, parts...)
 		} else {
 			// Fallback: Check if orderTitle is just the store/business account name or a genuine product title
 			var accountName string
@@ -939,9 +950,9 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 		if amt > 0 {
 			price := float64(amt) / 1000.0
 			if currency == "INR" || currency == "" {
-				parts = append(parts, fmt.Sprintf("Total Price: ₹%.2f", price))
+				parts = append(parts, fmt.Sprintf("Grand Total: ₹%.2f", price))
 			} else {
-				parts = append(parts, fmt.Sprintf("Total Price: %s %.2f", currency, price))
+				parts = append(parts, fmt.Sprintf("Grand Total: %s %.2f", currency, price))
 			}
 		}
 
