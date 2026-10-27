@@ -47,49 +47,9 @@ var (
 	StreamLock      sync.Mutex
 )
 
-// formatQuotedWhatsAppMessage prepends a clean WhatsApp italic blockquote (> _"..."_) of the customer's message
+// formatQuotedWhatsAppMessage returns clean AI reply text (native WhatsApp quoted replies are handled via ContextInfo)
 func formatQuotedWhatsAppMessage(customerMsg, aiReply string) string {
-	cleanCustomer := strings.TrimSpace(customerMsg)
-	cleanReply := strings.TrimSpace(aiReply)
-	if cleanReply == "" {
-		return ""
-	}
-	if cleanCustomer == "" {
-		return cleanReply
-	}
-
-	// Avoid duplicate blockquotes if already present
-	if strings.HasPrefix(cleanReply, ">") {
-		return cleanReply
-	}
-
-	// If customer sent a catalog order, make the quote block clean and readable
-	quoteSnippet := cleanCustomer
-	if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Order]:") {
-		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Order]:")
-		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
-			quoteSnippet = quoteSnippet[:idx]
-		}
-		quoteSnippet = "Catalog Order: " + strings.TrimSpace(quoteSnippet)
-	} else if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:") {
-		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:")
-		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
-			quoteSnippet = quoteSnippet[:idx]
-		}
-		quoteSnippet = "Catalog Inquiry: " + strings.TrimSpace(quoteSnippet)
-	}
-
-	// Flatten newlines into a compact single-line quote snippet
-	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\r\n", " ")
-	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\n", " ")
-	quoteSnippet = strings.Join(strings.Fields(quoteSnippet), " ")
-
-	runes := []rune(quoteSnippet)
-	if len(runes) > 95 {
-		quoteSnippet = string(runes[:92]) + "..."
-	}
-
-	return fmt.Sprintf("> _\"%s\"_\n\n%s", quoteSnippet, cleanReply)
+	return strings.TrimSpace(aiReply)
 }
 
 // LoadLIDMapCache loads all LID -> Real Phone Number mappings from Neon DB into 0ms RAM
@@ -596,7 +556,7 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, normalRole, messageText)
 }
 
-// isMediaMessage detects if an incoming WhatsApp payload contains media (photo, video, audio, sticker, doc, location, contact)
+// isMediaMessage detects if an incoming WhatsApp payload contains media (photo, video, audio, sticker, doc, contact) or catalog messages (orders, products) to ignore without replying
 func isMediaMessage(msg *waE2E.Message) bool {
 	if msg == nil {
 		return false
@@ -607,7 +567,9 @@ func isMediaMessage(msg *waE2E.Message) bool {
 		msg.GetDocumentMessage() != nil ||
 		msg.GetStickerMessage() != nil ||
 		msg.GetContactMessage() != nil ||
-		msg.GetContactsArrayMessage() != nil {
+		msg.GetContactsArrayMessage() != nil ||
+		msg.GetOrderMessage() != nil ||
+		msg.GetProductMessage() != nil {
 		return true
 	}
 	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
@@ -625,26 +587,6 @@ func isMediaMessage(msg *waE2E.Message) bool {
 		}
 	}
 	return false
-}
-
-// findCatalogProductMatch looks up product in Neon DB by name to fetch price, description, and whatsapp_catalog_link
-func findCatalogProductMatch(username, title string) (string, string, string) {
-	if DB == nil || strings.TrimSpace(title) == "" {
-		return "", "", ""
-	}
-	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
-	cleanTitle := strings.TrimSpace(title)
-
-	var price, desc, waCatalogLink string
-	err := DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
-		FROM products 
-		WHERE LOWER(username)=LOWER($1) AND LOWER(TRIM(name))=LOWER($2) LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
-	if err != nil {
-		_ = DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
-			FROM products 
-			WHERE LOWER(username)=LOWER($1) AND (LOWER($2) LIKE '%' || LOWER(TRIM(name)) || '%' OR LOWER(TRIM(name)) LIKE '%' || LOWER($2) || '%') LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
-	}
-	return price, desc, waCatalogLink
 }
 
 // Reverse Geocoding API response struct (OpenStreetMap Nominatim)
@@ -745,45 +687,6 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 
 	if ext := msg.GetExtendedTextMessage(); ext != nil {
 		text := strings.TrimSpace(ext.GetText())
-		cfg := GetUserConfigRAM(username)
-		importCat := cfg == nil || cfg.ImportCatalog
-
-		// If message quotes a catalog item or order
-		if ctx := ext.GetContextInfo(); ctx != nil && ctx.GetQuotedMessage() != nil {
-			quoted := ctx.GetQuotedMessage()
-			if order := quoted.GetOrderMessage(); order != nil {
-				title := strings.TrimSpace(order.GetOrderTitle())
-				if title != "" {
-					linkPart := ""
-					if importCat {
-						_, _, waLink := findCatalogProductMatch(username, title)
-						if waLink != "" {
-							linkPart = fmt.Sprintf(" (Catalog Link: %s)", waLink)
-						}
-					}
-					if text != "" {
-						return fmt.Sprintf("[Inquiry for Catalog Item: %s%s] %s", title, linkPart, text)
-					}
-					return fmt.Sprintf("[Inquiry for Catalog Item: %s%s]", title, linkPart)
-				}
-			}
-			if prod := quoted.GetProductMessage(); prod != nil && prod.GetProduct() != nil {
-				title := strings.TrimSpace(prod.GetProduct().GetTitle())
-				if title != "" {
-					linkPart := ""
-					if importCat {
-						_, _, waLink := findCatalogProductMatch(username, title)
-						if waLink != "" {
-							linkPart = fmt.Sprintf(" (Catalog Link: %s)", waLink)
-						}
-					}
-					if text != "" {
-						return fmt.Sprintf("[Inquiry for Catalog Item: %s%s] %s", title, linkPart, text)
-					}
-					return fmt.Sprintf("[Inquiry for Catalog Item: %s%s]", title, linkPart)
-				}
-			}
-		}
 		if text != "" {
 			return text
 		}
@@ -841,175 +744,7 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 		return "[Customer Shared Live Location]: " + strings.Join(parts, " | ")
 	}
 
-	// 1. WhatsApp Catalog / Cart OrderMessage
-	if order := msg.GetOrderMessage(); order != nil {
-		var parts []string
-		orderTitle := strings.TrimSpace(order.GetOrderTitle())
-		orderID := strings.TrimSpace(order.GetOrderID())
-		token := strings.TrimSpace(order.GetToken())
-
-		cfg := GetUserConfigRAM(username)
-		importCat := cfg == nil || cfg.ImportCatalog
-
-		// Step A: Fetch actual itemized products from WhatsApp Commerce API using client.GetOrderDetails
-		var productItems []string
-		if client != nil && orderID != "" && token != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			details, err := client.GetOrderDetails(ctx, orderID, token)
-			cancel()
-			if err == nil && details != nil && len(details.Products) > 0 {
-				for _, p := range details.Products {
-					pName := strings.TrimSpace(p.Name)
-					if pName != "" {
-						qty := p.Quantity
-						if qty <= 0 {
-							qty = 1
-						}
-						priceStr := ""
-						if p.Price > 0 {
-							unitPrice := float64(p.Price) / 1000.0
-							currency := p.Currency
-							if currency == "INR" || currency == "" {
-								priceStr = fmt.Sprintf(" (₹%.2f)", unitPrice)
-							} else {
-								priceStr = fmt.Sprintf(" (%s %.2f)", currency, unitPrice)
-							}
-						}
-						itemFormat := fmt.Sprintf("%dx %s%s", qty, pName, priceStr)
-						productItems = append(productItems, itemFormat)
-						if importCat && username != "" {
-							_, desc, waLink := findCatalogProductMatch(username, pName)
-							if waLink != "" {
-								parts = append(parts, fmt.Sprintf("Catalog Link (%s): %s", pName, waLink))
-							}
-							if desc != "" {
-								parts = append(parts, fmt.Sprintf("Details (%s): %s", pName, desc))
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Step B: Resolve real product name(s) vs store account name
-		if len(productItems) > 0 {
-			parts = append([]string{fmt.Sprintf("Products: %s", strings.Join(productItems, ", "))}, parts...)
-		} else {
-			// Fallback: Check if orderTitle is just the store/business account name or a genuine product title
-			var accountName string
-			if DB != nil {
-				_ = DB.QueryRow("SELECT COALESCE(account_name, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&accountName)
-			}
-			isAccountName := strings.EqualFold(orderTitle, strings.TrimSpace(accountName)) ||
-				strings.EqualFold(orderTitle, strings.TrimSpace(username)) ||
-				strings.EqualFold(orderTitle, "Order") || strings.EqualFold(orderTitle, "Cart") ||
-				strings.EqualFold(orderTitle, "Catalog")
-
-			if !isAccountName && orderTitle != "" {
-				parts = append([]string{fmt.Sprintf("Product: \"%s\"", orderTitle)}, parts...)
-				if importCat && username != "" {
-					_, desc, waLink := findCatalogProductMatch(username, orderTitle)
-					if waLink != "" {
-						parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
-					}
-					if desc != "" {
-						parts = append(parts, fmt.Sprintf("Details: %s", desc))
-					}
-				}
-			} else {
-				// orderTitle matched the account name; attempt to resolve product from Neon DB catalog by price
-				amt := order.GetTotalAmount1000()
-				var matchedName, matchedLink, matchedDesc string
-				if DB != nil && amt > 0 {
-					priceStr := fmt.Sprintf("%.2f", float64(amt)/1000.0)
-					intPriceStr := fmt.Sprintf("%d", amt/1000)
-					_ = DB.QueryRow(`SELECT name, COALESCE(whatsapp_catalog_link, ''), COALESCE(description, '') 
-						FROM products WHERE LOWER(username)=LOWER($1) AND (price=$2 OR price=$3 OR price LIKE '%' || $3 || '%') LIMIT 1`,
-						username, priceStr, intPriceStr).Scan(&matchedName, &matchedLink, &matchedDesc)
-				}
-				if matchedName != "" {
-					parts = append([]string{fmt.Sprintf("Product: \"%s\"", matchedName)}, parts...)
-					if importCat && matchedLink != "" {
-						parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", matchedLink))
-					}
-					if importCat && matchedDesc != "" {
-						parts = append(parts, fmt.Sprintf("Details: %s", matchedDesc))
-					}
-				} else if orderTitle != "" {
-					parts = append([]string{fmt.Sprintf("Catalog Order via %s", orderTitle)}, parts...)
-				}
-			}
-		}
-
-		itemCount := order.GetItemCount()
-		if itemCount > 0 {
-			parts = append(parts, fmt.Sprintf("Qty: %d", itemCount))
-		}
-		amt := order.GetTotalAmount1000()
-		currency := order.GetTotalCurrencyCode()
-		if amt > 0 {
-			price := float64(amt) / 1000.0
-			if currency == "INR" || currency == "" {
-				parts = append(parts, fmt.Sprintf("Grand Total: ₹%.2f", price))
-			} else {
-				parts = append(parts, fmt.Sprintf("Grand Total: %s %.2f", currency, price))
-			}
-		}
-
-		userNote := strings.TrimSpace(order.GetMessage())
-		if userNote != "" {
-			parts = append(parts, fmt.Sprintf("Customer Note: \"%s\"", userNote))
-		}
-		if len(parts) > 0 {
-			return "[WhatsApp Catalog Order]: " + strings.Join(parts, " | ")
-		}
-		return "[WhatsApp Catalog Order received]"
-	}
-
-	// 2. WhatsApp Single Product Message from Catalog
-	if prod := msg.GetProductMessage(); prod != nil {
-		var parts []string
-		title := ""
-		if snapshot := prod.GetProduct(); snapshot != nil {
-			title = strings.TrimSpace(snapshot.GetTitle())
-			if title != "" {
-				parts = append(parts, fmt.Sprintf("Product: \"%s\"", title))
-			}
-			amt := snapshot.GetPriceAmount1000()
-			currency := snapshot.GetCurrencyCode()
-			if amt > 0 {
-				price := float64(amt) / 1000.0
-				if currency == "INR" || currency == "" {
-					parts = append(parts, fmt.Sprintf("Price: ₹%.2f", price))
-				} else {
-					parts = append(parts, fmt.Sprintf("Price: %s %.2f", currency, price))
-				}
-			}
-			desc := strings.TrimSpace(snapshot.GetDescription())
-			if desc != "" {
-				parts = append(parts, fmt.Sprintf("Details: %s", desc))
-			}
-		}
-
-		cfg := GetUserConfigRAM(username)
-		importCat := cfg == nil || cfg.ImportCatalog
-		if importCat && title != "" && username != "" {
-			_, _, waLink := findCatalogProductMatch(username, title)
-			if waLink != "" {
-				parts = append(parts, fmt.Sprintf("WhatsApp Catalog Link: %s", waLink))
-			}
-		}
-
-		if body := strings.TrimSpace(prod.GetBody()); body != "" {
-			parts = append(parts, fmt.Sprintf("Customer Note: \"%s\"", body))
-		}
-		if len(parts) > 0 {
-			return "[WhatsApp Catalog Product Inquiry]: " + strings.Join(parts, " | ")
-		}
-		return "[WhatsApp Catalog Product Inquiry received]"
-	}
-
-	// 3. Interactive or List Response
+	// Interactive or List Response
 	if listResp := msg.GetListResponseMessage(); listResp != nil {
 		title := strings.TrimSpace(listResp.GetTitle())
 		desc := strings.TrimSpace(listResp.GetDescription())
@@ -1068,34 +803,22 @@ func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone 
 	leadStatus := ""
 	leadDetails := ""
 
-	// 1. WhatsApp Catalog Cart / OrderMessage (Direct Product Purchase/Order via Catalog)
-	if msg.GetOrderMessage() != nil || strings.HasPrefix(msgText, "[WhatsApp Catalog Order]") {
-		isLead = true
-		leadStatus = "Order Placed"
-		leadDetails = msgText
-	} else if msg.GetProductMessage() != nil || strings.HasPrefix(msgText, "[WhatsApp Catalog Product Inquiry]") || strings.HasPrefix(msgText, "[Inquiry for Catalog Item:") {
-		// Single product inquiry from catalog
-		isLead = true
-		leadStatus = "Catalog Product Inquiry"
-		leadDetails = msgText
-	} else {
-		// 2. Chat-based Purchase or Order Intent
-		// Only consider as lead if customer clearly expressed intent to buy, order, pay, book, or COD
-		lower := strings.ToLower(msgText)
-		orderPhrases := []string{
-			"order kardo", "order karna", "order place", "confirm order", "order now",
-			"kharidna hai", "lena hai", "buy now", "want to buy", "i want to buy",
-			"purchase", "booking karna", "book kardo", "cod chahiye", "cash on delivery",
-			"payment done", "payment kar diya", "paid", "advance payment", "deliver kardo",
-			"place order", "send invoice", "bill send karo", "mujhe order karna hai",
-		}
-		for _, kw := range orderPhrases {
-			if strings.Contains(lower, kw) {
-				isLead = true
-				leadStatus = "Purchase Request"
-				leadDetails = msgText
-				break
-			}
+	// Chat-based Purchase or Order Intent
+	// Only consider as lead if customer clearly expressed intent to buy, order, pay, book, or COD
+	lower := strings.ToLower(msgText)
+	orderPhrases := []string{
+		"order kardo", "order karna", "order place", "confirm order", "order now",
+		"kharidna hai", "lena hai", "buy now", "want to buy", "i want to buy",
+		"purchase", "booking karna", "book kardo", "cod chahiye", "cash on delivery",
+		"payment done", "payment kar diya", "paid", "advance payment", "deliver kardo",
+		"place order", "send invoice", "bill send karo", "mujhe order karna hai",
+	}
+	for _, kw := range orderPhrases {
+		if strings.Contains(lower, kw) {
+			isLead = true
+			leadStatus = "Purchase Request"
+			leadDetails = msgText
+			break
 		}
 	}
 
@@ -1287,25 +1010,22 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				var deliveredReply string
 
-				// Format reply with top italic blockquote: > _"customer message"_
-				formattedWhatsAppReply := formatQuotedWhatsAppMessage(msgText, replyText)
-
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendImageFromURL(activeClient, senderPhone, imgURL, formattedWhatsAppReply)
+					sendErr := SendQuotedImageReply(activeClient, v, senderPhone, imgURL, replyText)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("⚡ AI image reply delivered to +%s", senderPhone)
+						log.Printf("⚡ AI image reply delivered to +%s quoting message %s", senderPhone, v.Info.ID)
 					}
-					deliveredReply = "[Image Sent] " + formattedWhatsAppReply
+					deliveredReply = "[Image Sent] " + replyText
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendMessage(activeClient, senderPhone, formattedWhatsAppReply)
+					sendErr := SendQuotedReplyMessage(activeClient, v, replyText, senderPhone)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI text reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s: %s", senderPhone, formattedWhatsAppReply)
+						log.Printf("⚡ Ultra-Fast AI quoted reply delivered to +%s: %s", senderPhone, replyText)
 					}
-					deliveredReply = formattedWhatsAppReply
+					deliveredReply = replyText
 				}
 
 				if deliveredReply != "" {
@@ -1432,6 +1152,121 @@ func PushToLiveChat(username, phone, text, msgType string) {
 			// Agar browser tab band hai to drop kar do (Zero RAM leak!)
 		}
 	}
+}
+
+// SendQuotedReplyMessage sends a native WhatsApp quoted reply referencing the original incoming message
+func SendQuotedReplyMessage(client *whatsmeow.Client, originalEvt *events.Message, replyText string, phone string) error {
+	if client == nil || !client.IsLoggedIn() {
+		return fmt.Errorf("whatsapp connected nahi hai")
+	}
+	cleanReply := strings.TrimSpace(replyText)
+	if cleanReply == "" {
+		return nil
+	}
+	if err := EnsureConnected(client); err != nil {
+		return err
+	}
+
+	targetJID := originalEvt.Info.Chat
+	if targetJID.IsEmpty() {
+		targetJID = originalEvt.Info.Sender
+	}
+
+	// 1. Ek naya Text Message banayein with ContextInfo quoting the original incoming message
+	msg := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String(cleanReply),
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaId:      proto.String(originalEvt.Info.ID),           // Original message ki ID
+				Participant:   proto.String(originalEvt.Info.Sender.String()), // Original sender ka address
+				QuotedMessage: originalEvt.Message,                         // Pura original message attach karna
+			},
+		},
+	}
+
+	// 2. Is message ko bhej dein
+	_, err := client.SendMessage(context.Background(), targetJID, msg)
+	if err != nil {
+		log.Printf("⚠️ Error sending quoted reply via %s: %v. Retrying direct SendMessage...", targetJID, err)
+		return SendMessage(client, phone, cleanReply)
+	}
+	return nil
+}
+
+// SendQuotedImageReply sends an image reply quoting the original incoming WhatsApp message
+func SendQuotedImageReply(client *whatsmeow.Client, originalEvt *events.Message, phone, imageURL, caption string) error {
+	if client == nil || !client.IsLoggedIn() {
+		return fmt.Errorf("whatsapp connected nahi hai")
+	}
+	if err := EnsureConnected(client); err != nil {
+		return err
+	}
+
+	var imgBytes []byte
+	var err error
+
+	imageURL = strings.TrimSpace(imageURL)
+	if strings.HasPrefix(imageURL, "data:image/") {
+		parts := strings.SplitN(imageURL, ",", 2)
+		if len(parts) == 2 {
+			imgBytes, err = base64.StdEncoding.DecodeString(parts[1])
+			if err != nil {
+				return fmt.Errorf("failed to decode base64 image: %v", err)
+			}
+		}
+	} else if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		clientHttp := &http.Client{Timeout: 20 * time.Second}
+		resp, fetchErr := clientHttp.Get(imageURL)
+		if fetchErr != nil {
+			return fmt.Errorf("image download failed: %v", fetchErr)
+		}
+		defer resp.Body.Close()
+		imgBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read image body: %v", err)
+		}
+	} else {
+		return fmt.Errorf("invalid image URL format")
+	}
+
+	if len(imgBytes) == 0 {
+		return fmt.Errorf("empty image payload")
+	}
+
+	uploaded, err := client.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
+	if err != nil {
+		return fmt.Errorf("whatsapp media upload failed: %v", err)
+	}
+
+	mimeType := http.DetectContentType(imgBytes)
+	targetJID := originalEvt.Info.Chat
+	if targetJID.IsEmpty() {
+		targetJID = originalEvt.Info.Sender
+	}
+
+	msg := &waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{
+			Caption:       proto.String(caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(imgBytes))),
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaId:      proto.String(originalEvt.Info.ID),
+				Participant:   proto.String(originalEvt.Info.Sender.String()),
+				QuotedMessage: originalEvt.Message,
+			},
+		},
+	}
+
+	_, err = client.SendMessage(context.Background(), targetJID, msg)
+	if err != nil {
+		return SendImageFromURL(client, phone, imageURL, caption)
+	}
+	return nil
 }
 
 // 1. Text Message Bhejna (Supports both Standard PN and LID JIDs with fallback)
