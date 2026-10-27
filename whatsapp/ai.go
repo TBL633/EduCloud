@@ -74,10 +74,10 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 		Provider:      "groq",
 		APIKey:        "",
 		SystemPrompt:  "",
-		Model:         "llama-3.1-8b-instant",
+		Model:         "openai/gpt-oss-20b",
 		Temperature:   0.7,
 		AutoReply:     true,
-		ImportCatalog: true,
+		ImportCatalog: false,
 		CatalogText:   "",
 		LastCached:    time.Now(),
 	}
@@ -90,30 +90,26 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(ai_provider, 'groq'), 
 			COALESCE(api_key, ''), 
 			COALESCE(system_prompt, ''), 
-			COALESCE(ai_model, 'llama-3.1-8b-instant'), 
+			COALESCE(ai_model, 'openai/gpt-oss-20b'), 
 			COALESCE(ai_temperature, 0.7), 
 			COALESCE(auto_reply, true), 
-			COALESCE(import_catalog_details, true) 
+			COALESCE(import_catalog_details, false) 
 			FROM users WHERE LOWER(username)=LOWER($1)`, cleanUsr).Scan(&p, &k, &s, &m, &t, &ar, &ic)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
 			cfg.SystemPrompt = s
 			cfg.Model = m
-			if p == "groq" && (m == "llama-3.3-70b-versatile" || m == "") {
-				cfg.Model = "llama-3.1-8b-instant"
+			if p == "groq" && (m == "llama-3.1-8b-instant" || m == "llama-3.3-70b-versatile" || m == "") {
+				cfg.Model = "openai/gpt-oss-20b"
 			}
 			cfg.Temperature = t
 			cfg.AutoReply = ar
-			cfg.ImportCatalog = ic
+			cfg.ImportCatalog = false // Catalog messages ignored & catalog removed as requested
 		}
 	}
 
-	if cfg.ImportCatalog {
-		cfg.CatalogText = GetCatalogContext(cleanUsr)
-	} else {
-		cfg.CatalogText = ""
-	}
+	cfg.CatalogText = ""
 
 	userConfigLock.Lock()
 	userConfigCache[cleanUsr] = cfg
@@ -387,6 +383,20 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 			selectedApiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 		}
 	}
+	if selectedApiKey == "" && DB != nil {
+		var fallbackKey, fallbackProv, fallbackModel string
+		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'openai/gpt-oss-20b') 
+			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv, &fallbackModel)
+		if fallbackKey != "" {
+			selectedApiKey = fallbackKey
+			if cfg.APIKey == "" {
+				cfg.APIKey = fallbackKey
+				cfg.Provider = fallbackProv
+				cfg.Model = fallbackModel
+			}
+			log.Printf("ℹ️ [API Key Fallback] Using active DB key (%s) for @%s", fallbackProv, cleanUsr)
+		}
+	}
 	if selectedApiKey == "" {
 		log.Printf("⚠️ No API key found for @%s", cleanUsr)
 		return "", ""
@@ -574,7 +584,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 		candidateModels = []string{"meta-llama/llama-3.1-8b-instruct:free"}
 	default: // groq
 		url = "https://api.groq.com/openai/v1/chat/completions"
-		candidateModels = []string{"llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"}
+		candidateModels = []string{"openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"}
 	}
 
 	if reqModel != "" && !isNumericOrPhone(reqModel) {
@@ -615,7 +625,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("User-Agent", "EduCloud-WhatsApp-Gateway/1.0")
 
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := &http.Client{Timeout: 4 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
@@ -658,7 +668,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 }
 
 func callGeminiAPIWithHistory(apiKey, model string, temperature float64, sysPrompt string, history []ChatMessage) (string, error) {
-	candidateModels := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"}
+	candidateModels := []string{"gemini-2.0-flash", "gemini-1.5-flash"}
 
 	reqModel := strings.TrimSpace(model)
 	if reqModel != "" && !isNumericOrPhone(reqModel) && !strings.Contains(reqModel, "gemini-1.0") && !strings.Contains(reqModel, "gemini-pro") {
