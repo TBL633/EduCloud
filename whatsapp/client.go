@@ -47,9 +47,49 @@ var (
 	StreamLock      sync.Mutex
 )
 
-// formatQuotedWhatsAppMessage returns clean AI reply text (native WhatsApp quoted replies are handled via ContextInfo)
+// formatQuotedWhatsAppMessage prepends a clean WhatsApp italic blockquote (> _"..."_) of the customer's message
 func formatQuotedWhatsAppMessage(customerMsg, aiReply string) string {
-	return strings.TrimSpace(aiReply)
+	cleanCustomer := strings.TrimSpace(customerMsg)
+	cleanReply := strings.TrimSpace(aiReply)
+	if cleanReply == "" {
+		return ""
+	}
+	if cleanCustomer == "" {
+		return cleanReply
+	}
+
+	// Avoid duplicate blockquotes if already present
+	if strings.HasPrefix(cleanReply, ">") {
+		return cleanReply
+	}
+
+	// If customer sent a catalog order, make the quote block clean and readable
+	quoteSnippet := cleanCustomer
+	if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Order]:") {
+		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Order]:")
+		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
+			quoteSnippet = quoteSnippet[:idx]
+		}
+		quoteSnippet = "Catalog Order: " + strings.TrimSpace(quoteSnippet)
+	} else if strings.HasPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:") {
+		quoteSnippet = strings.TrimPrefix(cleanCustomer, "[WhatsApp Catalog Product Inquiry]:")
+		if idx := strings.Index(quoteSnippet, " | WhatsApp Catalog Link:"); idx != -1 {
+			quoteSnippet = quoteSnippet[:idx]
+		}
+		quoteSnippet = "Catalog Inquiry: " + strings.TrimSpace(quoteSnippet)
+	}
+
+	// Flatten newlines into a compact single-line quote snippet
+	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\r\n", " ")
+	quoteSnippet = strings.ReplaceAll(quoteSnippet, "\n", " ")
+	quoteSnippet = strings.Join(strings.Fields(quoteSnippet), " ")
+
+	runes := []rune(quoteSnippet)
+	if len(runes) > 95 {
+		quoteSnippet = string(runes[:92]) + "..."
+	}
+
+	return fmt.Sprintf("> _\"%s\"_\n\n%s", quoteSnippet, cleanReply)
 }
 
 // LoadLIDMapCache loads all LID -> Real Phone Number mappings from Neon DB into 0ms RAM
@@ -556,7 +596,7 @@ func SaveCustomerChatAndPrune(username, customerPhone, role, messageText string)
 	_ = updateSlidingWindowRAM(cleanUsr, cleanPhone, normalRole, messageText)
 }
 
-// isMediaMessage detects if an incoming WhatsApp payload contains media (photo, video, audio, sticker, doc, contact) or catalog messages (orders, products) to ignore without replying
+// isMediaMessage detects if an incoming WhatsApp payload contains media or catalog (photo, video, audio, sticker, doc, contact, order, product)
 func isMediaMessage(msg *waE2E.Message) bool {
 	if msg == nil {
 		return false
@@ -587,6 +627,26 @@ func isMediaMessage(msg *waE2E.Message) bool {
 		}
 	}
 	return false
+}
+
+// findCatalogProductMatch looks up product in Neon DB by name to fetch price, description, and whatsapp_catalog_link
+func findCatalogProductMatch(username, title string) (string, string, string) {
+	if DB == nil || strings.TrimSpace(title) == "" {
+		return "", "", ""
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanTitle := strings.TrimSpace(title)
+
+	var price, desc, waCatalogLink string
+	err := DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
+		FROM products 
+		WHERE LOWER(username)=LOWER($1) AND LOWER(TRIM(name))=LOWER($2) LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
+	if err != nil {
+		_ = DB.QueryRow(`SELECT price, COALESCE(description, ''), COALESCE(whatsapp_catalog_link, '') 
+			FROM products 
+			WHERE LOWER(username)=LOWER($1) AND (LOWER($2) LIKE '%' || LOWER(TRIM(name)) || '%' OR LOWER(TRIM(name)) LIKE '%' || LOWER($2) || '%') LIMIT 1`, cleanUsr, cleanTitle).Scan(&price, &desc, &waCatalogLink)
+	}
+	return price, desc, waCatalogLink
 }
 
 // Reverse Geocoding API response struct (OpenStreetMap Nominatim)
@@ -686,8 +746,7 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 	}
 
 	if ext := msg.GetExtendedTextMessage(); ext != nil {
-		text := strings.TrimSpace(ext.GetText())
-		if text != "" {
+		if text := strings.TrimSpace(ext.GetText()); text != "" {
 			return text
 		}
 	}
@@ -744,7 +803,8 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 		return "[Customer Shared Live Location]: " + strings.Join(parts, " | ")
 	}
 
-	// Interactive or List Response
+
+	// 3. Interactive or List Response
 	if listResp := msg.GetListResponseMessage(); listResp != nil {
 		title := strings.TrimSpace(listResp.GetTitle())
 		desc := strings.TrimSpace(listResp.GetDescription())
@@ -1011,19 +1071,19 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				var deliveredReply string
 
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendQuotedImageReply(activeClient, v, senderPhone, imgURL, replyText)
+					sendErr := SendImageReplyFromURL(activeClient, senderPhone, imgURL, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("⚡ AI image reply delivered to +%s quoting message %s", senderPhone, v.Info.ID)
+						log.Printf("⚡ AI image reply delivered to +%s (as native WhatsApp reply)", senderPhone)
 					}
 					deliveredReply = "[Image Sent] " + replyText
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
-					sendErr := SendQuotedReplyMessage(activeClient, v, replyText, senderPhone)
+					sendErr := SendReplyMessage(activeClient, senderPhone, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI text reply to +%s: %v", senderPhone, sendErr)
 					} else {
-						log.Printf("⚡ Ultra-Fast AI quoted reply delivered to +%s: %s", senderPhone, replyText)
+						log.Printf("⚡ Ultra-Fast AI reply delivered to +%s (as native WhatsApp reply): %s", senderPhone, replyText)
 					}
 					deliveredReply = replyText
 				}
@@ -1154,57 +1214,78 @@ func PushToLiveChat(username, phone, text, msgType string) {
 	}
 }
 
-// SendQuotedReplyMessage sends a native WhatsApp quoted reply referencing the original incoming message
-func SendQuotedReplyMessage(client *whatsmeow.Client, originalEvt *events.Message, replyText string, phone string) error {
+
+// SendReplyMessage sends an AI text reply natively quoting the customer's incoming message in WhatsApp
+func SendReplyMessage(client *whatsmeow.Client, phone string, replyText string, quotedID types.MessageID, quotedSender types.JID, quotedMsg *waE2E.Message) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
 	}
-	cleanReply := strings.TrimSpace(replyText)
-	if cleanReply == "" {
-		return nil
+	cleanPhone := FormatPhone(phone)
+	if len(cleanPhone) < 8 {
+		return fmt.Errorf("invalid phone number: %s", phone)
 	}
 	if err := EnsureConnected(client); err != nil {
 		return err
 	}
 
-	targetJID := originalEvt.Info.Chat
-	if targetJID.IsEmpty() {
-		targetJID = originalEvt.Info.Sender
+	lidCacheLock.RLock()
+	targetJID, hasTargetJID := phoneToJID[cleanPhone]
+	if !hasTargetJID {
+		targetJID, hasTargetJID = phoneToJID[phone]
+	}
+	lidCacheLock.RUnlock()
+
+	primaryServer := types.DefaultUserServer
+	if !hasTargetJID {
+		if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") || strings.HasPrefix(cleanPhone, "100") {
+			primaryServer = "lid"
+		}
+		targetJID = types.NewJID(cleanPhone, primaryServer)
 	}
 
-	// 1. Ek naya Text Message banayein with ContextInfo quoting the original incoming message
-	msg := &waE2E.Message{
-		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: proto.String(cleanReply),
-			ContextInfo: &waE2E.ContextInfo{
-				StanzaId:      proto.String(originalEvt.Info.ID),           // Original message ki ID
-				Participant:   proto.String(originalEvt.Info.Sender.String()), // Original sender ka address
-				QuotedMessage: originalEvt.Message,                         // Pura original message attach karna
+	var msg *waE2E.Message
+	if quotedID != "" && quotedMsg != nil {
+		participantJID := quotedSender.ToNonAD().String()
+		msg = &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text: proto.String(replyText),
+				ContextInfo: &waE2E.ContextInfo{
+					StanzaID:      proto.String(string(quotedID)),
+					Participant:   proto.String(participantJID),
+					QuotedMessage: quotedMsg,
+				},
 			},
-		},
+		}
+	} else {
+		msg = &waE2E.Message{Conversation: proto.String(replyText)}
 	}
 
-	// 2. Is message ko bhej dein
 	_, err := client.SendMessage(context.Background(), targetJID, msg)
-	if err != nil {
-		log.Printf("⚠️ Error sending quoted reply via %s: %v. Retrying direct SendMessage...", targetJID, err)
-		return SendMessage(client, phone, cleanReply)
+	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
+		altServer := "lid"
+		if targetJID.Server == "lid" {
+			altServer = types.DefaultUserServer
+		}
+		targetJID = types.NewJID(cleanPhone, altServer)
+		_, err = client.SendMessage(context.Background(), targetJID, msg)
 	}
-	return nil
+	return err
 }
 
-// SendQuotedImageReply sends an image reply quoting the original incoming WhatsApp message
-func SendQuotedImageReply(client *whatsmeow.Client, originalEvt *events.Message, phone, imageURL, caption string) error {
+// SendImageReplyFromURL sends an image with caption natively quoting the customer's incoming message in WhatsApp
+func SendImageReplyFromURL(client *whatsmeow.Client, phone, imageURL, caption string, quotedID types.MessageID, quotedSender types.JID, quotedMsg *waE2E.Message) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
+	}
+	cleanPhone := FormatPhone(phone)
+	if len(cleanPhone) < 8 {
+		return fmt.Errorf("invalid phone number: %s", phone)
 	}
 	if err := EnsureConnected(client); err != nil {
 		return err
 	}
-
 	var imgBytes []byte
 	var err error
-
 	imageURL = strings.TrimSpace(imageURL)
 	if strings.HasPrefix(imageURL, "data:image/") {
 		parts := strings.SplitN(imageURL, ",", 2)
@@ -1223,50 +1304,63 @@ func SendQuotedImageReply(client *whatsmeow.Client, originalEvt *events.Message,
 		defer resp.Body.Close()
 		imgBytes, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("failed to read image body: %v", err)
+			return err
 		}
 	} else {
-		return fmt.Errorf("invalid image URL format")
+		return fmt.Errorf("unsupported image format or empty URL")
 	}
-
 	if len(imgBytes) == 0 {
 		return fmt.Errorf("empty image payload")
 	}
-
 	uploaded, err := client.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("whatsapp media upload failed: %v", err)
 	}
-
 	mimeType := http.DetectContentType(imgBytes)
-	targetJID := originalEvt.Info.Chat
-	if targetJID.IsEmpty() {
-		targetJID = originalEvt.Info.Sender
+
+	lidCacheLock.RLock()
+	targetJID, hasTargetJID := phoneToJID[cleanPhone]
+	if !hasTargetJID {
+		targetJID, hasTargetJID = phoneToJID[phone]
+	}
+	lidCacheLock.RUnlock()
+	primaryServer := types.DefaultUserServer
+	if !hasTargetJID {
+		if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") || strings.HasPrefix(cleanPhone, "100") {
+			primaryServer = "lid"
+		}
+		targetJID = types.NewJID(cleanPhone, primaryServer)
 	}
 
-	msg := &waE2E.Message{
-		ImageMessage: &waE2E.ImageMessage{
-			Caption:       proto.String(caption),
-			URL:           proto.String(uploaded.URL),
-			DirectPath:    proto.String(uploaded.DirectPath),
-			MediaKey:      uploaded.MediaKey,
-			Mimetype:      proto.String(mimeType),
-			FileEncSHA256: uploaded.FileEncSHA256,
-			FileSHA256:    uploaded.FileSHA256,
-			FileLength:    proto.Uint64(uint64(len(imgBytes))),
-			ContextInfo: &waE2E.ContextInfo{
-				StanzaId:      proto.String(originalEvt.Info.ID),
-				Participant:   proto.String(originalEvt.Info.Sender.String()),
-				QuotedMessage: originalEvt.Message,
-			},
-		},
+	imageMsg := &waE2E.ImageMessage{
+		Caption:       proto.String(caption),
+		URL:           proto.String(uploaded.URL),
+		DirectPath:    proto.String(uploaded.DirectPath),
+		MediaKey:      uploaded.MediaKey,
+		Mimetype:      proto.String(mimeType),
+		FileEncSHA256: uploaded.FileEncSHA256,
+		FileSHA256:    uploaded.FileSHA256,
+		FileLength:    proto.Uint64(uint64(len(imgBytes))),
+	}
+	if quotedID != "" && quotedMsg != nil {
+		imageMsg.ContextInfo = &waE2E.ContextInfo{
+			StanzaID:      proto.String(string(quotedID)),
+			Participant:   proto.String(quotedSender.ToNonAD().String()),
+			QuotedMessage: quotedMsg,
+		}
 	}
 
+	msg := &waE2E.Message{ImageMessage: imageMsg}
 	_, err = client.SendMessage(context.Background(), targetJID, msg)
-	if err != nil {
-		return SendImageFromURL(client, phone, imageURL, caption)
+	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
+		altServer := "lid"
+		if primaryServer == "lid" {
+			altServer = types.DefaultUserServer
+		}
+		targetJID = types.NewJID(cleanPhone, altServer)
+		_, err = client.SendMessage(context.Background(), targetJID, msg)
 	}
-	return nil
+	return err
 }
 
 // 1. Text Message Bhejna (Supports both Standard PN and LID JIDs with fallback)
