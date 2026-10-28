@@ -384,15 +384,13 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		}
 	}
 	if selectedApiKey == "" && DB != nil {
-		var fallbackKey, fallbackProv, fallbackModel string
-		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'openai/gpt-oss-20b') 
-			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv, &fallbackModel)
+		var fallbackKey, fallbackProv string
+		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq') 
+			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv)
 		if fallbackKey != "" {
 			selectedApiKey = fallbackKey
-			if cfg.APIKey == "" {
-				cfg.APIKey = fallbackKey
-				cfg.Provider = fallbackProv
-				cfg.Model = fallbackModel
+			if provider == "" {
+				provider = fallbackProv
 			}
 			log.Printf("ℹ️ [API Key Fallback] Using active DB key (%s) for @%s", fallbackProv, cleanUsr)
 		}
@@ -402,11 +400,14 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		return "", ""
 	}
 
-	model := "llama-3.1-8b-instant"
+	model := "openai/gpt-oss-20b"
 	temp := 0.7
-	importCatalog := true
+	importCatalog := false
 	if DB != nil {
-		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.1-8b-instant'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, true) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
+		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'openai/gpt-oss-20b'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, false) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
+		if model == "llama-3.1-8b-instant" || model == "llama-3.3-70b-versatile" || model == "" {
+			model = "openai/gpt-oss-20b"
+		}
 	}
 
 	sysPrompt := strings.TrimSpace(systemPrompt)
@@ -454,6 +455,20 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		}
 		if selectedApiKey == "" {
 			selectedApiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		}
+	}
+	if selectedApiKey == "" && DB != nil {
+		var fallbackKey, fallbackProv, fallbackModel string
+		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'openai/gpt-oss-20b') 
+			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv, &fallbackModel)
+		if fallbackKey != "" {
+			selectedApiKey = fallbackKey
+			if cfg.APIKey == "" {
+				cfg.APIKey = fallbackKey
+				cfg.Provider = fallbackProv
+				cfg.Model = fallbackModel
+			}
+			log.Printf("ℹ️ [API Key Fallback] Using active DB key (%s) for @%s", fallbackProv, cleanUsr)
 		}
 	}
 	if selectedApiKey == "" {

@@ -1208,8 +1208,8 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const endpoint = `${protocol}://${host}/api/send`;
 
-  let isConnectedState = user?.status === 'Connected' || Boolean(user?.wa_jid);
-  let jid = user?.wa_jid || user?.phone || '';
+  let isConnectedState = user?.status === 'Connected' && Boolean(user?.wa_jid);
+  let jid = (user?.status === 'Connected' && user?.wa_jid) ? user.wa_jid : '';
 
   // Double check Neon DB for connected status
   if (isDbConnected()) {
@@ -1219,12 +1219,19 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
         const r = await pool.query('SELECT status, wa_jid, phone FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser || 'admin']);
         if (r.rows.length > 0) {
           const row = r.rows[0];
-          if (row.status === 'Connected' || row.wa_jid) {
+          if (row.status === 'Connected' && row.wa_jid) {
             isConnectedState = true;
-            jid = row.wa_jid || row.phone || jid;
+            jid = row.wa_jid;
             if (user) {
               user.status = 'Connected';
               user.wa_jid = jid;
+            }
+          } else {
+            isConnectedState = false;
+            jid = '';
+            if (user) {
+              user.status = 'Disconnected';
+              user.wa_jid = '';
             }
           }
         }
@@ -1298,7 +1305,7 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
   });
 });
 
-app.all(['/api/whatsapp/unlink', '/api/whatsapp/unpair', '/api/logout-wa'], async (req: Request, res: Response) => {
+app.all(['/api/whatsapp/unlink', '/api/whatsapp/disconnect', '/api/whatsapp/unpair', '/api/logout-wa'], async (req: Request, res: Response) => {
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}
@@ -1311,6 +1318,7 @@ app.all(['/api/whatsapp/unlink', '/api/whatsapp/unpair', '/api/logout-wa'], asyn
     if (user) {
       user.status = 'Disconnected';
       user.wa_jid = '';
+      user.phone = '';
       user.qr = '';
     }
 
@@ -1323,6 +1331,130 @@ app.all(['/api/whatsapp/unlink', '/api/whatsapp/unpair', '/api/logout-wa'], asyn
     status: 'success',
     message: 'WhatsApp session unlinked successfully. WhatsApp details removed from database, user account preserved.'
   });
+});
+
+
+// ZERO-FEE PAYTM PAYMENT GATEWAY ENDPOINTS
+const paymentConfigsMap = new Map<string, any>();
+
+app.all(['/api/payment/config', '/api/admin/tenant/payment-config'], async (req: Request, res: Response) => {
+  if (req.method === 'GET') {
+    const tenantID = (req.query.tenant_id as string) || (req.query.username as string) || '';
+    const cleanUser = tenantID.trim().toLowerCase();
+    const cfg = paymentConfigsMap.get(cleanUser) || {
+      tenant_id: cleanUser,
+      username: cleanUser,
+      enabled: false,
+      merchant_phone: '',
+      merchant_vpa: '',
+      paytm_mid: '',
+      payee_name: cleanUser
+    };
+    return res.json(cfg);
+  }
+
+  if (req.method === 'POST') {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch {}
+    }
+    const cleanUser = String(body?.tenant_id || body?.username || '').trim().toLowerCase();
+    if (!cleanUser) {
+      return res.status(400).json({ error: 'tenant_id is required' });
+    }
+    const configData = {
+      tenant_id: cleanUser,
+      username: cleanUser,
+      enabled: Boolean(body?.enabled),
+      merchant_phone: String(body?.merchant_phone || '').trim(),
+      merchant_vpa: String(body?.merchant_vpa || '').trim(),
+      paytm_mid: String(body?.paytm_mid || '').trim(),
+      payee_name: String(body?.payee_name || cleanUser).trim()
+    };
+    paymentConfigsMap.set(cleanUser, configData);
+
+    if (isDbConnected()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`
+            INSERT INTO tenant_payment_configs (username, enabled, merchant_phone, merchant_vpa, paytm_mid, payee_name, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (username) DO UPDATE SET
+              enabled = EXCLUDED.enabled,
+              merchant_phone = EXCLUDED.merchant_phone,
+              merchant_vpa = EXCLUDED.merchant_vpa,
+              paytm_mid = EXCLUDED.paytm_mid,
+              payee_name = EXCLUDED.payee_name,
+              updated_at = NOW();
+          `, [cleanUser, configData.enabled, configData.merchant_phone, configData.merchant_vpa, configData.paytm_mid, configData.payee_name]);
+        } catch(e) {}
+      }
+    }
+
+    return res.json({
+      status: 'success',
+      message: 'Paytm payment configuration saved successfully.',
+      config: configData
+    });
+  }
+
+  return res.status(405).json({ error: 'method not allowed' });
+});
+
+app.post('/api/payment/generate-qr', async (req: Request, res: Response) => {
+  const { tenant_id = '', username = '', amount = 0, order_id = '' } = req.body || {};
+  const cleanUser = String(tenant_id || username).trim().toLowerCase();
+  const cfg = paymentConfigsMap.get(cleanUser) || { enabled: false };
+
+  if (!cfg.enabled) {
+    return res.status(400).json({ error: 'payment gateway disabled for this tenant' });
+  }
+
+  const vpa = cfg.merchant_vpa || 'merchant@paytm';
+  const payeeName = cfg.payee_name || cleanUser;
+  const upiURI = `upi://pay?pa=${encodeURIComponent(vpa)}&pn=${encodeURIComponent(payeeName)}&am=${Number(amount).toFixed(2)}&tr=${encodeURIComponent(order_id)}&tn=Order_${encodeURIComponent(order_id)}&cu=INR`;
+
+  return res.json({
+    status: 'success',
+    upi_uri: upiURI,
+    qr_code: '',
+    amount,
+    order_id,
+    paytm_mid: cfg.paytm_mid,
+    merchant: vpa
+  });
+});
+
+app.post('/api/payment/verify', async (req: Request, res: Response) => {
+  const { tenant_id = '', mid = '', order_id = '' } = req.body || {};
+  const cleanUser = String(tenant_id).trim().toLowerCase();
+  const cfg = paymentConfigsMap.get(cleanUser) || {};
+  const paytmMID = mid || cfg.paytm_mid || '';
+
+  if (!paytmMID || !order_id) {
+    return res.status(400).json({ error: 'paytm MID and order_id required' });
+  }
+
+  try {
+    const jsonPayload = JSON.stringify({ MID: paytmMID, ORDERID: order_id });
+    const paytmURL = `https://securegw.paytm.in/order/status?JsonData=${encodeURIComponent(jsonPayload)}`;
+    const response = await fetch(paytmURL);
+    const data = await response.json();
+    const isSuccess = data?.STATUS === 'TXN_SUCCESS';
+
+    return res.json({
+      status: 'success',
+      verified: isSuccess,
+      details: data
+    });
+  } catch(err: any) {
+    return res.json({
+      status: 'error',
+      message: err?.message || 'Paytm verification request failed',
+      verified: false
+    });
+  }
 });
 
 app.post('/api/bulk/send', (req: Request, res: Response) => {
@@ -2496,12 +2628,14 @@ app.post('/api/chats/send', async (req: Request, res: Response) => {
   const cleanPhone = phone.replace(/\D/g, '');
   const cleanUser = username.toLowerCase();
 
-  // Save to DB (strictly last 10 messages)
-  await recordCustomerChat(cleanUser, cleanPhone, 'assistant', message);
-  updateSlidingWindow(`${cleanUser}_${cleanPhone}`, 'assistant', message);
+  // 1. Push to Live Chat SSE immediately
+  pushToLiveChat(cleanUser, cleanPhone, message, 'outgoing_manual');
 
-  // Push to Live Chat SSE
-  pushToLiveChat(cleanUser, cleanPhone, message, 'outgoing');
+  // 2. Sync to DB in background without blocking response
+  recordCustomerChat(cleanUser, cleanPhone, 'assistant', message).catch(err => {
+    console.warn('Background chat sync error:', err.message);
+  });
+  updateSlidingWindow(`${cleanUser}_${cleanPhone}`, 'assistant', message);
 
   return res.json({
     status: 'success',

@@ -5,7 +5,91 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Master Admin Portal | EduCloud SaaS</title>
     <!-- Tailwind CSS via CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com">
+        // 7. PAYTM PAYMENT GATEWAY CONFIG MODAL HANDLERS
+        async function openPaymentSetupModal(tenantId, accountName) {
+            const modal = document.getElementById('payment-setup-modal');
+            if (!modal) return;
+
+            document.getElementById('paytm-tenant-username').value = tenantId;
+            document.getElementById('payment-modal-tenant-id').innerText = accountName ? `${accountName} (@${tenantId})` : `@${tenantId}`;
+
+            // Reset form fields
+            document.getElementById('paytm-enabled-toggle').checked = false;
+            document.getElementById('paytm-merchant-phone').value = '';
+            document.getElementById('paytm-merchant-vpa').value = '';
+            document.getElementById('paytm-mid').value = '';
+
+            modal.classList.remove('hidden');
+
+            // Fetch existing payment configuration for this tenant
+            try {
+                const res = await fetch(`/api/payment/config?tenant_id=${encodeURIComponent(tenantId)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('paytm-enabled-toggle').checked = Boolean(data.enabled);
+                    document.getElementById('paytm-merchant-phone').value = data.merchant_phone || '';
+                    document.getElementById('paytm-merchant-vpa').value = data.merchant_vpa || '';
+                    document.getElementById('paytm-mid').value = data.paytm_mid || '';
+                }
+            } catch(err) {
+                console.warn('Failed to fetch tenant payment config:', err);
+            }
+        }
+
+        function closePaymentSetupModal() {
+            const modal = document.getElementById('payment-setup-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        async function savePaymentConfig(tenantId) {
+            const username = tenantId || document.getElementById('paytm-tenant-username').value;
+            if (!username) return showToast('Tenant ID is required', 'error');
+
+            const enabled = document.getElementById('paytm-enabled-toggle').checked;
+            const merchant_phone = document.getElementById('paytm-merchant-phone').value.trim();
+            const merchant_vpa = document.getElementById('paytm-merchant-vpa').value.trim();
+            const paytm_mid = document.getElementById('paytm-mid').value.trim();
+
+            const saveBtn = document.getElementById('save-paytm-btn');
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Saving...';
+            }
+
+            try {
+                const res = await fetch('/api/payment/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tenant_id: username,
+                        username: username,
+                        enabled: enabled,
+                        merchant_phone: merchant_phone,
+                        merchant_vpa: merchant_vpa,
+                        paytm_mid: paytm_mid,
+                        payee_name: username
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showToast('Payment configuration saved successfully!', 'success');
+                    closePaymentSetupModal();
+                } else {
+                    showToast(data.error || data.message || 'Failed to save payment config', 'error');
+                }
+            } catch (err) {
+                showToast('Request failed. Check network connection.', 'error');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1"></i> Save Payment Config';
+                }
+            }
+        }
+
+    </script>
     <!-- FontAwesome via CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
@@ -678,6 +762,7 @@
                                 </td>
                                 <td class="p-3 text-right space-x-1.5 whitespace-nowrap">
                                     <button onclick="manageTenant('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 cursor-pointer">Manage</button>
+                                    <button onclick="openPaymentSetupModal('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 cursor-pointer inline-flex items-center gap-1" title="Configure Paytm Gateway for @${u.username}">💳 Setup Payment</button>
                                     <button onclick="toggleTenantAccess('${u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 cursor-pointer">${u.automation_access ? 'Revoke' : 'Enable'}</button>
                                     <button onclick="deleteTenantAccount('${u.username}', this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-950/40 text-rose-300 border border-rose-900/80 hover:bg-rose-900/60 active:scale-95 transition inline-flex items-center gap-1 cursor-pointer" title="Permanently Delete Tenant">
                                         <i class="fa-solid fa-trash-can text-[10px]"></i>
@@ -725,6 +810,7 @@
                                 </td>
                                 <td class="p-3 text-right space-x-1.5 whitespace-nowrap">
                                     <button onclick="manageTenant('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 cursor-pointer">Manage</button>
+                                    <button onclick="openPaymentSetupModal('${u.username}', '${u.account_name || u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20 cursor-pointer inline-flex items-center gap-1" title="Configure Paytm Gateway for @${u.username}">💳 Setup Payment</button>
                                     <button onclick="toggleTenantAccess('${u.username}')" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 cursor-pointer">${u.automation_access ? 'Revoke' : 'Enable'}</button>
                                     <button onclick="deleteTenantAccount('${u.username}', this)" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-950/40 text-rose-300 border border-rose-900/80 hover:bg-rose-900/60 active:scale-95 transition inline-flex items-center gap-1 cursor-pointer" title="Permanently Delete Tenant">
                                         <i class="fa-solid fa-trash-can text-[10px]"></i>
@@ -889,5 +975,85 @@
             switchAdminTab('overview');
         });
     </script>
+
+    <!-- GLASSMORPHISM PAYMENT SETUP MODAL (Paytm Zero-Fee SaaS Gateway) -->
+    <div id="payment-setup-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md transition-all duration-300">
+        <div class="glass-card w-full max-w-md p-6 rounded-3xl border border-slate-800 space-y-5 shadow-2xl relative">
+            <!-- Close Button -->
+            <button type="button" onclick="closePaymentSetupModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg transition cursor-pointer">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+
+            <!-- Modal Header -->
+            <div class="flex items-center gap-3 border-b border-slate-800/80 pb-3">
+                <div class="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/30 flex items-center justify-center text-lg shrink-0">
+                    <i class="fa-solid fa-credit-card"></i>
+                </div>
+                <div>
+                    <h3 class="text-sm font-bold text-white flex items-center gap-1.5">
+                        Zero-Fee Paytm Payment Setup
+                    </h3>
+                    <p class="text-[11px] text-slate-400 font-mono">Tenant: <span id="payment-modal-tenant-id" class="text-amber-300 font-bold">--</span></p>
+                </div>
+            </div>
+
+            <!-- Form Fields -->
+            <form id="payment-config-form" onsubmit="event.preventDefault(); savePaymentConfig();" class="space-y-4 text-left">
+                <!-- Hidden Tenant Username -->
+                <input type="hidden" id="paytm-tenant-username" value="">
+
+                <!-- 1. Toggle Switch: Enable Payment Verification -->
+                <div class="flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800">
+                    <div>
+                        <label for="paytm-enabled-toggle" class="text-xs font-bold text-slate-200 block cursor-pointer">Enable Payment Verification</label>
+                        <span class="text-[10px] text-slate-400 block font-mono">Auto-verify UPI & Soundbox payments</span>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="paytm-enabled-toggle" class="sr-only peer">
+                        <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                    </label>
+                </div>
+
+                <!-- 2. Merchant Phone Number -->
+                <div class="space-y-1">
+                    <label class="block text-xs font-bold text-slate-300">Merchant Phone Number</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs font-mono"><i class="fa-solid fa-phone"></i></span>
+                        <input type="text" id="paytm-merchant-phone" placeholder="e.g. 919876543210" class="w-full pl-9 pr-3 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono transition">
+                    </div>
+                </div>
+
+                <!-- 3. Merchant VPA (UPI ID) -->
+                <div class="space-y-1">
+                    <label class="block text-xs font-bold text-slate-300">Merchant VPA (UPI ID)</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs font-mono"><i class="fa-solid fa-at"></i></span>
+                        <input type="text" id="paytm-merchant-vpa" placeholder="e.g. merchant@paytm" class="w-full pl-9 pr-3 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-amber-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono transition">
+                    </div>
+                </div>
+
+                <!-- 4. Paytm Soundbox MID (Merchant ID) -->
+                <div class="space-y-1">
+                    <label class="block text-xs font-bold text-slate-300">Paytm Soundbox MID (Merchant ID)</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs font-mono"><i class="fa-solid fa-building-columns"></i></span>
+                        <input type="text" id="paytm-mid" placeholder="e.g. PaytmMerchantID12345" class="w-full pl-9 pr-3 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-cyan-300 placeholder-slate-600 focus:outline-none focus:border-amber-500 font-mono transition">
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="pt-2 flex items-center justify-end gap-2">
+                    <button type="button" onclick="closePaymentSetupModal()" class="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 rounded-xl text-xs font-bold cursor-pointer transition">
+                        Cancel
+                    </button>
+                    <button type="submit" id="save-paytm-btn" class="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow-lg active:scale-95">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        <span>Save Payment Config</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
 </body>
 </html>

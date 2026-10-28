@@ -18,22 +18,17 @@ func StatusHandler(w http.ResponseWriter, r *http.Request) {
 		username = "admin"
 	}
 
-	client := whatsapp.GetOrCreateClient(username)
+	var savedJID, savedStatus string
+	if DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID, &savedStatus)
+	}
+
 	status := "Disconnected"
 	jid := ""
 
-	if client != nil && client.IsLoggedIn() {
-		status = "Connected"
-		if client.Store.ID != nil {
-			jid = client.Store.ID.User
-		}
-	}
-
-	// Always query DB status as fallback or confirmation
-	if DB != nil {
-		var savedJID, savedStatus string
-		_ = DB.QueryRow("SELECT COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID, &savedStatus)
-		if savedJID != "" && (savedStatus == "Connected" || status == "Connected") {
+	if savedJID != "" && savedStatus == "Connected" {
+		client := whatsapp.GetOrCreateClient(username)
+		if client != nil && client.IsLoggedIn() {
 			status = "Connected"
 			jid = savedJID
 		}
@@ -138,17 +133,14 @@ func LogoutWAHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Username = cleanUsername(req.Username)
 
-	if c, ok := whatsapp.ActiveClients[req.Username]; ok {
-		_ = c.Logout(context.Background())
-		c.Disconnect()
-		if c.Store != nil {
-			_ = c.Store.Delete(context.Background())
-		}
-		delete(whatsapp.ActiveClients, req.Username)
-		delete(whatsapp.QRChannelMap, req.Username)
-	}
+	// Cleanly disconnect, logout, and erase device session
+	whatsapp.DisconnectAndUnlinkClient(req.Username)
+
 	if DB != nil {
-		_, _ = DB.Exec("UPDATE users SET wa_jid='', status='Disconnected', qr='', linked_at=NULL WHERE LOWER(username)=LOWER($1)", req.Username)
+		_, _ = DB.Exec("UPDATE users SET wa_jid='', phone='', status='Disconnected', qr='', linked_at=NULL WHERE LOWER(username)=LOWER($1)", req.Username)
 	}
+
+	whatsapp.PushToLiveChat(req.Username, "", "WhatsApp session unlinked from phone", "session_unlinked")
+
 	respondJSON(w, 200, map[string]string{"status": "success", "message": "WhatsApp unlinked successfully. WhatsApp details cleared from database, user account preserved."})
 }

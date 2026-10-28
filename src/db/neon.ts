@@ -213,7 +213,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         user_type: row.user_type as 'library_owner' | 'business_user' | 'admin',
         account_name: row.account_name || `${row.username} Account`,
         phone: row.phone || '',
-        wa_jid: row.wa_jid || row.phone || '',
+        wa_jid: row.wa_jid || '',
         ai_provider: row.ai_provider || 'gemini',
         api_key: row.api_key || '',
         system_prompt: row.system_prompt || '',
@@ -349,7 +349,7 @@ export async function unpairWhatsAppFromNeon(username: string): Promise<void> {
   const clean = username.toLowerCase();
   try {
     // Only clear WhatsApp session details from DB, keep user account intact
-    await pool.query("UPDATE users SET wa_jid = '', qr = '', status = 'Disconnected', linked_at = NULL WHERE LOWER(username) = $1", [clean]);
+    await pool.query("UPDATE users SET wa_jid = '', phone = '', qr = '', status = 'Disconnected', linked_at = NULL WHERE LOWER(username) = $1", [clean]);
     console.log(`📱 [Neon DB] WhatsApp session wiped for @${clean}, user account kept active.`);
   } catch (err: any) {
     console.error('Failed to unpair WhatsApp in Neon DB:', err.message);

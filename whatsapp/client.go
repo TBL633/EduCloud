@@ -274,15 +274,8 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		}
 	}
 
-	// 2. Admin fallback if first device exists
-	if deviceStore == nil && username == "admin" {
-		dev, err := StoreContainer.GetFirstDevice(context.Background())
-		if err == nil && dev != nil {
-			deviceStore = dev
-		}
-	}
-
-	// 3. New device allocation
+	// 2. Strict User Isolation: New unlinked device allocation for this user
+	// Every user gets their own dedicated device; NEVER borrow or inherit another customer's WhatsApp device!
 	if deviceStore == nil {
 		deviceStore = StoreContainer.NewDevice()
 	}
@@ -331,6 +324,40 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	return client
 }
 
+
+// DisconnectAndUnlinkClient cleanly logs out, disconnects, erases device session from sqlstore, and clears memory
+func DisconnectAndUnlinkClient(username string) {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	ClientsLock.Lock()
+	defer ClientsLock.Unlock()
+
+	client, exists := ActiveClients[cleanUsr]
+	if exists && client != nil {
+		if client.IsConnected() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = client.Logout(ctx)
+			cancel()
+		}
+		client.Disconnect()
+
+		if client.Store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = client.Store.Delete(ctx)
+			cancel()
+		}
+	}
+
+	delete(ActiveClients, cleanUsr)
+	delete(QRChannelMap, cleanUsr)
+
+	// Clean user session in Neon PostgreSQL
+	if DB != nil {
+		_, _ = DB.Exec("UPDATE users SET wa_jid='', phone='', status='Disconnected', qr='', linked_at=NULL WHERE LOWER(username)=LOWER($1)", cleanUsr)
+	}
+
+	log.Printf("🔌 [WhatsApp Gateway] Client @%s unlinked and session erased from database.", cleanUsr)
+}
+
 // ConnectWithAutoRetry attempts to connect the WhatsApp client with automatic exponential retries
 func ConnectWithAutoRetry(client *whatsmeow.Client, username string) {
 	if client == nil {
@@ -350,6 +377,8 @@ func ConnectWithAutoRetry(client *whatsmeow.Client, username string) {
 			err := client.Connect()
 			if err == nil && client.IsConnected() {
 				log.Printf("✅ WhatsApp WebSocket connected successfully for @%s (Attempt %d)", username, attempt)
+				// Send immediate PresenceAvailable so WhatsApp server knows device is Online and routes messages in 0ms!
+				_ = client.SendPresence(types.PresenceAvailable)
 				if DB != nil && client.Store != nil && client.Store.ID != nil {
 					jidUser := client.Store.ID.User
 					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
@@ -971,14 +1000,27 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			return // Ignore newsletters, channels, status broadcasts
 		}
 
+		// 1. INSTANT BLUE TICKS (MarkRead) - Fired IMMEDIATELY upon message packet receipt!
+		// Converts Single Tick to Double Blue Tick in <0.1s so customer never waits on single tick!
+		if client != nil {
+			go func(id types.MessageID, ts time.Time, chat, sender types.JID) {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = client.MarkRead(ctx, []types.MessageID{id}, ts, chat, sender)
+				if !chat.IsEmpty() && chat != sender {
+					_ = client.MarkRead(ctx, []types.MessageID{id}, ts, chat, types.EmptyJID)
+				}
+			}(v.Info.ID, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+		}
+
 		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
 		if senderPhone == "" || len(senderPhone) < 8 || strings.HasPrefix(senderPhone, "120363") {
 			return // Ignore invalid or broadcast JIDs
 		}
 
-		// 1. Requirement 1: Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact) without reply
+		// 2. Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact, Catalog) without reply
 		if isMediaMessage(v.Message) {
-			log.Printf("🚫 Incoming message from +%s (@%s) contains media (photo/video/audio/sticker/doc). Ignored without reply as requested.", senderPhone, username)
+			log.Printf("🚫 Incoming message from +%s (@%s) contains media or catalog. Ignored without reply as requested.", senderPhone, username)
 			return
 		}
 
@@ -989,7 +1031,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		lockKey := username + "_" + senderPhone
 
-		// 0. Concurrency Lock: While reply is in-flight for this customer, ignore incoming messages
+		// 3. Concurrency Lock: While reply is in-flight for this customer, ignore incoming messages
 		// to maintain polite conversational order and prevent overlapping AI replies
 		customerInFlightLock.Lock()
 		if customerInFlightMap[lockKey] {
@@ -1010,24 +1052,17 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 		lidCacheLock.Unlock()
 
-		// 1. Instant Asynchronous Blue Ticks (MarkRead)
-		if client != nil {
-			go func() {
-				_ = client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-			}()
-		}
-
-		// 2. RAM-First Processing & Instant Live Chat SSE UI Dispatch (0ms latency)
+		// 4. RAM-First Processing & Instant Live Chat SSE UI Dispatch (0ms latency)
 		_ = updateSlidingWindowRAM(username, senderPhone, "customer", msgText)
 		PushToLiveChat(username, senderPhone, msgText, "incoming")
 
-		// 3. Asynchronous Non-Blocking DB Persistence & Lead Qualification
+		// 5. Asynchronous Non-Blocking DB Persistence & Lead Qualification
 		go func() {
 			SaveCustomerChatAndPrune(username, senderPhone, "customer", msgText)
 			CheckAndProcessLead(username, client, senderPhone, msgText, v.Message)
 		}()
 
-		// 4. Concurrent Ultra-Fast AI Reply Generation with Continuous WhatsApp Typing Loop
+		// 6. Concurrent Ultra-Fast AI Reply Generation with Continuous WhatsApp Typing Loop
 		go func() {
 			defer func() {
 				customerInFlightLock.Lock()
@@ -1043,20 +1078,43 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					activeClient = GetOrCreateClient(username)
 				}
 
-				// Continuous WhatsApp Typing Loop: pulses every 2.0s so WhatsApp NEVER hides the "typing..." logo until final delivery
+				// Continuous WhatsApp Typing Loop: pulses every 1.5s so WhatsApp NEVER hides the "typing..." logo until final delivery!
 				stopTyping := make(chan struct{})
+				var stopOnce sync.Once
+				stopTypingFunc := func() {
+					stopOnce.Do(func() {
+						close(stopTyping)
+					})
+				}
+				defer stopTypingFunc()
+
+				targetChat := v.Info.Chat
+				targetSender := v.Info.Sender
+
 				if activeClient != nil {
 					go func() {
-						ticker := time.NewTicker(2 * time.Second)
+						ticker := time.NewTicker(1500 * time.Millisecond)
 						defer ticker.Stop()
-						_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+
+						// Immediate typing indicator
+						_ = activeClient.SendChatPresence(context.Background(), targetChat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+						if !targetSender.IsEmpty() && targetSender != targetChat {
+							_ = activeClient.SendChatPresence(context.Background(), targetSender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+						}
+
 						for {
 							select {
 							case <-stopTyping:
-								_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresencePaused, types.ChatPresenceMediaText)
+								_ = activeClient.SendChatPresence(context.Background(), targetChat, types.ChatPresencePaused, types.ChatPresenceMediaText)
+								if !targetSender.IsEmpty() && targetSender != targetChat {
+									_ = activeClient.SendChatPresence(context.Background(), targetSender, types.ChatPresencePaused, types.ChatPresenceMediaText)
+								}
 								return
 							case <-ticker.C:
-								_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+								_ = activeClient.SendChatPresence(context.Background(), targetChat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+								if !targetSender.IsEmpty() && targetSender != targetChat {
+									_ = activeClient.SendChatPresence(context.Background(), targetSender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+								}
 							}
 						}
 					}()
@@ -1064,9 +1122,6 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				// Generate AI reply instantly from RAM sliding window and cached system prompt
 				replyText, imgURL := GenerateAIReplyRAM(username, senderPhone, msgText, cfg)
-
-				// Stop continuous typing indicator
-				close(stopTyping)
 
 				var deliveredReply string
 
@@ -1087,6 +1142,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 					deliveredReply = replyText
 				}
+
+				// STOP continuous typing indicator ONLY AFTER message is dispatched to WhatsApp!
+				stopTypingFunc()
 
 				if deliveredReply != "" {
 					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
@@ -1123,6 +1181,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		PushToLiveChat(username, "", "WhatsApp session was unlinked from phone.", "session_unlinked")
 
 	case *events.Connected:
+		if client != nil {
+			_ = client.SendPresence(types.PresenceAvailable)
+		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
 			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=COALESCE(linked_at, NOW()) WHERE LOWER(username)=LOWER($2)", jidStr, username)
@@ -1131,6 +1192,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 
 	case *events.PairSuccess:
+		if client != nil {
+			_ = client.SendPresence(types.PresenceAvailable)
+		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
 			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2)", jidStr, username)
@@ -1145,7 +1209,7 @@ func AutoConnectAllSessions() {
 	if DB == nil {
 		return
 	}
-	rows, err := DB.Query("SELECT DISTINCT username FROM users WHERE status='Connected' OR wa_jid!=''")
+	rows, err := DB.Query("SELECT DISTINCT username FROM users WHERE status='Connected' AND wa_jid!=''")
 	if err != nil {
 		return
 	}
@@ -1189,6 +1253,9 @@ func StartKeepAliveMonitor() {
 				if client != nil && client.Store != nil && client.Store.ID != nil && !client.IsConnected() {
 					log.Printf("🔄 [KeepAlive] Client @%s WebSocket dropped; reconnecting...", usr)
 					ConnectWithAutoRetry(client, usr)
+				} else if client != nil && client.IsConnected() {
+					// Keep device active/online so incoming messages never suffer push delay
+					_ = client.SendPresence(types.PresenceAvailable)
 				}
 			}
 		}

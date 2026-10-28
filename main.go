@@ -8,6 +8,7 @@ import (
 
 	"wa-server/api"
 	"wa-server/database"
+	"wa-server/payment"
 	"wa-server/whatsapp"
 )
 
@@ -34,6 +35,7 @@ func main() {
 	// 1. Initialize Neon Postgres Database
 	database.InitDB()
 	api.DB = database.DB
+	payment.InitPaymentModule(database.DB)
 
 	// 2. Initialize Whatsmeow Multi-Device Store
 	dbURL := database.GetDBURL()
@@ -77,6 +79,7 @@ func main() {
 	http.HandleFunc("/api/whatsapp/logout", corsMiddleware(api.LogoutWAHandler))
 	http.HandleFunc("/api/whatsapp/unpair", corsMiddleware(api.LogoutWAHandler))
 	http.HandleFunc("/api/whatsapp/unlink", corsMiddleware(api.LogoutWAHandler))
+	http.HandleFunc("/api/whatsapp/disconnect", corsMiddleware(api.LogoutWAHandler))
 	http.HandleFunc("/api/logout-wa", corsMiddleware(api.LogoutWAHandler))
 
 	http.HandleFunc("/api/send", corsMiddleware(api.SendHandler))
@@ -116,6 +119,12 @@ func main() {
 	http.HandleFunc("/api/admin/create-user", corsMiddleware(api.CreateUserHandler))
 	http.HandleFunc("/api/admin/delete-user", corsMiddleware(api.DeleteUserHandler))
 	http.HandleFunc("/api/admin/toggle-automation", corsMiddleware(api.ToggleAutomationHandler))
+
+	// Zero-Fee Paytm Payment Gateway Routes
+	http.HandleFunc("/api/payment/config", corsMiddleware(payment.ConfigHandler))
+	http.HandleFunc("/api/admin/tenant/payment-config", corsMiddleware(payment.ConfigHandler))
+	http.HandleFunc("/api/payment/generate-qr", corsMiddleware(payment.GenerateQRHandler))
+	http.HandleFunc("/api/payment/verify", corsMiddleware(payment.VerifyHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

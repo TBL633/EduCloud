@@ -138,17 +138,27 @@ func ChatSendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Record in DB with 10-message sliding window pruning
-	whatsapp.SaveCustomerChatAndPrune(username, cleanPhone, "assistant", cleanMsg)
-
-	// 2. Push to Live Chat SSE
-	whatsapp.PushToLiveChat(username, cleanPhone, cleanMsg, "outgoing")
-
-	// 3. Send over WhatsApp if device linked
+	// 1. FIRST: TRANSMIT DIRECTLY TO CUSTOMER OVER WHATSAPP
 	client := whatsapp.GetOrCreateClient(username)
+	var sendErr error
 	if client != nil && client.IsLoggedIn() {
-		_ = whatsapp.SendMessage(client, cleanPhone, cleanMsg)
+		sendErr = whatsapp.SendMessage(client, cleanPhone, cleanMsg)
+		if sendErr != nil {
+			log.Printf("⚠️ Error sending manual reply to +%s: %v", cleanPhone, sendErr)
+		} else {
+			log.Printf("📤 Manual reply sent directly to +%s over WhatsApp", cleanPhone)
+		}
+	} else {
+		log.Printf("⚠️ Cannot send manual message to +%s: WhatsApp client not connected", cleanPhone)
 	}
+
+	// 2. IMMEDIATE REAL-TIME LIVE CHAT UI UPDATE
+	whatsapp.PushToLiveChat(username, cleanPhone, cleanMsg, "outgoing_manual")
+
+	// 3. BACKGROUND ASYNC DATABASE SYNC (Does NOT block or delay customer delivery)
+	go func() {
+		whatsapp.SaveCustomerChatAndPrune(username, cleanPhone, "assistant", cleanMsg)
+	}()
 
 	respondJSON(w, 200, map[string]interface{}{
 		"status":  "success",

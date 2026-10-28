@@ -300,51 +300,51 @@
                             </div>
                         </div>
 
-                        <!-- 2. Customer Chat Conversation View (Hidden by default, shown when contact is clicked) -->
-                        <div id="chat-conversation-view" class="hidden flex flex-col h-[520px] bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-                            <!-- Chat Header with Back Button -->
-                            <div class="p-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3">
-                                <div class="flex items-center gap-3 min-w-0">
-                                    <button type="button" onclick="backToContactList()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-sm" title="Back to Contacts list">
-                                        <i class="fa-solid fa-arrow-left text-emerald-400"></i>
-                                        <span>Back</span>
+                        <!-- 2. FULL-SCREEN WhatsApp Chatting Area (WhatsApp Layout with Bottom-Stuck Typing Bar) -->
+                        <div id="chat-conversation-view" class="hidden fixed inset-0 z-[9999] w-full h-[100dvh] max-h-[100dvh] flex flex-col bg-[#0b141a] text-slate-100 overflow-hidden select-none">
+                            <!-- WhatsApp Top Header Bar -->
+                            <div class="px-3 sm:px-4 py-2.5 bg-[#202c33] border-b border-[#2a3942] flex items-center justify-between gap-3 shrink-0 shadow-md">
+                                <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                                    <button type="button" onclick="backToContactList()" class="w-9 h-9 rounded-full hover:bg-slate-700/60 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer transition shrink-0" title="Back to Contacts list">
+                                        <i class="fa-solid fa-arrow-left text-base"></i>
                                     </button>
-                                    <div class="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center justify-center text-xs font-mono shrink-0">
-                                        <i class="fa-solid fa-user"></i>
+                                    <div class="relative w-10 h-10 rounded-full bg-[#111b21] border border-[#2a3942] flex items-center justify-center text-slate-300 shrink-0">
+                                        <i class="fa-solid fa-user text-base text-emerald-400"></i>
+                                        <span class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#202c33]"></span>
                                     </div>
                                     <div class="truncate">
-                                        <div id="chat-active-phone" class="text-xs font-bold font-mono text-white truncate">Customer</div>
-                                        <div class="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                                        <div id="chat-active-phone" class="text-sm font-bold text-white font-mono truncate tracking-tight">+91 ...</div>
+                                        <div class="text-[11px] text-emerald-400 flex items-center gap-1 font-sans">
                                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                            <span>WhatsApp Active · Last 10 msgs</span>
+                                            <span>online · WhatsApp Active</span>
                                         </div>
                                     </div>
                                 </div>
-                                <button type="button" onclick="refreshActiveChatMessages()" class="px-2.5 py-1 text-slate-300 hover:text-emerald-400 text-xs font-mono cursor-pointer transition flex items-center gap-1 shrink-0">
-                                    <i class="fa-solid fa-arrows-rotate"></i>
-                                    <span class="hidden sm:inline">Refresh</span>
-                                </button>
-                            </div>
-
-                            <!-- Messages Box (Strictly last 10 messages) -->
-                            <div id="chat-messages-box" class="flex-1 p-4 space-y-3 overflow-y-auto text-xs bg-slate-950/80">
-                                <div class="text-center text-slate-500 py-16">
-                                    Loading conversation...
+                                <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                                    <button type="button" onclick="refreshActiveChatMessages()" class="w-9 h-9 rounded-full hover:bg-slate-700/60 text-slate-300 hover:text-emerald-400 flex items-center justify-center transition cursor-pointer" title="Refresh messages">
+                                        <i class="fa-solid fa-arrows-rotate text-sm"></i>
+                                    </button>
+                                    <button type="button" onclick="backToContactList()" class="w-9 h-9 rounded-full hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 flex items-center justify-center transition cursor-pointer" title="Close Chat">
+                                        <i class="fa-solid fa-xmark text-lg"></i>
+                                    </button>
                                 </div>
                             </div>
 
-                            <!-- Send Reply Input -->
-                            <div class="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-2">
-                                <input type="text" id="chat-reply-text" placeholder="Type WhatsApp reply..." class="flex-1 px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600" onkeydown="if(event.key==='Enter') sendDirectChatReply()">
-                                <button type="button" onclick="sendDirectChatReply()" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow-md">
-                                    <i class="fa-solid fa-paper-plane"></i>
-                                    <span class="hidden sm:inline">Send</span>
+                            <!-- WhatsApp Messages Area (Full Height Scrollable Canvas) -->
+                            <div id="chat-messages-box" class="flex-1 p-3 sm:p-5 space-y-2.5 overflow-y-auto bg-[#0b141a]" style="background-image: radial-gradient(rgba(32, 44, 51, 0.4) 1px, transparent 1px); background-size: 20px 20px;">
+                                <div class="text-center text-slate-500 py-16">Loading conversation...</div>
+                            </div>
+
+                            <!-- WhatsApp Typing Bar - STUCK DIRECTLY TO BOTTOM BAR (Flush bottom-0) -->
+                            <div class="bg-[#202c33] px-3 py-2.5 sm:py-3 border-t border-[#2a3942] flex items-center gap-2.5 shrink-0 w-full sticky bottom-0 z-30 shadow-2xl pb-[max(0.6rem,env(safe-area-inset-bottom))]">
+                                <input type="text" id="chat-reply-text" placeholder="Type a message..." class="flex-1 px-4 py-3 bg-[#2a3942] text-[#e9edef] placeholder-slate-400 rounded-2xl text-sm outline-none focus:ring-1 focus:ring-emerald-500 border-none transition shadow-inner" onkeydown="if(event.key==='Enter') sendDirectChatReply()" autocomplete="off">
+                                <button type="button" onclick="sendDirectChatReply()" id="chat-send-btn" class="w-11 h-11 rounded-full bg-[#00a884] hover:bg-[#008f6f] active:scale-95 text-slate-950 flex items-center justify-center transition cursor-pointer shrink-0 shadow-lg" title="Send (Enter)">
+                                    <i class="fa-solid fa-paper-plane text-sm"></i>
                                 </button>
                             </div>
                         </div>
                     </div>
                 </div>
-
                 <!-- ========================================== -->
                 <!-- TAB 3: BULK OUTREACH                       -->
                 <!-- ========================================== -->
@@ -1378,21 +1378,37 @@
 
         // 5. UNLINK WHATSAPP DEVICE
         async function unlinkWhatsAppDevice() {
-            if (!confirm('Unlink this WhatsApp session?')) return;
-            const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            if (!confirm('Are you sure you want to disconnect and unlink this WhatsApp session?')) return;
             const username = getActiveUsername();
             try {
-                await fetch('/api/whatsapp/unlink', {
+                await fetch('/api/whatsapp/disconnect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username })
                 });
+                backToContactList();
                 const chatsCard = document.getElementById('biz-customer-chats-container');
                 if (chatsCard) chatsCard.classList.add('hidden');
-                backToContactList();
+                const deskPill = document.getElementById('biz-wa-status-text');
+                if (deskPill) deskPill.innerText = 'Disconnected';
+                const codeDisplay = document.getElementById('eight-digit-display-box');
+                if (codeDisplay) codeDisplay.classList.add('hidden');
                 fetchWhatsAppQR();
+                loadUserProfile();
+                alert('WhatsApp session disconnected and unlinked successfully.');
             } catch (err) {
-                alert('Failed to unlink');
+                try {
+                    await fetch('/api/whatsapp/unlink', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username })
+                    });
+                    backToContactList();
+                    fetchWhatsAppQR();
+                    alert('WhatsApp unlinked successfully.');
+                } catch(e) {
+                    alert('Failed to disconnect WhatsApp. Please try again.');
+                }
             }
         }
 
@@ -1480,24 +1496,31 @@
         function openCustomerChat(phone) {
             const cleanPhone = String(phone).replace(/\D/g, '');
             currentActiveChatPhone = cleanPhone;
-
             const contactsView = document.getElementById('chat-contacts-view');
             const convoView = document.getElementById('chat-conversation-view');
             if (contactsView) contactsView.classList.add('hidden');
-            if (convoView) convoView.classList.remove('hidden');
-
+            if (convoView) {
+                convoView.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            }
             const titleEl = document.getElementById('chat-active-phone');
             if (titleEl) {
                 titleEl.innerHTML = formatPhoneNumberDisplay(cleanPhone);
             }
             loadCustomerChatHistory(cleanPhone);
+            const input = document.getElementById('chat-reply-text');
+            if (input) {
+                setTimeout(() => input.focus(), 150);
+            }
         }
-
         function backToContactList() {
             currentActiveChatPhone = '';
             const contactsView = document.getElementById('chat-contacts-view');
             const convoView = document.getElementById('chat-conversation-view');
-            if (convoView) convoView.classList.add('hidden');
+            if (convoView) {
+                convoView.classList.add('hidden');
+                document.body.style.overflow = '';
+            }
             if (contactsView) contactsView.classList.remove('hidden');
             loadCustomerConversationsList();
         }
@@ -1531,22 +1554,21 @@
                 box.innerHTML = messages.map(m => {
                     const isUser = m.role === 'customer' || m.role === 'user';
                     const rawMsg = m.text || m.message_text || '';
-                    const parsedHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(rawMsg) : rawMsg.replace(/\n/g, '<br>');
+                    const parsedHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(rawMsg) : rawMsg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
                     const timeStr = m.time || 'Recent';
 
                     return `
                         <div class="flex flex-col ${isUser ? 'items-start' : 'items-end'} mb-2">
-                            <div class="max-w-[85%] sm:max-w-[75%] p-3.5 rounded-2xl text-xs ${isUser ? 'bg-slate-900 text-slate-100 border border-slate-800 rounded-tl-none shadow-sm' : 'bg-emerald-700/90 text-white rounded-tr-none shadow-md border border-emerald-600/40'}">
-                                <div class="prose prose-invert max-w-none text-xs leading-relaxed font-sans break-words">${parsedHtml}</div>
-                                <div class="text-[9px] font-mono mt-1.5 ${isUser ? 'text-slate-400' : 'text-emerald-200'} flex items-center justify-end gap-1">
+                            <div class="max-w-[88%] sm:max-w-[72%] p-3 rounded-lg text-xs shadow-sm ${isUser ? 'bg-[#202c33] text-[#e9edef] rounded-tl-none border border-[#2a3942]/60' : 'bg-[#005c4b] text-[#e9edef] rounded-tr-none border border-[#00755f]/60'}">
+                                <div class="text-xs leading-relaxed font-sans break-words whitespace-pre-wrap select-text">${parsedHtml}</div>
+                                <div class="text-[10px] font-mono mt-1 ${isUser ? 'text-slate-400' : 'text-emerald-200/80'} flex items-center justify-end gap-1 select-none">
                                     <span>${timeStr}</span>
-                                    ${!isUser ? '<i class="fa-solid fa-check-double text-[10px] text-emerald-300"></i>' : ''}
+                                    ${!isUser ? '<i class="fa-solid fa-check-double text-[10px] text-[#53bdeb]"></i>' : ''}
                                 </div>
                             </div>
                         </div>
                     `;
                 }).join('');
-
                 box.scrollTop = box.scrollHeight;
             } catch (err) {
                 box.innerHTML = `<div class="text-center text-rose-400 py-12">Error loading chat history from database.</div>`;
@@ -1591,22 +1613,57 @@
 
             const username = getActiveUsername();
             input.value = '';
+            input.focus();
 
-            showChatTypingIndicator();
+            // 1. INSTANT OPTIMISTIC UI DISPLAY (0ms latency!)
+            const box = document.getElementById('chat-messages-box');
+            const tempId = 'temp-msg-' + Date.now();
+            const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+            
+            if (box) {
+                const bubble = document.createElement('div');
+                bubble.id = tempId;
+                bubble.className = 'flex flex-col items-end mb-2';
+                const safeText = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+                bubble.innerHTML = `
+                    <div class="max-w-[88%] sm:max-w-[72%] p-3 rounded-lg rounded-tr-none text-xs bg-[#005c4b] text-[#e9edef] shadow-sm border border-[#00755f]/60">
+                        <div class="text-xs leading-relaxed font-sans break-words whitespace-pre-wrap select-text">${safeText}</div>
+                        <div class="text-[10px] text-emerald-200/80 font-mono mt-1 flex items-center justify-end gap-1 select-none">
+                            <span>${nowTime}</span>
+                            <i class="fa-regular fa-clock text-[10px] text-emerald-300 temp-tick"></i>
+                        </div>
+                    </div>
+                `;
+                box.appendChild(bubble);
+                box.scrollTop = box.scrollHeight;
+            }
 
             try {
-                await fetch('/api/chats/send', {
+                // 2. DISPATCH OVER WHATSAPP DIRECTLY TO CUSTOMER FIRST (Direct socket send)
+                const res = await fetch('/api/chats/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, phone: currentActiveChatPhone, message })
                 });
-                setTimeout(() => {
-                    hideChatTypingIndicator();
-                    loadCustomerChatHistory(currentActiveChatPhone);
-                }, 800);
+                
+                // On success, turn clock icon into Double Blue Tick!
+                const tempEl = document.getElementById(tempId);
+                if (tempEl) {
+                    const tick = tempEl.querySelector('.temp-tick');
+                    if (tick) {
+                        tick.className = 'fa-solid fa-check-double text-[10px] text-[#53bdeb]';
+                    }
+                }
             } catch (err) {
-                hideChatTypingIndicator();
-                alert('Failed to dispatch message');
+                console.error('Error sending message:', err);
+                const tempEl = document.getElementById(tempId);
+                if (tempEl) {
+                    const tick = tempEl.querySelector('.temp-tick');
+                    if (tick) {
+                        tick.className = 'fa-solid fa-circle-exclamation text-[10px] text-rose-400';
+                        tick.title = 'Message delivery issue';
+                    }
+                }
             }
         }
 
