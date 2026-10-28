@@ -41,7 +41,6 @@ func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-}
 
 // ADMIN LIST ALL USERS & CATEGORIZED TENANTS
 func ListUsersHandler(w http.ResponseWriter, r *http.Request) {
