@@ -175,7 +175,7 @@ function pushToLiveChat(username: string, phone: string, text: string, msgType: 
 
 // Helper to fetch live tenant catalog items for AI personalization
 async function getTenantCatalog(username: string): Promise<Array<{ name: string; price: string; details: string; item_type: string; unit_type: string; variants: Array<{ variant: string; price: string }> }>> {
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -791,7 +791,7 @@ app.post(['/api/auth/verify-otp', '/api/auth/neon/verify-otp'], async (req: Requ
 
   // 1. Verify in Neon DB
   let isOtpValid = false;
-  if (isDbConnected()) {
+  if (getPool()) {
     isOtpValid = await verifyOtpInNeon(cleanEmail, cleanCode);
   }
 
@@ -1094,7 +1094,7 @@ app.post('/api/admin/create-user', async (req: Request, res: Response) => {
 
 // 3. ADMIN: LIST USERS & THEIR ADDED ACCOUNTS
 app.get('/api/admin/users', async (_req: Request, res: Response) => {
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -1287,7 +1287,7 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
   let jid = (user?.status === 'Connected' && user?.wa_jid) ? user.wa_jid : '';
 
   // Double check Neon DB matching username handle OR full email OR raw parameter
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -1399,7 +1399,7 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
     user.status = 'Connected';
   }
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -1494,7 +1494,7 @@ app.all(['/api/payment/config', '/api/admin/tenant/payment-config'], async (req:
     };
     paymentConfigsMap.set(cleanUser, configData);
 
-    if (isDbConnected()) {
+    if (getPool()) {
       const pool = getPool();
       if (pool) {
         try {
@@ -1705,7 +1705,7 @@ app.all('/api/whatsapp/incoming', async (req: Request, res: Response) => {
   pushToLiveChat(activeUsername, cleanPhone, message, 'incoming');
 
   // 2. Capture Lead in Neon DB
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2044,8 +2044,8 @@ app.post('/api/bulk/revoke', (req: Request, res: Response) => {
 
 // 10F. GET CAMPAIGN TRACKING STATUS
 app.get('/api/bulk/status', (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'lead_business1';
-  const campaign = activeCampaigns.get(username) || activeCampaigns.get('lead_business1') || activeCampaigns.get('admin');
+  const username = (req.query.username as string) || '';
+  const campaign = activeCampaigns.get(username) || activeCampaigns.get('') || activeCampaigns.get('admin');
 
   if (!campaign) {
     return res.json({ campaign: null });
@@ -2125,7 +2125,7 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
   const username = (req.query.username as string) || '';
   let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2200,7 +2200,7 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
     user.auto_reply = resolvedAutoReply;
   }
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2257,9 +2257,9 @@ app.post('/api/ai/test-lead-alert', async (req: Request, res: Response) => {
 
 // 12. SMART AI PRODUCT & SERVICE CATALOG
 app.get('/api/products', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'lead_business1';
+  const username = (req.query.username as string) || '';
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2302,9 +2302,6 @@ app.get('/api/products', async (req: Request, res: Response) => {
   }
 
   let items = memoryCatalog.filter(m => m.username.toLowerCase() === username.toLowerCase());
-  if (items.length === 0) {
-    items = memoryCatalog;
-  }
   const products = items.map((m, index) => ({
     id: m.id,
     name: m.name,
@@ -2319,7 +2316,7 @@ app.get('/api/products', async (req: Request, res: Response) => {
 });
 
 app.post('/api/products', async (req: Request, res: Response) => {
-  const { name, price = '', details = '', username = 'lead_business1', item_type = 'product', unit_type = 'custom', variants = [] } = req.body || {};
+  const { name, price = '', details = '', username = '', item_type = 'product', unit_type = 'custom', variants = [] } = req.body || {};
   if (!name) {
     return res.status(400).json({ error: 'Product Name is required' });
   }
@@ -2335,7 +2332,7 @@ app.post('/api/products', async (req: Request, res: Response) => {
   const aiTag = `<ITEM_${(isDbConnected() ? Math.floor(Math.random() * 900 + 100) : memoryCatalog.length + 1)}>`;
   const jsonVariants = JSON.stringify(variants);
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2392,7 +2389,7 @@ app.delete('/api/products', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing product id' });
   }
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2414,12 +2411,12 @@ app.delete('/api/products', async (req: Request, res: Response) => {
 
 // 12D. BUSINESS DASHBOARD STATS (REAL LIVE METRICS)
 app.get('/api/business/dashboard', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'lead_business1';
+  const username = (req.query.username as string) || '';
   const campaign = activeCampaigns.get(username);
   const activeCampaignsCount = (campaign && campaign.status === 'running') ? 1 : 0;
 
   let leadsCount = 0;
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2442,10 +2439,10 @@ app.get('/api/business/dashboard', async (req: Request, res: Response) => {
 
 // 12E. RECENT CAPTURED LEADS (REAL DB & MEMORY DATA - ZERO DUMMY DATA)
 app.get('/api/leads', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'lead_business1';
+  const username = (req.query.username as string) || '';
   let leads: Array<{ id: string | number; customer_phone: string; inquiry_text: string; status: string; time: string }> = [];
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2476,7 +2473,7 @@ app.get('/api/leads', async (req: Request, res: Response) => {
 
 // 12F. USER / TENANT CONFIG (ZERO SECRETS EXPOSED)
 app.get('/api/user/config', (req: Request, res: Response) => {
-  const username = (req.query.username as string) || 'lead_business1';
+  const username = (req.query.username as string) || '';
   const user = memoryUsers.get(username.toLowerCase());
 
   if (!user) {
@@ -2508,7 +2505,7 @@ app.get('/api/user/profile', async (req: Request, res: Response) => {
   const cleanUser = username.toLowerCase();
   let user = memoryUsers.get(cleanUser);
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2578,7 +2575,7 @@ app.post('/api/user/verify-password', async (req: Request, res: Response) => {
   const cleanUser = username.toLowerCase();
   let storedHash = '';
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2629,7 +2626,7 @@ app.post('/api/user/change-password', async (req: Request, res: Response) => {
   const cleanUser = username.toLowerCase();
   let storedHash = '';
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2658,7 +2655,7 @@ app.post('/api/user/change-password', async (req: Request, res: Response) => {
   const newHash = bcrypt.hashSync(new_password, 10);
 
   // Update in Neon DB
-  if (isDbConnected()) {
+  if (getPool()) {
     await updateUserPasswordInNeon(cleanUser, newHash);
   }
 
@@ -2681,7 +2678,7 @@ app.get('/api/chats', async (req: Request, res: Response) => {
     return res.status(400).json({ conversations: [] });
   }
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const conversations = await getCustomerConversations(username);
     return res.json({ conversations });
   }
@@ -2717,7 +2714,7 @@ app.get('/api/chats/messages', async (req: Request, res: Response) => {
 
   const cleanPhone = phone.replace(/\D/g, '');
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const dbMessages = await getLast10Chats(username, cleanPhone);
     const messages = dbMessages.map(m => ({
       id: m.id,
@@ -2741,7 +2738,7 @@ app.get('/api/chats/messages', async (req: Request, res: Response) => {
 
 // 12L. SEND OUTGOING MESSAGE FROM CHAT UI
 app.post('/api/chats/send', async (req: Request, res: Response) => {
-  const { username = 'lead_business1', phone = '', message = '' } = req.body || {};
+  const { username = '', phone = '', message = '' } = req.body || {};
   if (!phone || !message) {
     return res.status(400).json({ status: 'error', message: 'Phone number and message text required' });
   }
@@ -2805,7 +2802,7 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
   let libraryOwnersCount = 0;
   let businessUsersCount = 0;
 
-  if (isDbConnected()) {
+  if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
@@ -2883,7 +2880,7 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
       totalMessagesSent: stats.totalMessagesSent,
       totalAiReplies: stats.totalAiReplies,
       campaignsLaunched: stats.campaignsLaunched,
-      totalMediaItems: memoryCatalog.length
+      totalMediaItems: getPool() ? parseInt((await getPool()!.query("SELECT COUNT(*) FROM products")).rows[0]?.count || '0', 10) : memoryCatalog.length
     },
     users: activeUsersList
   });

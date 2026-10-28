@@ -221,47 +221,101 @@
                 </div>
 
                 <!-- ========================================== -->
-                <!-- TAB 2: WHATSAPP LINK SETUP (QR & 8-DIGIT)  -->
+                <!-- TAB 2: WHATSAPP LINK SETUP (100% PROOF MULTI-METHOD PAIRING)  -->
                 <!-- ========================================== -->
                 <div id="view-connect" class="biz-tab-content hidden max-w-4xl mx-auto space-y-6">
-                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 text-center">
-                        <h3 class="text-base font-bold text-white mb-1">WhatsApp Web Session Pairing</h3>
-                        <p class="text-xs text-slate-400 mb-6">Scan QR Code or enter your 8-digit code on WhatsApp to authorize automation.</p>
-                        
-                        <!-- 1. QR Code Scanner / Linked Status Box -->
-                        <div class="min-h-[200px] w-full max-w-sm mx-auto bg-slate-950 p-4 rounded-3xl border border-slate-800 flex items-center justify-center shadow-inner">
-                            <div id="biz-qrcode-box" class="w-full"></div>
+                    <div class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 text-center space-y-6 shadow-2xl">
+                        <!-- Header Banner -->
+                        <div class="border-b border-slate-800/80 pb-5">
+                            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono font-bold mb-2">
+                                <i class="fa-brands fa-whatsapp text-sm"></i>
+                                <span>24/7 WhatsApp Web Gateway</span>
+                            </div>
+                            <h3 class="text-lg sm:text-xl font-black text-white">WhatsApp Account Link Setup</h3>
+                            <p class="text-xs text-slate-400 mt-1 max-w-lg mx-auto">Scan QR Code or enter 8-digit phone pairing code to connect your WhatsApp account for 24/7 AI Lead Automation.</p>
                         </div>
 
-                        <!-- 2. "Pair with 8-Digit Code" Input Box (Hidden when Account Linked) -->
-                        <div id="biz-pairing-section" class="mt-8 pt-6 border-t border-slate-800/80 text-left">
-                            <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                                <span>Pair with 8-Digit Code</span>
-                                <span class="text-[10px] text-indigo-400 font-normal">Alternative to QR</span>
-                            </label>
-                            <div class="flex flex-col sm:flex-row gap-2">
-                                <input type="text" id="biz-pair-phone-input" placeholder="Enter phone with country code (e.g. 919876543202)" class="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-emerald-500">
-                                <button type="button" onclick="pairWithEightDigitCode()" class="w-full sm:w-auto px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer">
-                                    Get Code
-                                </button>
+                        <!-- Method Switcher Buttons -->
+                        <div class="flex items-center justify-center gap-2 p-1.5 bg-slate-950/80 border border-slate-800/80 rounded-2xl w-full max-w-md mx-auto">
+                            <button type="button" id="btn-mode-qr" onclick="setPairingMode('qr')" class="flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 bg-emerald-500 text-slate-950 shadow-md cursor-pointer">
+                                <i class="fa-solid fa-qrcode"></i>
+                                <span>Scan QR Code</span>
+                            </button>
+                            <button type="button" id="btn-mode-code" onclick="setPairingMode('code')" class="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer">
+                                <i class="fa-solid fa-mobile-screen-button"></i>
+                                <span>8-Digit Phone Code</span>
+                            </button>
+                        </div>
+                        
+                        <!-- 1. QR Code Scanner / Linked Status Box -->
+                        <div id="section-mode-qr" class="space-y-5">
+                            <div class="min-h-[220px] w-full max-w-sm mx-auto bg-slate-950 p-5 rounded-3xl border border-slate-800/90 flex items-center justify-center shadow-inner relative">
+                                <div id="biz-qrcode-box" class="w-full"></div>
                             </div>
-                            <!-- 8-Digit Code Output Box -->
-                            <div id="eight-digit-display-box" class="hidden mt-3 p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-center">
-                                <div class="text-[10px] uppercase text-emerald-400 font-bold tracking-wider mb-1">Your WhatsApp 8-Digit Pairing Code:</div>
-                                <div id="eight-digit-code" class="text-2xl font-black text-emerald-300 font-mono tracking-widest"></div>
+
+                            <!-- QR Code Step-by-step Instructions -->
+                            <div class="p-4 rounded-2xl bg-slate-950/60 border border-slate-800/80 text-left max-w-md mx-auto space-y-2.5">
+                                <div class="text-[11px] font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                                    <i class="fa-solid fa-list-check text-emerald-400"></i>
+                                    <span>How to scan on WhatsApp Mobile:</span>
+                                </div>
+                                <ol class="text-xs text-slate-400 space-y-1.5 list-decimal list-inside font-sans">
+                                    <li>Open <strong class="text-white">WhatsApp</strong> on your phone.</li>
+                                    <li>Tap <strong class="text-white">Menu ⋮</strong> (Android) or <strong class="text-white">Settings ⚙️</strong> (iPhone).</li>
+                                    <li>Tap <strong class="text-white">Linked Devices</strong> ➔ <strong class="text-white">Link a Device</strong>.</li>
+                                    <li>Point your camera at the QR code above to authorize automation.</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- 2. "Pair with 8-Digit Code" Input Box (Hidden when QR mode active or Account Linked) -->
+                        <div id="section-mode-code" class="hidden space-y-5 text-left max-w-md mx-auto">
+                            <div class="p-5 rounded-3xl bg-slate-950 border border-slate-800/90 space-y-4">
+                                <div>
+                                    <label for="biz-pair-phone-input" class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                                        <span>Enter Phone Number with Country Code</span>
+                                        <span class="text-[10px] text-emerald-400 font-mono font-bold">+91 India Default</span>
+                                    </label>
+                                    <div class="relative">
+                                        <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500 font-mono text-xs"><i class="fa-solid fa-phone"></i></span>
+                                        <input type="text" id="biz-pair-phone-input" placeholder="e.g. 919876543210" class="w-full pl-9 pr-3.5 py-3 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:border-emerald-500 transition">
+                                    </div>
+                                    <p class="text-[10px] text-slate-500 mt-1">Make sure to include country code without + sign (e.g. 91 for India).</p>
+                                </div>
+
+                                <button type="button" onclick="pairWithEightDigitCode()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg active:scale-95">
+                                    <i class="fa-solid fa-key"></i>
+                                    <span>Get 8-Digit Pairing Code</span>
+                                </button>
+
+                                <!-- 8-Digit Code Output Display Card -->
+                                <div id="eight-digit-display-box" class="hidden mt-4 p-4 bg-emerald-500/10 border border-emerald-500/40 rounded-2xl text-center space-y-2 shadow-lg">
+                                    <div class="text-[10px] uppercase text-emerald-400 font-bold font-mono tracking-wider">Your WhatsApp 8-Digit Pairing Code:</div>
+                                    <div class="flex items-center justify-center gap-3">
+                                        <div id="eight-digit-code" class="text-3xl font-black text-emerald-300 font-mono tracking-widest bg-slate-950 px-4 py-2 rounded-xl border border-emerald-500/50"></div>
+                                        <button type="button" onclick="copyPairingCode()" id="btn-copy-code" class="p-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold transition cursor-pointer" title="Copy Code">
+                                            <i class="fa-solid fa-copy"></i>
+                                        </button>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400 font-mono">Open WhatsApp ➔ Linked Devices ➔ Link with phone number instead ➔ Enter code above.</p>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Session Control Buttons -->
-                        <div id="biz-session-actions" class="mt-6 flex flex-col sm:flex-row justify-center gap-3">
-                            <button type="button" onclick="fetchWhatsAppQR()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700 cursor-pointer flex items-center justify-center gap-1.5">
-                                <i class="fa-solid fa-arrows-rotate text-emerald-400"></i> Refresh Connection Status
+                        <div id="biz-session-actions" class="pt-2 flex flex-col sm:flex-row justify-center gap-3 border-t border-slate-800/80">
+                            <button type="button" onclick="fetchWhatsAppQR()" class="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold border border-slate-700 cursor-pointer flex items-center justify-center gap-2 transition shadow-sm">
+                                <i class="fa-solid fa-arrows-rotate text-emerald-400"></i>
+                                <span>Refresh Connection Status</span>
                             </button>
-                            <button type="button" onclick="unlinkWhatsAppDevice()" class="px-4 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-xl text-xs font-bold border border-rose-900 cursor-pointer flex items-center justify-center gap-1.5">
-                                <i class="fa-solid fa-link-slash"></i> Disconnect / Unlink WhatsApp
+                            <button type="button" onclick="unlinkWhatsAppDevice()" class="px-5 py-2.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-xl text-xs font-bold border border-rose-900 cursor-pointer flex items-center justify-center gap-2 transition shadow-sm">
+                                <i class="fa-solid fa-link-slash"></i>
+                                <span>Disconnect / Unlink WhatsApp</span>
                             </button>
                         </div>
                     </div>
+
+                    <!-- Live Customer Chats & Contacts Card (Visible ONLY when WhatsApp is Linked) -->
 
                     <!-- Live Customer Chats & Contacts Card (Visible ONLY when WhatsApp is Linked) -->
                     <div id="biz-customer-chats-container" class="glass-card p-5 sm:p-6 rounded-3xl border border-slate-800 space-y-4 text-left hidden">
@@ -1364,6 +1418,41 @@
                     </div>
                 `;
             }
+        }
+
+        // PAIRING MODE SWITCHER
+        function setPairingMode(mode) {
+            const qrBtn = document.getElementById('btn-mode-qr');
+            const codeBtn = document.getElementById('btn-mode-code');
+            const qrSec = document.getElementById('section-mode-qr');
+            const codeSec = document.getElementById('section-mode-code');
+
+            if (mode === 'code') {
+                if (codeBtn) codeBtn.className = "flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 bg-emerald-500 text-slate-950 shadow-md cursor-pointer";
+                if (qrBtn) qrBtn.className = "flex-1 py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer";
+                if (codeSec) codeSec.classList.remove('hidden');
+                if (qrSec) qrSec.classList.add('hidden');
+            } else {
+                if (qrBtn) qrBtn.className = "flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 bg-emerald-500 text-slate-950 shadow-md cursor-pointer";
+                if (codeBtn) codeBtn.className = "flex-1 py-2 px-3 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition flex items-center justify-center gap-2 cursor-pointer";
+                if (qrSec) qrSec.classList.remove('hidden');
+                if (codeSec) codeSec.classList.add('hidden');
+            }
+        }
+
+        function copyPairingCode() {
+            const codeEl = document.getElementById('eight-digit-code');
+            if (!codeEl) return;
+            const codeText = codeEl.innerText.replace(/\s+/g, '');
+            navigator.clipboard.writeText(codeText).then(() => {
+                const btn = document.getElementById('btn-copy-code');
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i>';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fa-solid fa-copy"></i>';
+                    }, 2000);
+                }
+            }).catch(() => {});
         }
 
         // 4. PAIR WITH 8-DIGIT CODE

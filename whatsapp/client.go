@@ -331,6 +331,7 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 									linked_at = NOW();
 							`
 							_, _ = DB.Exec(upsertQuery, username, jidUser)
+	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidUser, username)
 						}
 					}
 				}
@@ -1328,6 +1329,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					linked_at = COALESCE(users.linked_at, NOW());
 			`
 			_, _ = DB.Exec(upsertQuery, username, jidStr)
+	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidStr, username)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
 		}
@@ -1348,6 +1350,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					linked_at = COALESCE(users.linked_at, NOW());
 			`
 			_, _ = DB.Exec(upsertQuery, username, jidStr)
+	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidStr, username)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
