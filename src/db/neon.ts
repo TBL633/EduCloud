@@ -175,6 +175,21 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       CREATE INDEX IF NOT EXISTS idx_chats_user_phone ON customer_chats(username, customer_phone, id DESC);
     `);
 
+    // Tenant Payment Configs table (Paytm Gateway)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tenant_payment_configs (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        enabled BOOLEAN DEFAULT false,
+        merchant_phone VARCHAR(50) DEFAULT '',
+        merchant_vpa VARCHAR(100) DEFAULT '',
+        paytm_mid VARCHAR(100) DEFAULT '',
+        payee_name VARCHAR(255) DEFAULT '',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
     // Email OTP Verifications table (Neon Auth)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS email_verifications (

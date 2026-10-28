@@ -44,13 +44,13 @@
         }
 
         async function savePaymentConfig(tenantId) {
-            const username = tenantId || document.getElementById('paytm-tenant-username').value;
+            const username = tenantId || document.getElementById('paytm-tenant-username')?.value;
             if (!username) return showToast('Tenant ID is required', 'error');
 
-            const enabled = document.getElementById('paytm-enabled-toggle').checked;
-            const merchant_phone = document.getElementById('paytm-merchant-phone').value.trim();
-            const merchant_vpa = document.getElementById('paytm-merchant-vpa').value.trim();
-            const paytm_mid = document.getElementById('paytm-mid').value.trim();
+            const enabled = document.getElementById('paytm-enabled-toggle')?.checked || false;
+            const merchant_phone = document.getElementById('paytm-merchant-phone')?.value.trim() || '';
+            const merchant_vpa = document.getElementById('paytm-merchant-vpa')?.value.trim() || '';
+            const paytm_mid = document.getElementById('paytm-mid')?.value.trim() || '';
 
             const saveBtn = document.getElementById('save-paytm-btn');
             if (saveBtn) {
@@ -74,8 +74,8 @@
                 });
 
                 const data = await res.json();
-                if (res.ok && data.status === 'success') {
-                    showToast('Payment configuration saved successfully!', 'success');
+                if (res.ok && (data.status === 'success' || data.config)) {
+                    showToast('Paytm payment configuration saved successfully!', 'success');
                     closePaymentSetupModal();
                 } else {
                     showToast(data.error || data.message || 'Failed to save payment config', 'error');
@@ -89,7 +89,6 @@
                 }
             }
         }
-
     </script>
     <!-- FontAwesome via CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">

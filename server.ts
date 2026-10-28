@@ -1270,8 +1270,13 @@ async function getOrCreateTenantQR(username: string): Promise<string> {
 
 // 6. STATUS & QR CODE (Unified handler for /api/status, /api/whatsapp/status, /api/whatsapp/qr)
 app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
-  const cleanUser = username.trim().toLowerCase();
+  const rawReqUser = (req.query.username as string) || (req.headers['x-username'] as string) || '';
+  let cleanUser = rawReqUser.trim().toLowerCase().replace(/^@/, '');
+
+  if (cleanUser.includes('@')) {
+    cleanUser = cleanUser.split('@')[0];
+  }
+
   let user = memoryUsers.get(cleanUser) || memoryUsers.get('admin');
 
   const host = req.get('host') || `localhost:${PORT}`;
@@ -1281,27 +1286,34 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
   let isConnectedState = user?.status === 'Connected' && Boolean(user?.wa_jid);
   let jid = (user?.status === 'Connected' && user?.wa_jid) ? user.wa_jid : '';
 
-  // Double check Neon DB for connected status
+  // Double check Neon DB matching username handle OR full email OR raw parameter
   if (isDbConnected()) {
     const pool = getPool();
     if (pool) {
       try {
-        const r = await pool.query('SELECT status, wa_jid, phone FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser || 'admin']);
+        const r = await pool.query(
+          'SELECT status, wa_jid, phone, username FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1 OR LOWER(username) = $2 OR LOWER(email) = $2 LIMIT 1',
+          [cleanUser || 'admin', rawReqUser.toLowerCase() || 'admin']
+        );
         if (r.rows.length > 0) {
           const row = r.rows[0];
           if (row.status === 'Connected' && row.wa_jid) {
             isConnectedState = true;
             jid = row.wa_jid;
-            if (user) {
-              user.status = 'Connected';
-              user.wa_jid = jid;
+            const targetKey = row.username.toLowerCase();
+            const memUser = memoryUsers.get(targetKey) || user;
+            if (memUser) {
+              memUser.status = 'Connected';
+              memUser.wa_jid = jid;
             }
           } else {
             isConnectedState = false;
             jid = '';
-            if (user) {
-              user.status = 'Disconnected';
-              user.wa_jid = '';
+            const targetKey = row.username.toLowerCase();
+            const memUser = memoryUsers.get(targetKey) || user;
+            if (memUser) {
+              memUser.status = 'Disconnected';
+              memUser.wa_jid = '';
             }
           }
         }
@@ -1322,17 +1334,25 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
     });
   }
 
-  let qr = user?.qr || '';
-  if (!qr && cleanUser) {
-    qr = await getOrCreateTenantQR(cleanUser);
-    if (user) user.qr = qr;
+  // Not connected - fetch QR code
+  let qrCode = user?.qr || '';
+  if (!qrCode && isDbConnected()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const qRes = await pool.query('SELECT qr FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser || 'admin']);
+        if (qRes.rows.length > 0 && qRes.rows[0].qr) {
+          qrCode = qRes.rows[0].qr;
+        }
+      } catch (e) {}
+    }
   }
 
   return res.json({
-    status: user?.status || 'Disconnected',
-    qr,
+    status: 'Disconnected',
+    qr: qrCode,
     connected: false,
-    jid: user?.wa_jid || '',
+    jid: '',
     endpoint,
     username: cleanUser || 'admin',
     role: user?.role || 'user',

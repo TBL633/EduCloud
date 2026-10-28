@@ -973,10 +973,18 @@
         // --- 2. AUTH GUARD & SESSION HELPER ---
         function getActiveUsername() {
             const user = JSON.parse(localStorage.getItem('user_data') || '{}');
-            // Regular non-admin tenants must strictly use their own username!
-            if (user.role && user.role !== 'admin') {
-                return String(user.username || '').replace(/^@/, '').trim();
+            let raw = '';
+            if (user.role && user.role !== 'admin' && user.username) {
+                raw = user.username;
+            } else {
+                raw = localStorage.getItem('impersonating') || user.username || '';
             }
+            raw = String(raw).replace(/^@/, '').trim();
+            if (raw.includes('@')) {
+                raw = raw.split('@')[0];
+            }
+            return raw.toLowerCase();
+        }
             let raw = localStorage.getItem('impersonating') || user.username || '';
             return String(raw).replace(/^@/, '').trim();
         }
