@@ -1110,7 +1110,6 @@ func DispatchLeadAlertWhatsAppDirect(username, alertMsg string) {
 		log.Printf("✅ [Lead Alert] Successfully delivered Confirmed Lead WhatsApp alert to +%s for @%s", targetPhone, cleanUsr)
 	}
 }
-}
 
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
