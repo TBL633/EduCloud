@@ -378,7 +378,7 @@ func ConnectWithAutoRetry(client *whatsmeow.Client, username string) {
 			if err == nil && client.IsConnected() {
 				log.Printf("✅ WhatsApp WebSocket connected successfully for @%s (Attempt %d)", username, attempt)
 				// Send immediate PresenceAvailable so WhatsApp server knows device is Online and routes messages in 0ms!
-				_ = client.SendPresence(types.PresenceAvailable)
+				_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 				if DB != nil && client.Store != nil && client.Store.ID != nil {
 					jidUser := client.Store.ID.User
 					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
@@ -1182,7 +1182,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 	case *events.Connected:
 		if client != nil {
-			_ = client.SendPresence(types.PresenceAvailable)
+			_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
@@ -1193,7 +1193,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 	case *events.PairSuccess:
 		if client != nil {
-			_ = client.SendPresence(types.PresenceAvailable)
+			_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
@@ -1255,7 +1255,7 @@ func StartKeepAliveMonitor() {
 					ConnectWithAutoRetry(client, usr)
 				} else if client != nil && client.IsConnected() {
 					// Keep device active/online so incoming messages never suffer push delay
-					_ = client.SendPresence(types.PresenceAvailable)
+					_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 				}
 			}
 		}

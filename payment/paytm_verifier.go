@@ -1,7 +1,6 @@
 package payment
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
