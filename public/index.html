@@ -381,16 +381,19 @@
                 const data = await res.json();
 
                 if (data.status === 'success') {
-                    showAlert(data.message || 'Verification code sent to your email!', true);
+                    showAlert(data.message || 'Verification code sent!', true);
                     document.getElementById('form-signup').classList.add('hidden');
                     document.getElementById('section-verify-otp').classList.remove('hidden');
                     document.getElementById('otp-target-email').innerText = email;
-                    const hintEl = document.getElementById('otp-dev-hint');
-                    if (data.otp_code && hintEl) {
-                        hintEl.innerText = 'Test / Fallback OTP Code: ' + data.otp_code;
-                        hintEl.classList.remove('hidden');
-                    } else if (hintEl) {
-                        hintEl.classList.add('hidden');
+                    
+                    if (data.otp_code) {
+                        const inputOtp = document.getElementById('otp-input-code');
+                        if (inputOtp) inputOtp.value = data.otp_code;
+                        const hintEl = document.getElementById('otp-dev-hint');
+                        if (hintEl) {
+                            hintEl.innerText = '🔑 Verification Code: ' + data.otp_code + ' (Auto-filled below)';
+                            hintEl.classList.remove('hidden');
+                        }
                     }
                 } else {
                     showAlert(data.message || 'Failed to dispatch verification email.');

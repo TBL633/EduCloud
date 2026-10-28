@@ -36,6 +36,9 @@ func main() {
 	database.InitDB()
 	api.DB = database.DB
 	payment.InitPaymentModule(database.DB)
+	payment.SetPaymentVerifiedCallback(func(tenantID, orderID, amount, txnID string) {
+		whatsapp.TriggerConfirmedPaymentLead(tenantID, "", orderID, amount, txnID)
+	})
 
 	// 2. Initialize Whatsmeow Multi-Device Store
 	dbURL := database.GetDBURL()

@@ -42,6 +42,13 @@ type PaytmStatusResponse struct {
 }
 
 // In-Memory thread-safe payment config cache for 512MB RAM performance (0ms lookup)
+var onPaymentVerifiedCallback func(tenantID, orderID, amount, txnID string)
+
+// SetPaymentVerifiedCallback registers the function to call when payment is confirmed
+func SetPaymentVerifiedCallback(fn func(tenantID, orderID, amount, txnID string)) {
+	onPaymentVerifiedCallback = fn
+}
+
 var (
 	configCacheLock sync.RWMutex
 	configCacheMap  = make(map[string]PaymentConfig)
@@ -346,6 +353,13 @@ func VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isSuccess := statusResp.Status == "TXN_SUCCESS"
+	if isSuccess && onPaymentVerifiedCallback != nil {
+		tenantUser := req.TenantID
+		if tenantUser == "" {
+			tenantUser = "admin"
+		}
+		go onPaymentVerifiedCallback(tenantUser, req.OrderID, statusResp.TxnAmount, statusResp.TxnID)
+	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":   "success",
 		"verified": isSuccess,

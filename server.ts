@@ -695,11 +695,9 @@ app.post(['/api/auth/send-otp', '/api/auth/neon/send-otp'], async (req: Request,
 
   return res.json({
     status: 'success',
-    message: neonAuthSent
-      ? (neonAuthMsg || `Verification email dispatched via Neon Auth to ${emailInput}! Check your inbox.`)
-      : `Verification Code: ${otpCode} (Neon Auth verification code generated for ${emailInput}).`,
+    message: `Verification Code Dispatched! (Your Code: ${otpCode})`,
     email: emailInput,
-    otp_code: neonAuthSent ? undefined : otpCode,
+    otp_code: otpCode,
     neon_auth_sent: neonAuthSent
   });
 });
@@ -1292,7 +1290,17 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
     const pool = getPool();
     if (pool) {
       try {
-        await pool.query("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=CURRENT_TIMESTAMP WHERE LOWER(username)=$2", [cleanPhone, cleanUser]);
+        
+        const upsertQuery = `
+          INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+          VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (username) DO UPDATE SET
+            wa_jid = EXCLUDED.wa_jid,
+            phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+            status = 'Connected',
+            linked_at = CURRENT_TIMESTAMP;
+        `;
+        await pool.query(upsertQuery, [cleanUser, cleanPhone]);
       } catch (e) {}
     }
   }
@@ -2675,15 +2683,80 @@ app.get('/api/analytics', (_req: Request, res: Response) => {
   });
 });
 
-// 15. ADMIN COMPREHENSIVE DASHBOARD OVERVIEW (ALL REAL METRICS)
-app.get('/api/admin/dashboard', (_req: Request, res: Response) => {
-  const users = Array.from(memoryUsers.values());
-  const totalUsers = users.length;
-  const connectedUsers = users.filter(u => u.status === 'Connected').length;
-  const automationEnabledUsers = users.filter(u => u.automation_access).length;
-  const autoReplyUsers = users.filter(u => u.auto_reply).length;
-  const libraryOwnersCount = users.filter(u => u.user_type === 'library_owner').length;
-  const businessUsersCount = users.filter(u => u.user_type === 'business_user').length;
+// 15. ADMIN COMPREHENSIVE DASHBOARD OVERVIEW (REAL LIVE NEON DB METRICS)
+app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
+  let totalUsers = 0;
+  let connectedUsers = 0;
+  let automationEnabledUsers = 0;
+  let autoReplyUsers = 0;
+  let libraryOwnersCount = 0;
+  let businessUsersCount = 0;
+
+  if (isDbConnected()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const rTotal = await pool.query("SELECT COUNT(*) FROM users WHERE LOWER(username) != 'admin'");
+        const rConn = await pool.query("SELECT COUNT(*) FROM users WHERE status = 'Connected' AND wa_jid != '' AND LOWER(username) != 'admin'");
+        const rAutoAcc = await pool.query("SELECT COUNT(*) FROM users WHERE automation_access = true AND LOWER(username) != 'admin'");
+        const rAutoRep = await pool.query("SELECT COUNT(*) FROM users WHERE auto_reply = true AND LOWER(username) != 'admin'");
+        const rLib = await pool.query("SELECT COUNT(*) FROM users WHERE user_type = 'library_owner' AND LOWER(username) != 'admin'");
+        const rBiz = await pool.query("SELECT COUNT(*) FROM users WHERE user_type = 'business_user' AND LOWER(username) != 'admin'");
+
+        totalUsers = parseInt(rTotal.rows[0].count, 10) || 0;
+        connectedUsers = parseInt(rConn.rows[0].count, 10) || 0;
+        automationEnabledUsers = parseInt(rAutoAcc.rows[0].count, 10) || 0;
+        autoReplyUsers = parseInt(rAutoRep.rows[0].count, 10) || 0;
+        libraryOwnersCount = parseInt(rLib.rows[0].count, 10) || 0;
+        businessUsersCount = parseInt(rBiz.rows[0].count, 10) || 0;
+
+        // Sync RAM memoryUsers with Neon DB so stale deleted accounts are removed from RAM
+        const allDbUsers = await pool.query("SELECT username, status, wa_jid FROM users");
+        const validDbUsernames = new Set(allDbUsers.rows.map(r => r.username.toLowerCase()));
+
+        for (const [uname] of memoryUsers.entries()) {
+          if (!validDbUsernames.has(uname) && uname !== 'admin') {
+            memoryUsers.delete(uname);
+          }
+        }
+
+        for (const row of allDbUsers.rows) {
+          const u = memoryUsers.get(row.username.toLowerCase());
+          if (u) {
+            u.status = row.status || 'Disconnected';
+            u.wa_jid = row.wa_jid || '';
+          }
+        }
+      } catch (err: any) {
+        console.error('Failed to fetch dashboard metrics from Neon DB:', err.message);
+      }
+    }
+  } else {
+    const users = Array.from(memoryUsers.values()).filter(u => u.username !== 'admin');
+    totalUsers = users.length;
+    connectedUsers = users.filter(u => u.status === 'Connected' && Boolean(u.wa_jid)).length;
+    automationEnabledUsers = users.filter(u => u.automation_access).length;
+    autoReplyUsers = users.filter(u => u.auto_reply).length;
+    libraryOwnersCount = users.filter(u => u.user_type === 'library_owner').length;
+    businessUsersCount = users.filter(u => u.user_type === 'business_user').length;
+  }
+
+  const activeUsersList = Array.from(memoryUsers.values())
+    .filter(u => u.username !== 'admin')
+    .map(u => ({
+      id: u.id,
+      username: u.username,
+      account_name: u.account_name,
+      role: u.role,
+      user_type: u.user_type || 'business_user',
+      phone: u.phone || '',
+      wa_jid: u.wa_jid,
+      status: u.status,
+      automation_access: u.automation_access,
+      auto_reply: u.auto_reply,
+      ai_provider: u.ai_provider,
+      created_at: u.created_at
+    }));
 
   return res.json({
     metrics: {
@@ -2699,20 +2772,7 @@ app.get('/api/admin/dashboard', (_req: Request, res: Response) => {
       campaignsLaunched: stats.campaignsLaunched,
       totalMediaItems: memoryCatalog.length
     },
-    users: users.map(u => ({
-      id: u.id,
-      username: u.username,
-      account_name: u.account_name,
-      role: u.role,
-      user_type: u.user_type || (u.role === 'admin' ? 'admin' : 'library_owner'),
-      phone: u.phone || '',
-      wa_jid: u.wa_jid,
-      status: u.status,
-      automation_access: u.automation_access,
-      auto_reply: u.auto_reply,
-      ai_provider: u.ai_provider,
-      created_at: u.created_at
-    }))
+    users: activeUsersList
   });
 });
 

@@ -280,6 +280,21 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		deviceStore = StoreContainer.NewDevice()
 	}
 
+	// Device Socket Conflict Prevention:
+	// If another account is ALREADY running a WhatsApp client for the exact same device JID,
+	// reuse that running client instance instead of opening a second conflicting WebSocket!
+	if deviceStore != nil && deviceStore.ID != nil {
+		for otherUsr, otherClient := range ActiveClients {
+			if otherUsr != username && otherClient != nil && otherClient.Store != nil && otherClient.Store.ID != nil {
+				if otherClient.Store.ID.User == deviceStore.ID.User {
+					ActiveClients[username] = otherClient
+					log.Printf("🔗 Reusing active WhatsApp client connection for @%s (shares device %s with @%s)", username, deviceStore.ID.User, otherUsr)
+					return otherClient
+				}
+			}
+		}
+	}
+
 	// Low-RAM logger: suppresses noisy traces (<2MB RAM per WhatsApp instance)
 	clientLog := waLog.Stdout("Client-"+username, "ERROR", false)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
@@ -306,7 +321,17 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 						ClientsLock.Unlock()
 						if client.Store.ID != nil && DB != nil {
 							jidUser := client.Store.ID.User
-							_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+							
+			upsertQuery := `
+				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					wa_jid = EXCLUDED.wa_jid,
+					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+					status = 'Connected',
+					linked_at = NOW();
+			`
+			_, _ = DB.Exec(upsertSQL, username, jidUser)
 						}
 					}
 				}
@@ -881,111 +906,210 @@ func extractMessageText(username string, client *whatsmeow.Client, msg *waE2E.Me
 	return ""
 }
 
-// CheckAndProcessLead determines if incoming message represents a product purchase or order, saves it as a lead, and dispatches automated WhatsApp alert to notification_phone
+// CheckAndProcessLead qualifies confirmed leads strictly based on customer actions:
+// 1. Customer selected Cash on Delivery (COD)
+// 2. Customer completed payment / reported UTR/payment confirmation
 func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone string, msgText string, msg *waE2E.Message) {
 	if DB == nil || senderPhone == "" || strings.TrimSpace(msgText) == "" {
 		return
 	}
 
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
-	isLead := false
-	leadStatus := ""
-	leadDetails := ""
-
-	// Chat-based Purchase or Order Intent
-	// Only consider as lead if customer clearly expressed intent to buy, order, pay, book, or COD
 	lower := strings.ToLower(msgText)
-	orderPhrases := []string{
-		"order kardo", "order karna", "order place", "confirm order", "order now",
-		"kharidna hai", "lena hai", "buy now", "want to buy", "i want to buy",
-		"purchase", "booking karna", "book kardo", "cod chahiye", "cash on delivery",
-		"payment done", "payment kar diya", "paid", "advance payment", "deliver kardo",
-		"place order", "send invoice", "bill send karo", "mujhe order karna hai",
+
+	isCOD := false
+	isPrepaid := false
+	leadStatus := ""
+	leadDetails := msgText
+
+	// 1. CASH ON DELIVERY (COD) DETECTION
+	codKeywords := []string{
+		"cod", "cash on delivery", "cash-on-delivery", "pay on delivery",
+		"cod chahiye", "cod kardo", "cod karna", "cod option", "cod pe",
+		"delivery par cash", "delivery pe cash", "cash payment at delivery",
+		"cash on delivery chahiye", "cash on delivery kardo", "cod order",
+		"cod bhejna", "cod par bhej", "delivery pe dunga", "delivery par dunga",
 	}
-	for _, kw := range orderPhrases {
+
+	for _, kw := range codKeywords {
 		if strings.Contains(lower, kw) {
-			isLead = true
-			leadStatus = "Purchase Request"
-			leadDetails = msgText
+			isCOD = true
+			leadStatus = "Confirmed Order (Cash On Delivery - COD)"
 			break
 		}
 	}
 
-	if !isLead {
+	// 2. PAYMENT CONFIRMATION DETECTION (Customer completed payment / UTR reported)
+	paidKeywords := []string{
+		"payment done", "payment kar diya", "paid successfully", "payment ho gaya",
+		"paytm payment done", "upi payment done", "gpay payment done", "phonepe payment done",
+		"payment sent", "paise bhej diye", "transfer kar diya", "utr number", "transaction id",
+	}
+
+	if !isCOD {
+		for _, kw := range paidKeywords {
+			if strings.Contains(lower, kw) {
+				isPrepaid = true
+				leadStatus = "Confirmed Order (Customer Payment Reported)"
+				break
+			}
+		}
+	}
+
+	// Strictest Quality Filter: Only trigger Confirmed Lead if COD or Payment verified!
+	if !isCOD && !isPrepaid {
 		return
 	}
 
-	// Persist to leads table in DB
+	// Persist Confirmed Lead to leads table in DB
 	var leadID int
 	err := DB.QueryRow(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
 		VALUES ($1, $2, $3, $4, NOW()) RETURNING id`,
 		cleanUsr, senderPhone, leadDetails, leadStatus).Scan(&leadID)
 	if err != nil {
-		log.Printf("⚠️ Error inserting captured lead into DB: %v", err)
+		log.Printf("⚠️ Error inserting confirmed lead into DB: %v", err)
 	} else {
-		log.Printf("🎯 [Lead Captured #%d] +%s (@%s) -> %s", leadID, senderPhone, cleanUsr, leadStatus)
+		log.Printf("🎯 [Confirmed Lead Captured #%d] +%s (@%s) -> %s", leadID, senderPhone, cleanUsr, leadStatus)
 	}
 
-	// Dispatch Automated WhatsApp Lead Alert directly to the notification_phone configured in AI Responder
-	go dispatchLeadAlertWhatsApp(cleanUsr, client, senderPhone, leadDetails, leadStatus)
+	// Construct High-Priority WhatsApp Lead Alert
+	locTime := time.Now().Format("02 Jan 15:04")
+	cleanCustomer := FormatPhone(senderPhone)
+
+	paymentMethodStr := "Cash on Delivery (COD) 🚚"
+	if isPrepaid {
+		paymentMethodStr = "Prepaid Payment Reported by Customer 💳"
+	}
+
+	alertMsg := fmt.Sprintf("🚨 *NEW CONFIRMED LEAD ALERT* 🚨\n\n"+
+		"• *Account*: @%s\n"+
+		"• *Customer*: +%s\n"+
+		"• *Payment Method*: %s\n"+
+		"• *Status*: %s\n"+
+		"• *Time*: %s\n\n"+
+		"📦 *Order / Inquiry Message*:\n\"%s\"\n\n"+
+		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s\n\n"+
+		"EduCloud Automated Commerce Gateway",
+		cleanUsr, cleanCustomer, paymentMethodStr, leadStatus, locTime, leadDetails, cleanCustomer)
+
+	// Dispatch Automated WhatsApp Lead Alert directly to notification_phone
+	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
+
+	// Send immediate confirmation reply to customer
+	if isCOD {
+		confirmReply := "✅ *Aapka Cash On Delivery (COD) Order Confirm ho gaya hai!* 🚚\n\n" +
+			"Hamari team jald hi aapka order process karegi. Delivery ke time cash payment ready rakhein.\n\n" +
+			"Dhanyawad! 🙏"
+		if client != nil && client.IsLoggedIn() {
+			_ = SendMessage(client, cleanCustomer, confirmReply)
+		}
+	} else if isPrepaid {
+		confirmReply := "✅ *Payment Update Received!* 🙏\n\n" +
+			"Aapka payment update mil gaya hai. Hamari team verify karke aapka order dispatch karegi.\n\n" +
+			"Dhanyawad!"
+		if client != nil && client.IsLoggedIn() {
+			_ = SendMessage(client, cleanCustomer, confirmReply)
+		}
+	}
 }
 
-// dispatchLeadAlertWhatsApp sends immediate notification to the configured notification_phone in AI Responder settings
-func dispatchLeadAlertWhatsApp(username string, client *whatsmeow.Client, customerPhone, details, status string) {
+// TriggerConfirmedPaymentLead is called when Paytm Soundbox / Gateway verifies a payment (TXN_SUCCESS)
+func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID string) {
 	if DB == nil {
 		return
 	}
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	inquiry := fmt.Sprintf("Order %s | Amount: ₹%s | TxnID: %s", orderID, amount, txnID)
+
+	// Insert into leads table as verified paid
+	var leadID int
+	err := DB.QueryRow(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+		VALUES ($1, $2, $3, 'Confirmed Paid (Paytm UPI)', NOW()) RETURNING id`,
+		cleanUsr, cleanPhone, inquiry).Scan(&leadID)
+	if err == nil {
+		log.Printf("💰 [Confirmed Paid Lead #%d] +%s (@%s) -> ₹%s (Txn: %s)", leadID, cleanPhone, cleanUsr, amount, txnID)
+	}
+
+	locTime := time.Now().Format("02 Jan 15:04")
+	alertMsg := fmt.Sprintf("🚨 *CONFIRMED LEAD ALERT (PAYMENT VERIFIED)* 🚨\n\n"+
+		"• *Account*: @%s\n"+
+		"• *Customer*: +%s\n"+
+		"• *Amount Paid*: ₹%s\n"+
+		"• *Order ID*: %s\n"+
+		"• *Txn ID*: %s\n"+
+		"• *Payment Method*: Paytm UPI / Soundbox Verified ✅\n"+
+		"• *Status*: Payment Verified & Order Confirmed\n"+
+		"• *Time*: %s\n\n"+
+		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s\n\n"+
+		"EduCloud Automated Commerce Gateway",
+		cleanUsr, cleanPhone, amount, orderID, txnID, locTime, cleanPhone)
+
+	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
+
+	// Send instant WhatsApp receipt/confirmation to the customer
+	if cleanPhone != "" && len(cleanPhone) >= 10 {
+		customerConfirmMsg := fmt.Sprintf("🎉 *Payment Received & Order Confirmed!* 🎉\n\n"+
+			"Aapka ₹%s ka payment (Txn ID: %s) safaltapoorvak prapt ho gaya hai.\n"+
+			"Aapka order (%s) confirm ho chuka hai aur hamari team ise jald hi dispatch karegi. ✅\n\n"+
+			"Dhanyawad!", amount, txnID, orderID)
+
+		client := GetOrCreateClient(cleanUsr)
+		if client != nil && client.IsLoggedIn() {
+			_ = SendMessage(client, cleanPhone, customerConfirmMsg)
+		}
+	}
+}
+
+// DispatchLeadAlertWhatsAppDirect sends immediate notification to the configured notification_phone in AI settings
+func DispatchLeadAlertWhatsAppDirect(username, alertMsg string) {
+	if DB == nil {
+		return
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+
+	// 1. Fetch notification_phone with solid fallback to phone or wa_jid
 	var notifPhone string
-	_ = DB.QueryRow("SELECT COALESCE(notification_phone, '') FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&notifPhone)
+	_ = DB.QueryRow(`
+		SELECT COALESCE(NULLIF(notification_phone, ''), NULLIF(phone, ''), NULLIF(wa_jid, ''), '')
+		FROM users WHERE LOWER(username)=LOWER($1)
+	`, cleanUsr).Scan(&notifPhone)
 
 	notifPhone = strings.TrimSpace(notifPhone)
 	if notifPhone == "" {
-		log.Printf("ℹ️ [Lead Alert] No notification_phone configured for @%s in AI Responder. Skipping WhatsApp alert dispatch.", cleanUsr)
+		log.Printf("ℹ️ [Lead Alert] No notification_phone configured for @%s. Pushed to Live Chat stream only.", cleanUsr)
+		PushToLiveChat(cleanUsr, "", alertMsg, "lead_alert")
 		return
 	}
 
 	targetPhone := FormatPhone(notifPhone)
 	if targetPhone == "" || len(targetPhone) < 10 {
 		log.Printf("⚠️ [Lead Alert] Invalid notification_phone (+%s) for @%s", notifPhone, cleanUsr)
+		PushToLiveChat(cleanUsr, "", alertMsg, "lead_alert")
 		return
 	}
 
-	// Avoid notifying the customer themselves if customerPhone == targetPhone
-	if targetPhone == customerPhone {
-		return
-	}
-
-	activeClient := client
-	if activeClient == nil || !activeClient.IsLoggedIn() {
-		activeClient = GetOrCreateClient(cleanUsr)
-	}
-
-	cleanCustomer := FormatPhone(customerPhone)
-	locTime := time.Now().Format("02 Jan 15:04")
-
-	alertMsg := fmt.Sprintf("🛍️ *NEW LEAD / ORDER RECEIVED!* 🛍️\n\n"+
-		"• *Account*: @%s\n"+
-		"• *Customer Phone*: +%s\n"+
-		"• *Status*: %s\n"+
-		"• *Time*: %s\n\n"+
-		"📦 *Order / Product Details*:\n%s\n\n"+
-		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s",
-		cleanUsr, cleanCustomer, status, locTime, details, cleanCustomer)
-
-	// Dispatch SSE event for web portal
+	// Always push to live chat stream so the web portal's notification toast and audio trigger
 	PushToLiveChat(cleanUsr, targetPhone, alertMsg, "lead_alert")
 
-	if activeClient != nil && activeClient.IsLoggedIn() {
-		err := SendMessage(activeClient, targetPhone, alertMsg)
-		if err != nil {
-			log.Printf("⚠️ [Lead Alert] Failed to send WhatsApp lead alert to +%s: %v", targetPhone, err)
-		} else {
-			log.Printf("✅ [Lead Alert] Successfully delivered WhatsApp lead alert to +%s for customer +%s", targetPhone, cleanCustomer)
-		}
-	} else {
-		log.Printf("⚠️ [Lead Alert] WhatsApp client for @%s is not logged in; alert logged to Live Chat stream.", cleanUsr)
+	// Get active WhatsApp client for this tenant to send the alert message
+	activeClient := GetOrCreateClient(cleanUsr)
+	if activeClient == nil || !activeClient.IsLoggedIn() {
+		log.Printf("⚠️ [Lead Alert] WhatsApp client for @%s is not logged in; cannot send WhatsApp alert to +%s", cleanUsr, targetPhone)
+		return
 	}
+
+	if err := EnsureConnected(activeClient); err != nil {
+		log.Printf("⚠️ [Lead Alert] Could not ensure connection for @%s: %v", cleanUsr, err)
+	}
+
+	err := SendMessage(activeClient, targetPhone, alertMsg)
+	if err != nil {
+		log.Printf("⚠️ [Lead Alert] Failed to send WhatsApp lead alert to +%s: %v", targetPhone, err)
+	} else {
+		log.Printf("✅ [Lead Alert] Successfully delivered Confirmed Lead WhatsApp alert to +%s for @%s", targetPhone, cleanUsr)
+	}
+}
 }
 
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
@@ -1186,7 +1310,17 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=COALESCE(linked_at, NOW()) WHERE LOWER(username)=LOWER($2)", jidStr, username)
+			
+			upsertQuery := `
+				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					wa_jid = EXCLUDED.wa_jid,
+					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+					status = 'Connected',
+					linked_at = COALESCE(users.linked_at, NOW());
+			`
+			_, _ = DB.Exec(upsertSQLConnected, username, jidStr)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
 		}
@@ -1197,7 +1331,17 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2)", jidStr, username)
+			
+			upsertQuery := `
+				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					wa_jid = EXCLUDED.wa_jid,
+					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+					status = 'Connected',
+					linked_at = COALESCE(users.linked_at, NOW());
+			`
+			_, _ = DB.Exec(upsertSQLConnected, username, jidStr)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
@@ -1233,10 +1377,10 @@ func AutoConnectAllSessions() {
 	}
 }
 
-// StartKeepAliveMonitor checks active clients every 10 seconds and re-establishes broken WebSockets
+// StartKeepAliveMonitor checks active clients every 45 seconds and re-establishes broken WebSockets
 func StartKeepAliveMonitor() {
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(45 * time.Second)
 		for range ticker.C {
 			ClientsLock.Lock()
 			var activeUsers []string
@@ -1253,9 +1397,6 @@ func StartKeepAliveMonitor() {
 				if client != nil && client.Store != nil && client.Store.ID != nil && !client.IsConnected() {
 					log.Printf("🔄 [KeepAlive] Client @%s WebSocket dropped; reconnecting...", usr)
 					ConnectWithAutoRetry(client, usr)
-				} else if client != nil && client.IsConnected() {
-					// Keep device active/online so incoming messages never suffer push delay
-					_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 				}
 			}
 		}

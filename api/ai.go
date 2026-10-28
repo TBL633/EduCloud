@@ -190,8 +190,15 @@ func TestLeadAlertHandler(w http.ResponseWriter, r *http.Request) {
 	whatsapp.PushToLiveChat(username, cleanPhone, alertText, "lead_alert")
 
 	client := whatsapp.GetOrCreateClient(username)
+	var waSent bool
 	if client != nil && client.IsLoggedIn() {
-		_ = whatsapp.SendMessage(client, cleanPhone, alertText)
+		_ = whatsapp.EnsureConnected(client)
+		err := whatsapp.SendMessage(client, cleanPhone, alertText)
+		if err == nil {
+			waSent = true
+		} else {
+			log.Printf("⚠️ [Test Lead Alert] SendMessage error to +%s: %v", cleanPhone, err)
+		}
 	}
 
 	if DB != nil {

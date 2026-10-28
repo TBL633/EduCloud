@@ -973,6 +973,10 @@
         // --- 2. AUTH GUARD & SESSION HELPER ---
         function getActiveUsername() {
             const user = JSON.parse(localStorage.getItem('user_data') || '{}');
+            // Regular non-admin tenants must strictly use their own username!
+            if (user.role && user.role !== 'admin') {
+                return String(user.username || '').replace(/^@/, '').trim();
+            }
             let raw = localStorage.getItem('impersonating') || user.username || '';
             return String(raw).replace(/^@/, '').trim();
         }
@@ -1213,6 +1217,35 @@
         }
 
         // 3. FETCH WHATSAPP QR CODE
+        
+        // --- FAST WHATSAPP PAIRING STATUS CHECKER (<1.5s INSTANT FEEDBACK) ---
+        let fastPairingPollInterval = null;
+
+        function startFastPairingChecker() {
+            if (fastPairingPollInterval) return;
+            fastPairingPollInterval = setInterval(async () => {
+                const username = getActiveUsername() || 'user';
+                try {
+                    const res = await fetch(`/api/whatsapp/status?username=${encodeURIComponent(username)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.status === 'Connected' || data.connected) {
+                            stopFastPairingChecker();
+                            fetchWhatsAppQR();
+                            loadUserProfile();
+                        }
+                    }
+                } catch(e) {}
+            }, 1500);
+        }
+
+        function stopFastPairingChecker() {
+            if (fastPairingPollInterval) {
+                clearInterval(fastPairingPollInterval);
+                fastPairingPollInterval = null;
+            }
+        }
+
         async function fetchWhatsAppQR() {
             const box = document.getElementById('biz-qrcode-box');
             const pairingSection = document.getElementById('biz-pairing-section');
@@ -1256,6 +1289,7 @@
                     if (deskPill) deskPill.innerText = 'Connected';
                 } else {
                     // Account is Disconnected: Show Pairing Section & Session Actions, Hide Chats
+                    startFastPairingChecker();
                     if (pairingSection) pairingSection.classList.remove('hidden');
                     if (sessionActions) sessionActions.classList.remove('hidden');
                     const chatsCard = document.getElementById('biz-customer-chats-container');

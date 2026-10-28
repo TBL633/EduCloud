@@ -20,12 +20,12 @@ func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	businessUsers := 0
 
 	if DB != nil {
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&totalUsers)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE status='Connected' OR wa_jid != ''").Scan(&connectedUsers)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE automation_access=true").Scan(&automationEnabled)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE auto_reply=true").Scan(&autoReplyUsers)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='library_owner'").Scan(&libraryOwners)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='business_user'").Scan(&businessUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) != 'admin'").Scan(&totalUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE status='Connected' AND wa_jid != '' AND LOWER(username) != 'admin'").Scan(&connectedUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE automation_access=true AND LOWER(username) != 'admin'").Scan(&automationEnabled)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE auto_reply=true AND LOWER(username) != 'admin'").Scan(&autoReplyUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='library_owner' AND LOWER(username) != 'admin'").Scan(&libraryOwners)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='business_user' AND LOWER(username) != 'admin'").Scan(&businessUsers)
 	}
 
 	respondJSON(w, 200, map[string]interface{}{
@@ -33,12 +33,14 @@ func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		"metrics": map[string]interface{}{
 			"totalUsers":              totalUsers,
 			"connectedUsers":          connectedUsers,
+			"disconnectedUsers":       totalUsers - connectedUsers,
 			"automationEnabledUsers":  automationEnabled,
 			"autoReplyUsers":          autoReplyUsers,
 			"libraryOwnersCount":      libraryOwners,
 			"businessUsersCount":      businessUsers,
 		},
 	})
+}
 }
 
 // ADMIN LIST ALL USERS & CATEGORIZED TENANTS
