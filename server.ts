@@ -977,7 +977,7 @@ app.post('/api/register', async (req: Request, res: Response) => {
     user_type: 'business_user',
     account_name: newAccountName,
     phone: cleanPhone,
-    wa_jid: cleanPhone,
+    wa_jid: '',
     ai_provider: 'gemini',
     api_key: '',
     system_prompt: `You are an intelligent 24/7 sales & lead qualification WhatsApp bot for ${newAccountName}. Answer inquiries promptly, share pricing and service information, and help book consultation calls.`,
@@ -1127,17 +1127,17 @@ app.get('/api/admin/users', async (_req: Request, res: Response) => {
           });
         }
         const userList = dbUsers.rows
-          .filter(u => !deletedUsernames.has(u.username.toLowerCase()))
+          .filter(u => !deletedUsernames.has(u.username.toLowerCase()) && u.username.toLowerCase() !== 'admin')
           .map(u => ({
             id: u.id,
             username: u.username,
             email: u.email || '',
             role: u.role,
-            user_type: u.user_type || (u.role === 'admin' ? 'admin' : 'library_owner'),
+            user_type: u.user_type || 'business_user',
             account_name: u.account_name,
             phone: u.phone || '',
-            wa_jid: u.wa_jid || '',
-            status: u.status || 'Disconnected',
+            wa_jid: u.status === 'Connected' ? (u.wa_jid || '') : '',
+            status: u.status === 'Connected' ? 'Connected' : 'Disconnected',
             automation_access: Boolean(u.automation_access),
             auto_reply: Boolean(u.auto_reply),
             created_at: u.created_at

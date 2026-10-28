@@ -985,9 +985,6 @@
             }
             return raw.toLowerCase();
         }
-            let raw = localStorage.getItem('impersonating') || user.username || '';
-            return String(raw).replace(/^@/, '').trim();
-        }
 
         function exitAdminMode() {
             localStorage.removeItem('impersonating');

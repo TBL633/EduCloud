@@ -1306,7 +1306,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		if DB != nil {
 			// Only clear WhatsApp device details from DB; keep the registered user account intact!
-			_, _ = DB.Exec("UPDATE users SET wa_jid='', status='Disconnected' WHERE username=$1", username)
+			_, _ = DB.Exec("UPDATE users SET wa_jid='', status='Disconnected' WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1)", username)
 		}
 
 		PushToLiveChat(username, "", "WhatsApp session was unlinked from phone.", "session_unlinked")
