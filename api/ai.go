@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -190,14 +191,13 @@ func TestLeadAlertHandler(w http.ResponseWriter, r *http.Request) {
 	whatsapp.PushToLiveChat(username, cleanPhone, alertText, "lead_alert")
 
 	client := whatsapp.GetOrCreateClient(username)
-	var waSent bool
 	if client != nil && client.IsLoggedIn() {
 		_ = whatsapp.EnsureConnected(client)
 		err := whatsapp.SendMessage(client, cleanPhone, alertText)
-		if err == nil {
-			waSent = true
-		} else {
+		if err != nil {
 			log.Printf("⚠️ [Test Lead Alert] SendMessage error to +%s: %v", cleanPhone, err)
+		} else {
+			log.Printf("✅ [Test Lead Alert] Successfully delivered test alert to +%s", cleanPhone)
 		}
 	}
 
