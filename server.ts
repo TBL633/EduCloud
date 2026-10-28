@@ -1277,7 +1277,7 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
     cleanUser = cleanUser.split('@')[0];
   }
 
-  let user = memoryUsers.get(cleanUser) || memoryUsers.get('admin');
+  let user = cleanUser ? memoryUsers.get(cleanUser) : memoryUsers.get('admin');
 
   const host = req.get('host') || `localhost:${PORT}`;
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
@@ -1297,23 +1297,44 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
         );
         if (r.rows.length > 0) {
           const row = r.rows[0];
+          const targetKey = row.username.toLowerCase();
+          
+          if (!user || user.username !== row.username) {
+            user = {
+              id: row.id || 1,
+              username: row.username,
+              email: row.email || `${row.username}@gmail.com`,
+              password: row.password || '',
+              role: row.role || 'user',
+              user_type: row.user_type || 'business_user',
+              account_name: row.account_name || `${row.username} Account`,
+              phone: row.phone || '',
+              wa_jid: row.wa_jid || '',
+              ai_provider: row.ai_provider || 'gemini',
+              api_key: row.api_key || '',
+              system_prompt: row.system_prompt || '',
+              auto_reply: Boolean(row.auto_reply),
+              automation_access: row.automation_access !== undefined ? Boolean(row.automation_access) : true,
+              status: row.status || 'Disconnected',
+              qr: row.qr || '',
+              created_at: row.created_at || new Date().toISOString()
+            };
+            memoryUsers.set(targetKey, user);
+          }
+
           if (row.status === 'Connected' && row.wa_jid) {
             isConnectedState = true;
             jid = row.wa_jid;
-            const targetKey = row.username.toLowerCase();
-            const memUser = memoryUsers.get(targetKey) || user;
-            if (memUser) {
-              memUser.status = 'Connected';
-              memUser.wa_jid = jid;
+            if (user) {
+              user.status = 'Connected';
+              user.wa_jid = jid;
             }
           } else {
             isConnectedState = false;
             jid = '';
-            const targetKey = row.username.toLowerCase();
-            const memUser = memoryUsers.get(targetKey) || user;
-            if (memUser) {
-              memUser.status = 'Disconnected';
-              memUser.wa_jid = '';
+            if (user) {
+              user.status = 'Disconnected';
+              user.wa_jid = '';
             }
           }
         }

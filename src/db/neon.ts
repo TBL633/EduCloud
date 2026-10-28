@@ -129,6 +129,8 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+      CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username));
+      CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
     `);
 
     await pool.query(`
@@ -142,12 +144,14 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         item_type VARCHAR(50) DEFAULT 'product',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE INDEX IF NOT EXISTS idx_leads_username_lower ON leads(LOWER(username));
     `);
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products DROP COLUMN IF EXISTS image_url;`); } catch (e) {}
+    try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_username_lower ON products(LOWER(username));`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS neon_media_objects CASCADE;`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS user_media CASCADE;`); } catch (e) {}
 
@@ -188,6 +192,19 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+
+    // Campaign Bulk Message Logs table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campaign_logs (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        recipients_count INT DEFAULT 0,
+        message_text TEXT DEFAULT '',
+        status VARCHAR(50) DEFAULT 'Sent',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_campaigns_user ON campaign_logs(LOWER(username));
     `);
 
     // Email OTP Verifications table (Neon Auth)
