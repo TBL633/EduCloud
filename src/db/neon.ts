@@ -179,11 +179,15 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS email_verifications (
         id SERIAL PRIMARY KEY,
-        email VARCHAR(150) NOT NULL,
-        otp_code VARCHAR(10) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        otp_code VARCHAR(20) DEFAULT '',
+        code VARCHAR(20) DEFAULT '',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+        expires_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP + INTERVAL '10 minutes'
       );
+      ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS otp_code VARCHAR(20) DEFAULT '';
+      ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS code VARCHAR(20) DEFAULT '';
+      ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP + INTERVAL '10 minutes';
       CREATE INDEX IF NOT EXISTS idx_email_verif ON email_verifications(LOWER(email), expires_at DESC);
     `);
 
@@ -506,7 +510,7 @@ export async function saveOtpToNeon(email: string, otpCode: string, expiresAt: D
   try {
     await pool.query('DELETE FROM email_verifications WHERE LOWER(email) = $1', [cleanEmail]);
     await pool.query(
-      'INSERT INTO email_verifications (email, otp_code, expires_at) VALUES ($1, $2, $3)',
+      'INSERT INTO email_verifications (email, otp_code, code, expires_at) VALUES ($1, $2, $2, $3)',
       [cleanEmail, otpCode, expiresAt]
     );
     console.log(`✉️ [Neon Auth] Saved 6-digit OTP verification code for ${cleanEmail}`);
@@ -523,7 +527,7 @@ export async function verifyOtpInNeon(email: string, otpCode: string): Promise<b
   try {
     const res = await pool.query(
       `SELECT id FROM email_verifications 
-       WHERE LOWER(email) = $1 AND otp_code = $2 AND expires_at > NOW() 
+       WHERE LOWER(email) = $1 AND (otp_code = $2 OR code = $2) AND expires_at > NOW() 
        ORDER BY id DESC LIMIT 1`,
       [cleanEmail, cleanCode]
     );

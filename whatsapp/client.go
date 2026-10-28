@@ -321,17 +321,16 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 						ClientsLock.Unlock()
 						if client.Store.ID != nil && DB != nil {
 							jidUser := client.Store.ID.User
-							
-			upsertQuery := `
-				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
-				ON CONFLICT (username) DO UPDATE SET
-					wa_jid = EXCLUDED.wa_jid,
-					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
-					status = 'Connected',
-					linked_at = NOW();
-			`
-			_, _ = DB.Exec(upsertSQL, username, jidUser)
+							upsertQuery := `
+								INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+								VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+								ON CONFLICT (username) DO UPDATE SET
+									wa_jid = EXCLUDED.wa_jid,
+									phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+									status = 'Connected',
+									linked_at = NOW();
+							`
+							_, _ = DB.Exec(upsertQuery, username, jidUser)
 						}
 					}
 				}
@@ -342,7 +341,16 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		ConnectWithAutoRetry(client, username)
 		if DB != nil && client.Store.ID != nil {
 			jidUser := client.Store.ID.User
-			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+			upsertQuery := `
+				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					wa_jid = EXCLUDED.wa_jid,
+					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+					status = 'Connected',
+					linked_at = NOW();
+			`
+			_, _ = DB.Exec(upsertQuery, username, jidUser)
 		}
 	}
 
@@ -1319,7 +1327,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					status = 'Connected',
 					linked_at = COALESCE(users.linked_at, NOW());
 			`
-			_, _ = DB.Exec(upsertSQLConnected, username, jidStr)
+			_, _ = DB.Exec(upsertQuery, username, jidStr)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
 		}
@@ -1330,7 +1338,6 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 		if client != nil && client.Store.ID != nil && DB != nil {
 			jidStr := client.Store.ID.User
-			
 			upsertQuery := `
 				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
 				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
@@ -1340,7 +1347,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					status = 'Connected',
 					linked_at = COALESCE(users.linked_at, NOW());
 			`
-			_, _ = DB.Exec(upsertSQLConnected, username, jidStr)
+			_, _ = DB.Exec(upsertQuery, username, jidStr)
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}

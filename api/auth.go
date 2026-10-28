@@ -294,7 +294,7 @@ func SendOTPHandler(w http.ResponseWriter, r *http.Request) {
 
 	if DB != nil {
 		_, _ = DB.Exec("DELETE FROM email_verifications WHERE LOWER(email)=LOWER($1)", emailInput)
-		_, err := DB.Exec("INSERT INTO email_verifications (email, code, expires_at) VALUES ($1, $2, $3)", emailInput, otpCode, expiresAt)
+		_, err := DB.Exec("INSERT INTO email_verifications (email, otp_code, code, expires_at) VALUES ($1, $2, $2, $3)", emailInput, otpCode, expiresAt)
 		if err != nil {
 			log.Printf("⚠️ OTP insert note: %v", err)
 		}
@@ -343,7 +343,7 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 	if DB != nil {
 		var storedCode string
 		var expiresAt time.Time
-		err := DB.QueryRow("SELECT code, expires_at FROM email_verifications WHERE LOWER(email)=LOWER($1) ORDER BY id DESC LIMIT 1", emailInput).Scan(&storedCode, &expiresAt)
+		err := DB.QueryRow("SELECT COALESCE(NULLIF(otp_code, ''), NULLIF(code, ''), ''), expires_at FROM email_verifications WHERE LOWER(email)=LOWER($1) ORDER BY id DESC LIMIT 1", emailInput).Scan(&storedCode, &expiresAt)
 		if err == nil && storedCode == codeInput && time.Now().Before(expiresAt) {
 			isOtpValid = true;
 			_, _ = DB.Exec("DELETE FROM email_verifications WHERE LOWER(email)=LOWER($1)", emailInput)
