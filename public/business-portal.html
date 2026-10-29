@@ -384,6 +384,30 @@
                                 </div>
                             </div>
 
+                            <!-- Live Customer Order & Payment Tracking Banner (Auto-Extracted from AI Chat JSON Form) -->
+                            <div id="chat-customer-order-banner" class="hidden px-3 sm:px-4 py-2 bg-[#111b21] border-b border-[#2a3942] flex flex-wrap items-center justify-between gap-2 shrink-0 text-xs shadow-inner">
+                                <div class="flex items-center gap-2.5 min-w-0">
+                                    <div class="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 shrink-0">
+                                        <i class="fa-solid fa-cart-shopping text-xs"></i>
+                                    </div>
+                                    <div class="truncate">
+                                        <div class="flex items-center gap-2">
+                                            <span class="font-bold text-white" id="order-customer-name">Customer Order</span>
+                                            <span id="order-id-badge" class="text-[10px] font-mono text-slate-400">#ORD</span>
+                                        </div>
+                                        <div class="text-[11px] text-amber-300 font-mono truncate" id="order-summary-text">Items: -- | Total: ₹0</div>
+                                        <div class="text-[10px] text-slate-400 truncate" id="order-address-text">Address: Not provided</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <span id="order-payment-mode-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">COD</span>
+                                    <span id="order-payment-status-badge" class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">UNPAID</span>
+                                    <button type="button" onclick="toggleOrderPaymentPaid()" id="btn-toggle-paid" class="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer transition flex items-center gap-1">
+                                        <i class="fa-solid fa-check"></i> <span>Mark Paid</span>
+                                    </button>
+                                </div>
+                            </div>
+
                             <!-- WhatsApp Messages Area (Full Height Scrollable Canvas) -->
                             <div id="chat-messages-box" class="flex-1 p-3 sm:p-5 space-y-2.5 overflow-y-auto bg-[#0b141a]" style="background-image: radial-gradient(rgba(32, 44, 51, 0.4) 1px, transparent 1px); background-size: 20px 20px;">
                                 <div class="text-center text-slate-500 py-16">Loading conversation...</div>
@@ -1540,6 +1564,106 @@
             }
         }
 
+        
+        // --- 5C. LIVE CUSTOMER ORDER & PAYMENT FORM STATE ---
+        let currentLoadedOrderState = null;
+
+        async function loadCustomerOrderState(phone) {
+            const banner = document.getElementById('chat-customer-order-banner');
+            if (!banner) return;
+            const cleanPhone = String(phone).replace(/\D/g, '');
+            const username = getActiveUsername();
+
+            try {
+                const res = await fetch(`/api/customer/order-state?username=${encodeURIComponent(username)}&customer_phone=${encodeURIComponent(cleanPhone)}`);
+                const data = await res.json();
+                const order = data?.order;
+                currentLoadedOrderState = order;
+
+                if (!order || (!order.customer_name && !order.delivery_address && (!order.items || order.items.length === 0) && (!order.total_amount || order.total_amount <= 0))) {
+                    banner.classList.add('hidden');
+                    return;
+                }
+
+                banner.classList.remove('hidden');
+                const nameEl = document.getElementById('order-customer-name');
+                const ordIdEl = document.getElementById('order-id-badge');
+                const summaryEl = document.getElementById('order-summary-text');
+                const addrEl = document.getElementById('order-address-text');
+                const modeBadge = document.getElementById('order-payment-mode-badge');
+                const statusBadge = document.getElementById('order-payment-status-badge');
+                const btnPaid = document.getElementById('btn-toggle-paid');
+
+                if (nameEl) nameEl.innerText = order.customer_name || 'Customer Inquiry';
+                if (ordIdEl) ordIdEl.innerText = order.order_id ? `#${order.order_id}` : '';
+
+                let itemsStr = 'No items';
+                if (Array.isArray(order.items) && order.items.length > 0) {
+                    itemsStr = order.items.map(it => `${it.name || it.item || 'Item'} (x${it.qty || 1})`).join(', ');
+                }
+                const amt = parseFloat(order.total_amount) || 0;
+                if (summaryEl) summaryEl.innerText = `${itemsStr} | Total: ₹${amt}`;
+
+                const addr = order.delivery_address || '';
+                const delPhone = order.delivery_phone || cleanPhone;
+                if (addrEl) addrEl.innerText = addr ? `📍 ${addr} (${delPhone})` : '📍 Address not provided yet';
+
+                const isOnline = String(order.payment_mode).toLowerCase() === 'online';
+                if (modeBadge) {
+                    modeBadge.innerText = isOnline ? 'ONLINE (UPI)' : 'COD';
+                    modeBadge.className = isOnline 
+                        ? 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500/10 text-indigo-300 border border-indigo-500/30'
+                        : 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700';
+                }
+
+                const isPaid = String(order.payment_status).toLowerCase() === 'paid';
+                if (statusBadge) {
+                    statusBadge.innerText = isPaid ? 'PAID ✅' : 'UNPAID ⏳';
+                    statusBadge.className = isPaid 
+                        ? 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                        : 'px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                }
+
+                if (btnPaid) {
+                    btnPaid.style.display = isPaid ? 'none' : 'inline-flex';
+                }
+            } catch (err) {
+                console.warn('Failed to load customer order state:', err);
+                banner.classList.add('hidden');
+            }
+        }
+
+        async function toggleOrderPaymentPaid() {
+            if (!currentActiveChatPhone) return;
+            const username = getActiveUsername();
+            const btn = document.getElementById('btn-toggle-paid');
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/customer/order-state', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        customer_phone: currentActiveChatPhone,
+                        order_data: {
+                            ...(currentLoadedOrderState || {}),
+                            payment_status: 'paid',
+                            order_status: 'confirmed'
+                        }
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    await loadCustomerOrderState(currentActiveChatPhone);
+                }
+            } catch(e) {
+                alert('Failed to update payment status.');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
         // --- 5B. LIVE CUSTOMER CHATS & DB LAST 10 CHATS MANAGER ---
         let currentActiveChatPhone = '';
 
@@ -1636,6 +1760,7 @@
                 titleEl.innerHTML = formatPhoneNumberDisplay(cleanPhone);
             }
             loadCustomerChatHistory(cleanPhone);
+            loadCustomerOrderState(cleanPhone);
             const input = document.getElementById('chat-reply-text');
             if (input) {
                 setTimeout(() => input.focus(), 150);

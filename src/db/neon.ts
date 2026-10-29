@@ -194,6 +194,30 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       );
     `);
 
+    
+    // Customer Live Order States (AI Extracted Details, Address, Items & Payment Status)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS customer_order_states (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        customer_phone VARCHAR(50) NOT NULL,
+        delivery_phone VARCHAR(50) DEFAULT '',
+        customer_name VARCHAR(150) DEFAULT '',
+        delivery_address TEXT DEFAULT '',
+        items JSONB DEFAULT '[]'::jsonb,
+        total_amount NUMERIC(10, 2) DEFAULT 0,
+        payment_mode VARCHAR(50) DEFAULT 'unselected',
+        payment_status VARCHAR(50) DEFAULT 'unpaid',
+        order_status VARCHAR(50) DEFAULT 'in_progress',
+        order_id VARCHAR(100) DEFAULT '',
+        raw_json JSONB DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username, customer_phone)
+      );
+      CREATE INDEX IF NOT EXISTS idx_order_states_user_phone ON customer_order_states(LOWER(username), customer_phone);
+    `);
+
     // Campaign Bulk Message Logs table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS campaign_logs (

@@ -33,8 +33,12 @@ type UserConfigRAM struct {
 	Temperature   float64
 	AutoReply     bool
 	ImportCatalog bool
-	CatalogText   string
-	LastCached    time.Time
+	CatalogText      string
+	HasOnlinePayment bool
+	PaytmMid         string
+	MerchantVpa      string
+	PayeeName        string
+	LastCached       time.Time
 }
 
 var (
@@ -93,8 +97,8 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(ai_model, 'openai/gpt-oss-20b'), 
 			COALESCE(ai_temperature, 0.7), 
 			COALESCE(auto_reply, true), 
-			COALESCE(import_catalog_details, false) 
-			FROM users WHERE LOWER(username)=LOWER($1)`, cleanUsr).Scan(&p, &k, &s, &m, &t, &ar, &ic)
+			COALESCE(import_catalog_details, true) 
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -105,11 +109,27 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			}
 			cfg.Temperature = t
 			cfg.AutoReply = ar
-			cfg.ImportCatalog = false // Catalog messages ignored & catalog removed as requested
+			cfg.ImportCatalog = true
+		}
+
+		// Check if tenant has payment configured
+		var payEnabled bool
+		var pMid, mVpa, pName string
+		errPay := DB.QueryRow(`SELECT enabled, COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, '') 
+			FROM tenant_payment_configs WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&payEnabled, &pMid, &mVpa, &pName)
+		if errPay == nil && payEnabled && (pMid != "" || mVpa != "") {
+			cfg.HasOnlinePayment = true
+			cfg.PaytmMid = pMid
+			cfg.MerchantVpa = mVpa
+			cfg.PayeeName = pName
 		}
 	}
 
-	cfg.CatalogText = ""
+	// Always load products from DB into CatalogText!
+	cfg.CatalogText = GetCatalogContext(cleanUsr)
+	if cfg.CatalogText != "" {
+		cfg.ImportCatalog = true
+	}
 
 	userConfigLock.Lock()
 	userConfigCache[cleanUsr] = cfg
@@ -326,9 +346,9 @@ func GetCatalogContext(username string) string {
 	if DB == nil {
 		return ""
 	}
-	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, ''), COALESCE(whatsapp_catalog_link, '') 
-		FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, cleanUsr)
+		FROM products WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2) ORDER BY id ASC`, cleanUsr, cleanUsr+"@gmail.com")
 	if err != nil {
 		return ""
 	}
@@ -487,12 +507,84 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 	}
 
-	stableSysPrompt := sysPrompt
-	if cfg.ImportCatalog && cfg.CatalogText != "" {
-		stableSysPrompt += "\n\n" + cfg.CatalogText
+	paymentOptions := "Payment: Cash on Delivery (COD) ONLY."
+	if cfg.HasOnlinePayment {
+		paymentOptions = "Payment: Cash on Delivery (COD) OR Online Payment (UPI / QR / Paytm)."
 	}
 
+	orderInstructions := fmt.Sprintf("\n\n%s\n%s\nRules: Collect step-by-step: 1) Products & Quantity, 2) Full Name, 3) Delivery Address & Phone, 4) Payment Method.\nAt the end of EVERY response where order, items, or payment is discussed, append:\n<ORDER_JSON>{\"customer_phone\":\"%s\",\"delivery_phone\":\"\",\"customer_name\":\"\",\"delivery_address\":\"\",\"items\":[],\"total_amount\":0,\"payment_mode\":\"cod\"|\"online\"|\"unselected\",\"payment_status\":\"unpaid\"|\"paid\"}</ORDER_JSON>",
+		cfg.CatalogText, paymentOptions, cleanPhone)
+
+	if cfg.HasOnlinePayment {
+		orderInstructions += "\nIf customer chose Online Payment and confirmed items/amount, output: <PAYMENT_TRIGGER amount=\"AMOUNT\" order_id=\"ORDER_ID\">. System will auto-generate the official QR code."
+	}
+
+	stableSysPrompt := sysPrompt + orderInstructions
+
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
+	if err == nil && aiResponse != "" {
+		// 1. Process <ORDER_JSON>
+		jsonRegex := regexp.MustCompile(`(?i)<ORDER_JSON>([\s\S]*?)</ORDER_JSON>`)
+		if jsonMatch := jsonRegex.FindStringSubmatch(aiResponse); len(jsonMatch) > 1 && DB != nil {
+			var orderMap map[string]interface{}
+			if errJson := json.Unmarshal([]byte(strings.TrimSpace(jsonMatch[1])), &orderMap); errJson == nil {
+				delPhone, _ := orderMap["delivery_phone"].(string)
+				custName, _ := orderMap["customer_name"].(string)
+				delAddr, _ := orderMap["delivery_address"].(string)
+				payMode, _ := orderMap["payment_mode"].(string)
+				payStatus, _ := orderMap["payment_status"].(string)
+				itemsBytes, _ := json.Marshal(orderMap["items"])
+				rawBytes, _ := json.Marshal(orderMap)
+				var totAmt float64
+				switch v := orderMap["total_amount"].(type) {
+				case float64:
+					totAmt = v
+				case int:
+					totAmt = float64(v)
+				}
+				ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+
+				_, _ = DB.Exec(`INSERT INTO customer_order_states 
+					(username, customer_phone, delivery_phone, customer_name, delivery_address, items, total_amount, payment_mode, payment_status, order_status, order_id, raw_json, updated_at)
+					VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, 'in_progress', $10, $11::jsonb, NOW())
+					ON CONFLICT (username, customer_phone) DO UPDATE SET
+						delivery_phone = COALESCE(NULLIF(EXCLUDED.delivery_phone, ''), customer_order_states.delivery_phone),
+						customer_name = COALESCE(NULLIF(EXCLUDED.customer_name, ''), customer_order_states.customer_name),
+						delivery_address = COALESCE(NULLIF(EXCLUDED.delivery_address, ''), customer_order_states.delivery_address),
+						items = CASE WHEN jsonb_array_length(EXCLUDED.items) > 0 THEN EXCLUDED.items ELSE customer_order_states.items END,
+						total_amount = CASE WHEN EXCLUDED.total_amount > 0 THEN EXCLUDED.total_amount ELSE customer_order_states.total_amount END,
+						payment_mode = CASE WHEN EXCLUDED.payment_mode != 'unselected' THEN EXCLUDED.payment_mode ELSE customer_order_states.payment_mode END,
+						order_id = COALESCE(NULLIF(EXCLUDED.order_id, ''), customer_order_states.order_id),
+						raw_json = EXCLUDED.raw_json,
+						updated_at = NOW()`,
+					cleanUsr, cleanPhone, delPhone, custName, delAddr, string(itemsBytes), totAmt, payMode, payStatus, ordID, string(rawBytes))
+			}
+			aiResponse = jsonRegex.ReplaceAllString(aiResponse, "")
+		}
+
+		// 2. Process <PAYMENT_TRIGGER>
+		payRegex := regexp.MustCompile(`(?i)<PAYMENT_TRIGGER\s+amount=["']?([0-9.]+)["']?\s+order_id=["']?([^"'>]+)["']?\s*/?>`)
+		var matchedImg string
+		if payMatch := payRegex.FindStringSubmatch(aiResponse); len(payMatch) > 2 && cfg.HasOnlinePayment {
+			amountStr := payMatch[1]
+			orderIDStr := payMatch[2]
+			vpa := cfg.MerchantVpa
+			if vpa == "" {
+				vpa = "paytm.s1f6syj@pty"
+			}
+			pName := cfg.PayeeName
+			if pName == "" {
+				pName = cleanUsr
+			}
+			upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
+			qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s", upiURI)
+			aiResponse = payRegex.ReplaceAllString(aiResponse, "")
+			aiResponse += fmt.Sprintf("\n\n💳 *ONLINE PAYMENT LINK & QR CODE* 💳\n• Amount: ₹%s\n• Order ID: %s\n• Click to Pay via UPI (GPay/PhonePe/Paytm):\n%s\n\n(Scan the QR code above or click the link to complete payment)", amountStr, orderIDStr, upiURI)
+			matchedImg = qrURL
+		}
+
+		return strings.TrimSpace(aiResponse), matchedImg
+	}
 	if err != nil || aiResponse == "" {
 		log.Printf("⚠️ GenerateAIReplyRAM error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return "", ""

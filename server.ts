@@ -240,6 +240,98 @@ function getRotatedApiKey(username: string, rawKeys?: string): string {
   return selectedKey;
 }
 
+
+// --- SMART PAYMENT & CUSTOMER ORDER STATE HELPERS ---
+async function getTenantPaymentConfig(username: string): Promise<{ enabled: boolean; merchant_vpa: string; paytm_mid: string; payee_name: string }> {
+  const cleanUsr = (username || '').toLowerCase().replace(/^@/, '');
+  const baseName = cleanUsr.split('@')[0];
+  let cfg = paymentConfigsMap.get(cleanUsr) || paymentConfigsMap.get(baseName);
+
+  if (!cfg && getPool()) {
+    try {
+      const res = await getPool()!.query(
+        `SELECT enabled, merchant_vpa, paytm_mid, payee_name 
+         FROM tenant_payment_configs 
+         WHERE LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($2) 
+         LIMIT 1`,
+        [cleanUsr, baseName]
+      );
+      if (res.rows.length > 0) {
+        const row = res.rows[0];
+        cfg = {
+          enabled: Boolean(row.enabled),
+          merchant_vpa: row.merchant_vpa || '',
+          paytm_mid: row.paytm_mid || '',
+          payee_name: row.payee_name || baseName
+        };
+        paymentConfigsMap.set(cleanUsr, cfg);
+        paymentConfigsMap.set(baseName, cfg);
+      }
+    } catch {}
+  }
+  return cfg || { enabled: false, merchant_vpa: '', paytm_mid: '', payee_name: baseName };
+}
+
+async function getCustomerOrderState(username: string, customerPhone: string): Promise<any> {
+  const cleanUsr = (username || '').toLowerCase().replace(/^@/, '');
+  const cleanPhone = String(customerPhone || '').replace(/\D/g, '');
+  if (getPool()) {
+    try {
+      const res = await getPool()!.query(
+        `SELECT customer_name, delivery_phone, delivery_address, items, total_amount, payment_mode, payment_status, order_status, order_id, raw_json 
+         FROM customer_order_states 
+         WHERE LOWER(username) = LOWER($1) AND customer_phone = $2 LIMIT 1`,
+        [cleanUsr, cleanPhone]
+      );
+      if (res.rows.length > 0) {
+        return res.rows[0];
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function saveCustomerOrderState(username: string, customerPhone: string, orderData: any): Promise<void> {
+  const cleanUsr = (username || '').toLowerCase().replace(/^@/, '');
+  const cleanPhone = String(customerPhone || '').replace(/\D/g, '');
+  if (!cleanUsr || !cleanPhone || !orderData) return;
+
+  const deliveryPhone = String(orderData.delivery_phone || cleanPhone).trim();
+  const customerName = String(orderData.customer_name || '').trim();
+  const deliveryAddress = String(orderData.delivery_address || '').trim();
+  const items = Array.isArray(orderData.items) ? orderData.items : [];
+  const totalAmount = parseFloat(orderData.total_amount) || 0;
+  const paymentMode = String(orderData.payment_mode || 'unselected').toLowerCase();
+  const paymentStatus = String(orderData.payment_status || 'unpaid').toLowerCase();
+  const orderStatus = String(orderData.order_status || (paymentStatus === 'paid' ? 'confirmed' : 'in_progress')).toLowerCase();
+  const orderId = String(orderData.order_id || `ORD_${cleanPhone.slice(-4)}_${Date.now().toString().slice(-4)}`);
+
+  if (getPool()) {
+    try {
+      await getPool()!.query(
+        `INSERT INTO customer_order_states 
+         (username, customer_phone, delivery_phone, customer_name, delivery_address, items, total_amount, payment_mode, payment_status, order_status, order_id, raw_json, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12::jsonb, NOW())
+         ON CONFLICT (username, customer_phone) DO UPDATE SET
+           delivery_phone = COALESCE(NULLIF(EXCLUDED.delivery_phone, ''), customer_order_states.delivery_phone),
+           customer_name = COALESCE(NULLIF(EXCLUDED.customer_name, ''), customer_order_states.customer_name),
+           delivery_address = COALESCE(NULLIF(EXCLUDED.delivery_address, ''), customer_order_states.delivery_address),
+           items = CASE WHEN jsonb_array_length(EXCLUDED.items) > 0 THEN EXCLUDED.items ELSE customer_order_states.items END,
+           total_amount = CASE WHEN EXCLUDED.total_amount > 0 THEN EXCLUDED.total_amount ELSE customer_order_states.total_amount END,
+           payment_mode = CASE WHEN EXCLUDED.payment_mode != 'unselected' THEN EXCLUDED.payment_mode ELSE customer_order_states.payment_mode END,
+           payment_status = CASE WHEN customer_order_states.payment_status = 'paid' THEN 'paid' ELSE EXCLUDED.payment_status END,
+           order_status = CASE WHEN customer_order_states.payment_status = 'paid' THEN 'confirmed' ELSE EXCLUDED.order_status END,
+           order_id = COALESCE(NULLIF(EXCLUDED.order_id, ''), customer_order_states.order_id),
+           raw_json = EXCLUDED.raw_json,
+           updated_at = NOW()`,
+        [cleanUsr, cleanPhone, deliveryPhone, customerName, deliveryAddress, JSON.stringify(items), totalAmount, paymentMode, paymentStatus, orderStatus, orderId, JSON.stringify(orderData)]
+      );
+    } catch (err) {
+      console.warn('saveCustomerOrderState error:', err);
+    }
+  }
+}
+
 // --- AI AUTO-REPLY ENGINE (24/7 PERSONALIZED CATALOG RESPONDER) ---
 async function generateAIReply(
   username: string,
@@ -260,10 +352,22 @@ async function generateAIReply(
   const userType = user?.user_type || 'business_user';
   const activePrompt = customSystemPrompt || user?.system_prompt || '';
 
-  // 2. Fetch live catalog items
+  // 2. Fetch live catalog items & payment configuration
   const catalog = await getTenantCatalog(username);
+  const paymentCfg = await getTenantPaymentConfig(username);
+  const hasOnlinePayment = Boolean(paymentCfg.enabled && (paymentCfg.merchant_vpa || paymentCfg.paytm_mid));
+  const paymentRulesText = hasOnlinePayment 
+    ? "Payment options: Cash on Delivery (COD) OR Online Payment (UPI / QR / Paytm)." 
+    : "Payment options: Cash on Delivery (COD) ONLY. (Online payment is disabled by store, so NEVER offer online payment, only offer COD).";
 
-  // --- ULTRA-COMPACT MINIMUM-TOKEN SYSTEM PROMPT (85% TOKEN REDUCTION) ---
+  // 3. Fetch existing customer order state
+  const existingOrder = await getCustomerOrderState(username, customerPhone);
+  let orderContext = `Customer Phone: +${customerPhone}`;
+  if (existingOrder) {
+    orderContext += `\nExisting Order State: Name: ${existingOrder.customer_name || 'Not provided'} | Address: ${existingOrder.delivery_address || 'Not provided'} | Items: ${JSON.stringify(existingOrder.items || [])} | Total: ₹${existingOrder.total_amount || 0} | Payment Mode: ${existingOrder.payment_mode || 'unselected'} | Payment Status: ${existingOrder.payment_status || 'unpaid'}`;
+  }
+
+  // --- ULTRA-COMPACT MINIMUM-TOKEN SYSTEM PROMPT WITH SMART ORDER FORM RULES ---
   const catalogLines = catalog.map((item, idx) => {
     let variantsStr = '';
     if (Array.isArray(item.variants) && item.variants.length > 0) {
@@ -274,10 +378,18 @@ async function generateAIReply(
   }).join('\n');
 
   const compactSystemPrompt = [
-    `You are the 24/7 WhatsApp AI Assistant for "${accountName}".`,
-    activePrompt ? `Guideline: ${activePrompt.slice(0, 200)}.` : `Be polite, helpful and concise (2-3 sentences max).`,
-    catalogLines ? `Catalog:\n${catalogLines}` : ``,
-    `Rules: Quote exact rates. Keep replies brief, natural & WhatsApp friendly.`
+    `You are the 24/7 WhatsApp AI Sales Assistant for "${accountName}".`,
+    activePrompt ? `Guideline: ${activePrompt.slice(0, 200)}.` : `Be polite, persuasive and concise (2-3 sentences max).`,
+    catalogLines ? `Available Catalog Products:\n${catalogLines}` : `No products currently listed.`,
+    `${paymentRulesText}`,
+    `${orderContext}`,
+    `ORDER INSTRUCTIONS: When customer wants to buy, collect step-by-step: 1) Products & Quantity, 2) Full Name, 3) Delivery Address & Phone, 4) Payment Method (${hasOnlinePayment ? 'COD or Online' : 'COD only'}).`,
+    `At the end of EVERY response where order, items, address, or payment is discussed, append a hidden state block:`,
+    `<ORDER_JSON>{"customer_phone":"${customerPhone}","delivery_phone":"","customer_name":"","delivery_address":"","items":[],"total_amount":0,"payment_mode":"cod"|"online"|"unselected","payment_status":"unpaid"|"paid"}</ORDER_JSON>`,
+    hasOnlinePayment 
+      ? `CRITICAL: If customer chose Online Payment and confirmed items/amount, output: <PAYMENT_TRIGGER amount="AMOUNT" order_id="ORDER_ID">. The system will auto-generate the official QR code.` 
+      : `Do NOT offer online payment. Strictly offer Cash on Delivery.`,
+    `IF payment_status is "paid", confirm order warmly and state that items will be dispatched soon. Never ask for payment again once paid.`
   ].filter(Boolean).join('\n');
 
   const systemInstruction = compactSystemPrompt;
@@ -468,12 +580,111 @@ async function generateAIReply(
   }
 
   let matchedImageUrl: string | undefined = undefined;
+
+  // 1. Extract and process <ORDER_JSON> state block (AI generated)
+  let detectedOrder: any = null;
+  const jsonMatch = aiResponse.match(/<ORDER_JSON>([\s\S]*?)<\/ORDER_JSON>/i);
+  if (jsonMatch) {
+    try {
+      detectedOrder = JSON.parse(jsonMatch[1].trim());
+    } catch (e) {
+      console.warn('Failed to parse <ORDER_JSON> block:', e);
+    }
+    // Clean JSON block from customer message
+    aiResponse = aiResponse.replace(/<ORDER_JSON>[\s\S]*?<\/ORDER_JSON>/gi, '').trim();
+  }
+
+  // 1B. Smart Rule-Based Fallback Order Extractor (Ensures customer details are ALWAYS captured even if LLM omits tag)
+  const incomingLower = incomingText.toLowerCase();
+  const isOrderIntent = incomingLower.includes('order') || incomingLower.includes('chahiye') || incomingLower.includes('khareed') || incomingLower.includes('buy') || incomingLower.includes('pack') || incomingLower.includes('kg') || incomingLower.includes('piece') || incomingLower.includes('deliver');
+  
+  if (!detectedOrder && isOrderIntent) {
+    detectedOrder = {
+      customer_phone: customerPhone,
+      delivery_phone: customerPhone,
+      customer_name: '',
+      delivery_address: '',
+      items: [],
+      total_amount: 0,
+      payment_mode: 'unselected',
+      payment_status: 'unpaid'
+    };
+  }
+
+  if (detectedOrder || isOrderIntent) {
+    if (!detectedOrder) {
+      detectedOrder = { customer_phone: customerPhone, delivery_phone: customerPhone, customer_name: '', delivery_address: '', items: [], total_amount: 0, payment_mode: 'unselected', payment_status: 'unpaid' };
+    }
+
+    // Name detection
+    const nameMatch = incomingText.match(/(?:mera\s+name|my\s+name\s+is|naam|name\s*:)\s*([a-zA-Z\s]{2,30})(?:hai|\.|,|$)/i);
+    if (nameMatch && nameMatch[1]) {
+      detectedOrder.customer_name = nameMatch[1].replace(/\b(?:hai|h|hu|hoon|he)\b/gi, '').trim();
+    }
+
+    // Address detection
+    const addrMatch = incomingText.match(/(?:delivery\s+address|address|pata|address\s*:)\s*([a-zA-Z0-9\s,.-]{4,100})/i);
+    if (addrMatch && addrMatch[1]) {
+      detectedOrder.delivery_address = addrMatch[1].replace(/\b(?:hai|h|hu|hoon|he|main|online|payment|karna|chahta|chahiye)\b[\s\S]*/gi, '').trim();
+    }
+
+    // Payment mode detection
+    if (incomingLower.includes('online') || incomingLower.includes('upi') || incomingLower.includes('gpay') || incomingLower.includes('phonepe') || incomingLower.includes('paytm') || incomingLower.includes('qr')) {
+      detectedOrder.payment_mode = hasOnlinePayment ? 'online' : 'cod';
+    } else if (incomingLower.includes('cod') || incomingLower.includes('cash on delivery') || incomingLower.includes('cash')) {
+      detectedOrder.payment_mode = 'cod';
+    }
+
+    // Product matching from catalog
+    if (catalog.length > 0) {
+      for (const catItem of catalog) {
+        if (incomingLower.includes(catItem.name.toLowerCase())) {
+          let itemPrice = 100;
+          const matches = String(catItem.price).match(/₹\s*(\d+)/) || String(catItem.price).match(/(\d+)/);
+          if (matches) itemPrice = parseFloat(matches[1]);
+
+          detectedOrder.items = [{ name: catItem.name, qty: 1, price: itemPrice }];
+          detectedOrder.total_amount = itemPrice;
+          break;
+        }
+      }
+    }
+
+    detectedOrder.customer_phone = customerPhone;
+    await saveCustomerOrderState(username, customerPhone, detectedOrder);
+    console.log(`📦 [Order JSON Form Extracted & Saved] @${username} (+${customerPhone}): Name=${detectedOrder.customer_name || 'N/A'}, Amount=₹${detectedOrder.total_amount || 0}, Mode=${detectedOrder.payment_mode}, Status=${detectedOrder.payment_status}`);
+  }
+
+  // If customer chose online payment and online payment is enabled, but LLM missed trigger tag, auto-inject payment QR!
+  if (detectedOrder && detectedOrder.payment_mode === 'online' && hasOnlinePayment && !aiResponse.includes('<PAYMENT_TRIGGER') && !aiResponse.includes('ONLINE PAYMENT LINK')) {
+    const payAmt = detectedOrder.total_amount || 100;
+    const payOrdId = `ORD_${customerPhone.slice(-4)}_${Date.now().toString().slice(-4)}`;
+    aiResponse += ` <PAYMENT_TRIGGER amount="${payAmt}" order_id="${payOrdId}">`;
+  }
+
+  // 2. Extract and process <PAYMENT_TRIGGER> tag for automated UPI QR Generation
+  const paymentTriggerMatch = aiResponse.match(/<PAYMENT_TRIGGER\s+amount=["']?(\d+(?:\.\d+)?)["']?\s+order_id=["']?([^"'>]+)["']?\s*\/?>/i);
+  if (paymentTriggerMatch) {
+    const payAmount = paymentTriggerMatch[1];
+    const payOrderId = paymentTriggerMatch[2];
+    aiResponse = aiResponse.replace(/<PAYMENT_TRIGGER[\s\S]*?>/gi, '').trim();
+
+    if (hasOnlinePayment) {
+      const vpa = paymentCfg.merchant_vpa || 'paytm.s1f6syj@pty';
+      const payeeName = paymentCfg.payee_name || accountName;
+      const upiURI = `upi://pay?pa=${encodeURIComponent(vpa)}&pn=${encodeURIComponent(payeeName)}&am=${Number(payAmount).toFixed(2)}&tr=${encodeURIComponent(payOrderId)}&tn=Order_${encodeURIComponent(payOrderId)}&cu=INR`;
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiURI)}`;
+
+      aiResponse += `\n\n💳 *ONLINE PAYMENT LINK & QR CODE* 💳\n• Amount: ₹${payAmount}\n• Order ID: ${payOrderId}\n• Pay via UPI App (GPay/PhonePe/Paytm):\n${upiURI}\n\n(Scan the QR code above or click the link to complete payment. Once paid, your order is instantly confirmed!)`;
+      matchedImageUrl = qrUrl;
+    }
+  }
+
   const imgTagMatch = aiResponse.match(/<IMG_(\d+)>/i);
   if (imgTagMatch) {
     const itemIndex = parseInt(imgTagMatch[1], 10) - 1;
     if (catalog[itemIndex]) {
       const item = catalog[itemIndex];
-      // Replace tag with product mention if desired
       aiResponse = aiResponse.replace(/<IMG_\d+>/gi, `[Product Image: ${item.name}]`);
     }
   }
@@ -1714,7 +1925,7 @@ app.all('/api/whatsapp/incoming', async (req: Request, res: Response) => {
 
   const cleanPhone = String(phone).replace(/\D/g, '');
 
-  let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
+  let user = username ? await findUserByIdentifier(username, memoryUsers) : undefined;
   if (!user) {
     user = Array.from(memoryUsers.values()).find(u => u.phone && cleanPhone.includes(u.phone));
   }
@@ -2433,6 +2644,24 @@ app.delete('/api/products', async (req: Request, res: Response) => {
 });
 
 // 12D. BUSINESS DASHBOARD STATS (REAL LIVE METRICS)
+
+// --- 12J. CUSTOMER LIVE ORDER STATE API (FOR BUSINESS PORTAL ORDER FORM) ---
+app.get('/api/customer/order-state', async (req: Request, res: Response) => {
+  const username = (req.query.username as string) || '';
+  const customerPhone = (req.query.customer_phone as string) || (req.query.phone as string) || '';
+  const state = await getCustomerOrderState(username, customerPhone);
+  return res.json({ status: 'success', order: state || null });
+});
+
+app.post('/api/customer/order-state', async (req: Request, res: Response) => {
+  const { username = '', customer_phone = '', order_data } = req.body || {};
+  if (!username || !customer_phone) {
+    return res.status(400).json({ error: 'username and customer_phone required' });
+  }
+  await saveCustomerOrderState(username, customer_phone, order_data);
+  return res.json({ status: 'success', message: 'Customer order state updated.' });
+});
+
 app.get('/api/business/dashboard', async (req: Request, res: Response) => {
   const username = (req.query.username as string) || '';
   const campaign = activeCampaigns.get(username);
