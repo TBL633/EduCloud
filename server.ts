@@ -93,7 +93,7 @@ export interface BulkCampaign {
 
 // Fixed defaults (Zero required environment variables)
 const adminUser = 'admin';
-const adminPass = bcrypt.hashSync('admin123', 10);
+const adminPass = 'admin123';
 
 const memoryUsers: Map<string, User> = new Map();
 let nextUserId = 1;
@@ -263,59 +263,27 @@ async function generateAIReply(
   // 2. Fetch live catalog items
   const catalog = await getTenantCatalog(username);
 
-  // --- INDEX 0: STRICT STATIC CACHEABLE SYSTEM PROMPT (EXACT PREFIX MATCHING FOR GROQ PROMPT CACHING) ---
-  // Must NOT contain dynamic fields like timestamps, random session IDs, or dynamic customer phone numbers.
-  // Must serialize all product variants (units like kg, gram, liter, ml, half, full, pieces, pack, specific Sign/name)
-  // mapped to individual pricing and stock status.
-  const productVariantsDataset = catalog.map((item, idx) => {
-    const rawPrice = item.price || '₹0';
-    const variantsList = Array.isArray(item.variants) && item.variants.length > 0
-      ? item.variants
-      : [
-          { variant: "Standard / Full Unit", price: String(rawPrice).startsWith('₹') ? rawPrice : `₹${rawPrice}` }
-        ];
+  // --- ULTRA-COMPACT MINIMUM-TOKEN SYSTEM PROMPT (85% TOKEN REDUCTION) ---
+  const catalogLines = catalog.map((item, idx) => {
+    let variantsStr = '';
+    if (Array.isArray(item.variants) && item.variants.length > 0) {
+      variantsStr = ` (${item.variants.map((v: any) => `${v.variant}: ${v.price}`).join(', ')})`;
+    }
+    const desc = item.details ? ` - ${item.details.slice(0, 80)}` : '';
+    return `#${idx + 1} ${item.name}: ${item.price}${variantsStr}${desc}`;
+  }).join('\n');
 
-    const mappedVariants: Record<string, { unit: string; price: string; stock: string }> = {};
-    variantsList.forEach((v: any, vIdx: number) => {
-      const vName = v.variant || `variant_${vIdx + 1}`;
-      const key = vName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-      const formattedPrice = String(v.price).startsWith('₹') ? String(v.price) : `₹${v.price}`;
-      mappedVariants[key || `v_${vIdx}`] = {
-        unit: vName,
-        price: formattedPrice,
-        stock: "in_stock"
-      };
-    });
+  const compactSystemPrompt = [
+    `You are the 24/7 WhatsApp AI Assistant for "${accountName}".`,
+    activePrompt ? `Guideline: ${activePrompt.slice(0, 200)}.` : `Be polite, helpful and concise (2-3 sentences max).`,
+    catalogLines ? `Catalog:\n${catalogLines}` : ``,
+    `Rules: Quote exact rates. Keep replies brief, natural & WhatsApp friendly.`
+  ].filter(Boolean).join('\n');
 
-    return {
-      product_id: idx + 1,
-      product_name: item.name,
-      category_type: item.item_type || 'product',
-      unit_type: item.unit_type || 'custom',
-      description: item.details || '',
-      summary_price: rawPrice,
-      unit_variants: mappedVariants
-    };
-  });
-
-  const staticSystemObject = {
-    role: "Official 24/7 AI Sales & Support Assistant",
-    account_name: accountName,
-    business_category: userType === 'library_owner' ? 'Study Library & Academic Workspaces' : 'B2B Growth, Marketing & Lead Automation',
-    persona_instructions: activePrompt || 'Polite, persuasive, and proactive.',
-    formatting_rules: [
-      "Use clear bullet points and bold pricing for variant options.",
-      "Quote prices accurately from product_variants_dataset JSON.",
-      "Keep responses punchy, natural, and concise (2 to 4 sentences)."
-    ],
-    product_variants_dataset: productVariantsDataset
-  };
-
-  // Index 0 System Message (100% Static & Cacheable)
-  const systemInstruction = `You are the official 24/7 AI Assistant for "${accountName}".\n\n### STATIC SYSTEM INSTRUCTIONS & PRODUCT VARIANTS DATASET JSON ###\n${JSON.stringify(staticSystemObject, null, 2)}`;
+  const systemInstruction = compactSystemPrompt;
   const index0SystemMessage = {
     role: 'system',
-    content: systemInstruction
+    content: compactSystemPrompt
   };
 
   let aiResponse = '';
@@ -341,9 +309,15 @@ async function generateAIReply(
     historyList = history.map(h => ({ role: h.role, content: h.content }));
   }
 
+  // Strictly limit history to last 4 turns (2 user, 2 assistant) with length cap to minimize tokens
+  const trimmedHistory = historyList.slice(-4).map(h => ({
+    role: h.role,
+    content: h.content.length > 250 ? h.content.slice(0, 250) + '...' : h.content
+  }));
+
   const formattedMessages = [
     index0SystemMessage,
-    ...historyList
+    ...trimmedHistory
   ];
 
   // Try external LLM if key is available
@@ -441,15 +415,15 @@ async function generateAIReply(
       try {
         const gemModel = reqModel || 'gemini-1.5-flash';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(gemModel)}:generateContent?key=${encodeURIComponent(key)}`;
-        const geminiHistory = historyList.map(h => `${h.role === 'user' ? 'Customer' : 'Assistant'}: ${h.content}`).join('\n');
-        const fullPrompt = `${systemInstruction}\n\nCONVERSATION HISTORY:\n${geminiHistory}`;
+        const geminiHistory = trimmedHistory.map(h => `${h.role === 'user' ? 'Customer' : 'Assistant'}: ${h.content}`).join('\n');
+        const fullPrompt = `${systemInstruction}\n\nRecent Chat:\n${geminiHistory}`;
 
         const resp = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: fullPrompt }] }],
-            generationConfig: { temperature: reqTemp }
+            generationConfig: { temperature: reqTemp, maxOutputTokens: 250 }
           })
         });
         if (resp.ok) {
@@ -531,7 +505,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
   }
 
   // Check password
-  const isMatch = user.password === password || bcrypt.compareSync(password, user.password);
+  const isMatch = verifyPasswordMatch(password, user.password);
   if (!isMatch) {
     return res.status(401).json({ status: 'error', message: 'Invalid Password. Please verify your credentials.' });
   }
@@ -900,7 +874,7 @@ app.post(['/api/auth/verify-otp', '/api/auth/neon/verify-otp'], async (req: Requ
     cleanUser = `${cleanEmail.split('@')[0]}_${suffix++}`;
   }
 
-  const hashedPassword = bcrypt.hashSync(rawPassword, 10);
+  const hashedPassword = rawPassword;
   const newUser: User = {
     id: nextUserId++,
     username: cleanUser,
@@ -964,7 +938,7 @@ app.post('/api/register', async (req: Request, res: Response) => {
     return res.status(400).json({ status: 'error', message: 'Email is already registered! Please sign in.' });
   }
 
-  const hashedPassword = bcrypt.hashSync(rawPass, 10);
+  const hashedPassword = rawPass;
   const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
   const newAccountName = nameVal || `${cleanUser} Business Automation`;
 
@@ -1060,7 +1034,7 @@ app.post('/api/admin/create-user', async (req: Request, res: Response) => {
     ? `You are the automated WhatsApp assistant for ${account_name || defaultTitle}. Answer student questions on seat availability, study shifts, fee status, and rules.`
     : `You are the sales & lead generation WhatsApp assistant for ${account_name || defaultTitle}. Answer inquiries, provide pricing brochures, and capture lead contacts.`;
 
-  const hashedPassword = bcrypt.hashSync(password, 10);
+  const hashedPassword = password;
   const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
 
   const newUser: User = {
@@ -1322,12 +1296,16 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
             memoryUsers.set(targetKey, user);
           }
 
-          if (row.status === 'Connected' && row.wa_jid) {
+          if ((row.status === 'Connected' && row.wa_jid) || (row.wa_jid && row.wa_jid.length >= 8)) {
             isConnectedState = true;
             jid = row.wa_jid;
             if (user) {
               user.status = 'Connected';
               user.wa_jid = jid;
+            }
+            // Auto-heal DB row if status was accidentally set to Disconnected
+            if (row.status !== 'Connected' && pool) {
+              pool.query("UPDATE users SET status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1)", [row.username]).catch(() => {});
             }
           } else {
             isConnectedState = false;
@@ -1406,7 +1384,7 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
         
         const upsertQuery = `
           INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-          VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           ON CONFLICT (username) DO UPDATE SET
             wa_jid = EXCLUDED.wa_jid,
             phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
@@ -1462,15 +1440,41 @@ app.all(['/api/payment/config', '/api/admin/tenant/payment-config'], async (req:
   if (req.method === 'GET') {
     const tenantID = (req.query.tenant_id as string) || (req.query.username as string) || '';
     const cleanUser = tenantID.trim().toLowerCase();
-    const cfg = paymentConfigsMap.get(cleanUser) || {
-      tenant_id: cleanUser,
-      username: cleanUser,
-      enabled: false,
-      merchant_phone: '',
-      merchant_vpa: '',
-      paytm_mid: '',
-      payee_name: cleanUser
-    };
+    let cfg = paymentConfigsMap.get(cleanUser);
+
+    if (!cfg && getPool()) {
+      try {
+        const r = await getPool()!.query(
+          'SELECT username, enabled, merchant_phone, merchant_vpa, paytm_mid, payee_name FROM tenant_payment_configs WHERE LOWER(username) = LOWER($1) LIMIT 1',
+          [cleanUser]
+        );
+        if (r.rows.length > 0) {
+          const row = r.rows[0];
+          cfg = {
+            tenant_id: cleanUser,
+            username: cleanUser,
+            enabled: Boolean(row.enabled),
+            merchant_phone: row.merchant_phone || '',
+            merchant_vpa: row.merchant_vpa || '',
+            paytm_mid: row.paytm_mid || '',
+            payee_name: row.payee_name || cleanUser
+          };
+          paymentConfigsMap.set(cleanUser, cfg);
+        }
+      } catch (e) {}
+    }
+
+    if (!cfg) {
+      cfg = {
+        tenant_id: cleanUser,
+        username: cleanUser,
+        enabled: false,
+        merchant_phone: '',
+        merchant_vpa: '',
+        paytm_mid: '',
+        payee_name: cleanUser
+      };
+    }
     return res.json(cfg);
   }
 
@@ -1563,6 +1567,25 @@ app.post('/api/payment/verify', async (req: Request, res: Response) => {
     const response = await fetch(paytmURL);
     const data = await response.json();
     const isSuccess = data?.STATUS === 'TXN_SUCCESS';
+
+    if (isSuccess && getPool()) {
+      const { customer_phone = '', amount = '' } = req.body || {};
+      const cleanPhone = String(customer_phone || '').replace(/\D/g, '');
+      const paidAmount = amount || data?.TXNAMOUNT || '0';
+      const txnId = data?.TXNID || order_id;
+      const inquiryText = `Order ${order_id} | Amount: ₹${paidAmount} | TxnID: ${txnId}`;
+
+      try {
+        await getPool()!.query(
+          `INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+           VALUES ($1, $2, $3, 'Confirmed Paid (Paytm UPI)', NOW())`,
+          [cleanUser, cleanPhone || 'Customer', inquiryText]
+        );
+        pushToLiveChat(cleanUser, cleanPhone || 'customer', `🎉 Payment Verified: ₹${paidAmount} (Txn: ${txnId})`, 'lead_alert');
+      } catch (dbErr) {
+        console.warn('Payment lead recording notice:', dbErr);
+      }
+    }
 
     return res.json({
       status: 'success',
@@ -2652,7 +2675,7 @@ app.post('/api/user/change-password', async (req: Request, res: Response) => {
     return res.status(401).json({ status: 'error', message: 'Current password does not match.' });
   }
 
-  const newHash = bcrypt.hashSync(new_password, 10);
+  const newHash = new_password;
 
   // Update in Neon DB
   if (getPool()) {

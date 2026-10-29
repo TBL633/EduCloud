@@ -26,12 +26,30 @@ func StatusHandler(w http.ResponseWriter, r *http.Request) {
 	status := "Disconnected"
 	jid := ""
 
-	if savedJID != "" && savedStatus == "Connected" {
-		client := whatsapp.GetOrCreateClient(username)
-		if client != nil && client.IsLoggedIn() {
-			status = "Connected"
+	client := whatsapp.GetOrCreateClient(username)
+	if client != nil && client.Store.ID != nil && client.IsLoggedIn() {
+		status = "Connected"
+		jid = client.Store.ID.User
+		if jid == "" {
 			jid = savedJID
 		}
+		// Self-heal Neon DB if DB row was wiped, dropped or out of sync!
+		if DB != nil {
+			upsertQuery := `
+				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					wa_jid = EXCLUDED.wa_jid,
+					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+					status = 'Connected',
+					linked_at = COALESCE(users.linked_at, NOW());
+			`
+			_, _ = DB.Exec(upsertQuery, username, jid)
+			_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=COALESCE(NULLIF(phone, ''), $1), status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jid, username)
+		}
+	} else if savedJID != "" && savedStatus == "Connected" {
+		status = "Connected"
+		jid = savedJID
 	}
 
 	qrCode := ""

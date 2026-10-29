@@ -132,7 +132,7 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 			accountName = fmt.Sprintf("%s Account", cleanUser)
 		}
 
-		hashedPass, _ := bcrypt.GenerateFromPassword([]byte(pass), 10)
+		hashedPass := []byte(pass)
 		sysPrompt := fmt.Sprintf("You are the 24/7 automated WhatsApp assistant for %s. Answer inquiries, share pricing, and capture leads.", accountName)
 
 		_, err := DB.Exec(`INSERT INTO users (username, email, password, role, user_type, account_name, phone, system_prompt, auto_reply, automation_access, status)

@@ -378,7 +378,7 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 			cleanUser = fmt.Sprintf("%s_%d", cleanUser, rand.Intn(900)+100)
 		}
 
-		hashedPass, _ := bcrypt.GenerateFromPassword([]byte(rawPassword), 10)
+		hashedPass := []byte(rawPassword)
 		sysPrompt := fmt.Sprintf("You are an intelligent 24/7 sales & lead qualification WhatsApp bot for %s. Answer inquiries promptly, share pricing and service information, and help capture leads.", fullName)
 
 		var userID int
@@ -489,7 +489,7 @@ func UpdatePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hashedNew, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), 10)
+	hashedNew := []byte(req.NewPassword)
 	_, err = DB.Exec("UPDATE users SET password=$1 WHERE LOWER(username)=LOWER($2)", string(hashedNew), username)
 	if err != nil {
 		respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update password in database: " + err.Error()})

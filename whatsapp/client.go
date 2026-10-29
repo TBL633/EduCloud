@@ -323,7 +323,7 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 							jidUser := client.Store.ID.User
 							upsertQuery := `
 								INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-								VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+								VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
 								ON CONFLICT (username) DO UPDATE SET
 									wa_jid = EXCLUDED.wa_jid,
 									phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
@@ -344,7 +344,7 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 			jidUser := client.Store.ID.User
 			upsertQuery := `
 				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
 				ON CONFLICT (username) DO UPDATE SET
 					wa_jid = EXCLUDED.wa_jid,
 					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
@@ -1321,7 +1321,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			
 			upsertQuery := `
 				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
 				ON CONFLICT (username) DO UPDATE SET
 					wa_jid = EXCLUDED.wa_jid,
 					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
@@ -1342,7 +1342,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			jidStr := client.Store.ID.User
 			upsertQuery := `
 				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
+				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
 				ON CONFLICT (username) DO UPDATE SET
 					wa_jid = EXCLUDED.wa_jid,
 					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),

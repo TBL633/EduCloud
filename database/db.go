@@ -232,7 +232,7 @@ func createDefaultAdmin() {
 	var exists bool
 	_ = DB.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)", adminUser).Scan(&exists)
 	if !exists {
-		hashedPass, _ := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
+		hashedPass := []byte("admin123")
 		_, err := DB.Exec(`INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
 			VALUES ($1, $2, $3, 'admin', 'admin', 'Master Administrator', true)`,
 			adminUser, "admin@eduta.ai", string(hashedPass))

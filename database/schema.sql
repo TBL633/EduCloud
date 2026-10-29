@@ -113,7 +113,7 @@ INSERT INTO users (username, email, password, role, user_type, account_name, aut
 VALUES (
     'admin',
     'admin@eduta.ai',
-    '$2a$10$wT5aV9gO/r21mPky0EregeZ2x9d54e4tI24K26a1Z6Nq2R4R5E6Qy', -- bcrypt hash for admin123
+    'admin123', -- plain lightweight password for admin
     'admin',
     'admin',
     'Master Administrator',

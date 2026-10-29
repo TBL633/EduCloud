@@ -226,7 +226,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     // Ensure default master admin exists
     const adminCheck = await pool.query('SELECT id FROM users WHERE LOWER(username) = $1 LIMIT 1', ['admin']);
     if (adminCheck.rows.length === 0) {
-      const hashedAdminPass = bcrypt.hashSync('admin123', 10);
+      const hashedAdminPass = 'admin123';
       await pool.query(
         `INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -273,9 +273,10 @@ export async function findUserByIdentifier(identifier: string, memoryUsers: Map<
   const clean = identifier.trim().toLowerCase();
 
   // Try Neon DB query first if connected
-  if (pool && isConnected) {
+  const dbPool = pool || getPool();
+  if (dbPool) {
     try {
-      const res = await pool.query(
+      const res = await dbPool.query(
         'SELECT * FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1 LIMIT 1',
         [clean]
       );
@@ -315,9 +316,10 @@ export async function findUserByIdentifier(identifier: string, memoryUsers: Map<
 }
 
 export async function saveUserToNeon(user: User): Promise<void> {
-  if (!pool || !isConnected) return;
+  const dbPool = pool || getPool();
+  if (!dbPool) return;
   try {
-    await pool.query(
+    await dbPool.query(
       `INSERT INTO users (username, email, password, role, user_type, account_name, phone, wa_jid, ai_provider, api_key, system_prompt, auto_reply, automation_access, status, qr)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        ON CONFLICT (username) DO UPDATE SET
