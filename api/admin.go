@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"golang.org/x/crypto/bcrypt"
 	"wa-server/whatsapp"
 )
 
