@@ -740,19 +740,52 @@
                             </p>
                         </div>
 
-                        <!-- System Prompt Textarea -->
-                        <div>
-                            <div class="flex items-center justify-between mb-1.5">
-                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider">System Prompt (Lead Generation Persona)</label>
-                                <span class="text-[10px] text-purple-400 font-mono font-semibold"><i class="fa-solid fa-sparkles mr-1"></i>24/7 Autopilot</span>
+                        <!-- DYNAMIC TOKEN-OPTIMIZED AI LEAD RESPONDER CONFIGURATION -->
+                        <div class="space-y-4 p-5 rounded-2xl bg-purple-950/20 border border-purple-500/30">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-2">
+                                    <i class="fa-solid fa-wand-magic-sparkles text-purple-400"></i> AI Persona & Universal Prompt Configuration
+                                </label>
+                                <span class="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full font-mono font-bold">
+                                    <i class="fa-solid fa-bolt mr-1"></i>Token-Optimized
+                                </span>
                             </div>
-                            <textarea id="ai-system-prompt" rows="4" placeholder="Enter system prompt for AI lead qualification..." class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500 leading-relaxed placeholder-slate-600"></textarea>
-                            
-                            <!-- HELPER TEXT FOR 24/7 AI PERSONALIZATION -->
-                            <div class="mt-2.5 p-3 rounded-xl bg-purple-950/30 border border-purple-900/60 text-purple-200 text-xs leading-relaxed flex items-start gap-2.5">
-                                <i class="fa-solid fa-robot text-purple-400 mt-0.5 text-sm shrink-0"></i>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <!-- 1. Business Name (Text Input) -->
                                 <div>
-                                    <span class="font-bold text-white">24/7 AI Personalization Active:</span> The AI Auto-Responder dynamically reads your Product & Service catalog items and quotes accurate prices, scope, and descriptions directly to prospects on WhatsApp.
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Business Name</label>
+                                    <input type="text" id="ai-business-name" placeholder="e.g. Rahul Store" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500 placeholder-slate-600">
+                                </div>
+
+                                <!-- 2. Business Type (Dropdown) -->
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Business Type</label>
+                                    <select id="ai-business-type" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500">
+                                        <option value="Kirana / General Store">Kirana / General Store</option>
+                                        <option value="Cafe / Restaurant">Cafe / Restaurant</option>
+                                        <option value="Electronics">Electronics</option>
+                                        <option value="Clothing / Boutique">Clothing / Boutique</option>
+                                        <option value="Other Services">Other Services</option>
+                                    </select>
+                                </div>
+
+                                <!-- 3. Response Language (Dropdown) -->
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Response Language</label>
+                                    <select id="ai-response-language" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-purple-500">
+                                        <option value="Hindi">Hindi</option>
+                                        <option value="Hinglish" selected>Hinglish</option>
+                                        <option value="English">English</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- HELPER TEXT FOR TOKEN-OPTIMIZED UNIVERSAL PROMPT -->
+                            <div class="p-3 rounded-xl bg-purple-950/40 border border-purple-900/60 text-purple-200 text-xs leading-relaxed flex items-start gap-2.5">
+                                <i class="fa-solid fa-circle-check text-purple-400 mt-0.5 text-sm shrink-0"></i>
+                                <div>
+                                    <span class="font-bold text-white">Dynamic Universal Prompt Active:</span> The AI Lead Responder dynamically constructs a minimal-token system prompt tailored for your business, enforcing polite sales behavior, WhatsApp formatting (*bold*, _italic_, > quotes), catalog strictness, and auto payment QR triggers.
                                 </div>
                             </div>
                         </div>
@@ -2426,7 +2459,9 @@
             const model = modelInput ? modelInput.value.trim() : '';
             const temperature = parseFloat(document.getElementById('ai-temperature')?.value) || 0.7;
             const notifPhone = document.getElementById('ai-notif-phone')?.value.trim() || '';
-            const systemPrompt = document.getElementById('ai-system-prompt')?.value.trim() || '';
+            const businessName = document.getElementById('ai-business-name')?.value.trim() || '';
+            const businessType = document.getElementById('ai-business-type')?.value || 'Kirana / General Store';
+            const responseLanguage = document.getElementById('ai-response-language')?.value || 'Hinglish';
             const autoReply = document.getElementById('ai-autoreply-check')?.checked ?? true;
             const importCatalog = document.getElementById('ai-import-catalog-check')?.checked ?? true;
 
@@ -2466,7 +2501,10 @@
                         ai_temperature: temperature,
                         notification_phone: notifPhone,
                         api_key: apiKey,
-                        system_prompt: systemPrompt,
+                        business_name: businessName,
+                        business_type: businessType,
+                        response_language: responseLanguage,
+                        language: responseLanguage,
                         auto_reply: autoReply,
                         import_catalog_details: importCatalog,
                         username
@@ -2474,7 +2512,7 @@
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('✅ AI Settings & Lead Notification Phone saved successfully!');
+                    alert('✅ AI Persona & Settings saved successfully!');
                     loadAISettings();
                     loadUserProfile();
                 } else {
@@ -2525,7 +2563,9 @@
                 const tempEl = document.getElementById('ai-temperature');
                 const dispTemp = document.getElementById('temp-display-val');
                 const notifEl = document.getElementById('ai-notif-phone');
-                const promptEl = document.getElementById('ai-system-prompt');
+                const bNameEl = document.getElementById('ai-business-name');
+                const bTypeEl = document.getElementById('ai-business-type');
+                const langEl = document.getElementById('ai-response-language');
                 const autoReplyEl = document.getElementById('ai-autoreply-check');
                 const importCatalogEl = document.getElementById('ai-import-catalog-check');
 
@@ -2537,7 +2577,9 @@
                     if (dispTemp) dispTemp.innerText = t;
                 }
                 if (notifEl) notifEl.value = data.notification_phone || '';
-                if (promptEl) promptEl.value = data.system_prompt || '';
+                if (bNameEl) bNameEl.value = data.business_name || data.account_name || '';
+                if (bTypeEl) bTypeEl.value = data.business_type || 'Kirana / General Store';
+                if (langEl) langEl.value = data.response_language || data.language || 'Hinglish';
                 if (autoReplyEl) autoReplyEl.checked = data.auto_reply ?? true;
                 if (importCatalogEl) importCatalogEl.checked = data.import_catalog_details ?? true;
 
@@ -2578,7 +2620,9 @@
             const model = document.getElementById('ai-model')?.value.trim() || '';
             const temperature = parseFloat(document.getElementById('ai-temperature')?.value) || 0.7;
             const apiKey = document.getElementById('ai-api-key')?.value.trim() || '';
-            const systemPrompt = document.getElementById('ai-system-prompt')?.value.trim() || '';
+            const businessName = document.getElementById('ai-business-name')?.value.trim() || '';
+            const businessType = document.getElementById('ai-business-type')?.value || 'Kirana / General Store';
+            const responseLanguage = document.getElementById('ai-response-language')?.value || 'Hinglish';
             const username = getActiveUsername();
 
             const btn = document.getElementById('btn-test-ai');
@@ -2615,7 +2659,10 @@
                         model,
                         temperature,
                         api_key: apiKey,
-                        system_prompt: systemPrompt
+                        business_name: businessName,
+                        business_type: businessType,
+                        response_language: responseLanguage,
+                        language: responseLanguage
                     })
                 });
 

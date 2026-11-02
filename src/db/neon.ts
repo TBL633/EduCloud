@@ -16,6 +16,9 @@ export interface User {
   model?: string;
   temperature?: number;
   api_key: string;
+  business_name?: string;
+  business_type?: string;
+  response_language?: string;
   system_prompt: string;
   auto_reply: boolean;
   automation_access: boolean;
@@ -120,6 +123,9 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         wa_jid VARCHAR(100) DEFAULT '',
         ai_provider VARCHAR(50) DEFAULT 'gemini',
         api_key TEXT DEFAULT '',
+        business_name VARCHAR(255) DEFAULT '',
+        business_type VARCHAR(100) DEFAULT 'Kirana / General Store',
+        response_language VARCHAR(50) DEFAULT 'Hinglish',
         system_prompt TEXT DEFAULT '',
         auto_reply BOOLEAN DEFAULT true,
         automation_access BOOLEAN DEFAULT true,
@@ -128,6 +134,9 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
       CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username));
       CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));

@@ -19,19 +19,44 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			username = "admin"
 		}
 
-		var provider, apiKey, sysPrompt, aiModel, notifPhone string
+		var provider, apiKey, sysPrompt, aiModel, notifPhone, bName, bType, lang string
 		var temp float64
 		var autoReply, importCatalogDetails bool
 		importCatalogDetails = true
 
 		if DB != nil {
-			_ = DB.QueryRow(`SELECT COALESCE(ai_provider, 'gemini'), COALESCE(api_key, ''), COALESCE(system_prompt, ''), COALESCE(auto_reply, true), COALESCE(ai_model, ''), COALESCE(ai_temperature, 0.7), COALESCE(notification_phone, ''), COALESCE(import_catalog_details, true)
+			_ = DB.QueryRow(`SELECT 
+				COALESCE(ai_provider, 'gemini'), 
+				COALESCE(api_key, ''), 
+				COALESCE(system_prompt, ''), 
+				COALESCE(auto_reply, true), 
+				COALESCE(ai_model, ''), 
+				COALESCE(ai_temperature, 0.7), 
+				COALESCE(notification_phone, ''), 
+				COALESCE(import_catalog_details, true),
+				COALESCE(business_name, account_name, ''),
+				COALESCE(business_type, 'Kirana / General Store'),
+				COALESCE(response_language, 'Hinglish')
 				FROM users WHERE LOWER(username)=LOWER($1)`, username).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails)
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang)
+		}
+
+		if bName == "" {
+			bName = username
+		}
+		if bType == "" {
+			bType = "Kirana / General Store"
+		}
+		if lang == "" {
+			lang = "Hinglish"
 		}
 
 		respondJSON(w, 200, map[string]interface{}{
 			"status":                 "success",
+			"business_name":          bName,
+			"business_type":          bType,
+			"response_language":      lang,
+			"language":               lang,
 			"platform":               provider,
 			"ai_provider":            provider,
 			"api_key":                apiKey,
@@ -50,6 +75,10 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var req struct {
 			Username             string  `json:"username"`
+			BusinessName         string  `json:"business_name"`
+			BusinessType         string  `json:"business_type"`
+			ResponseLanguage     string  `json:"response_language"`
+			Language             string  `json:"language"`
 			AIProvider           string  `json:"ai_provider"`
 			Platform             string  `json:"platform"`
 			APIKey               string  `json:"api_key"`
@@ -87,11 +116,24 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			tempVal = req.Temperature
 		}
 
+		bName := strings.TrimSpace(req.BusinessName)
+		bType := strings.TrimSpace(req.BusinessType)
+		if bType == "" {
+			bType = "Kirana / General Store"
+		}
+		lang := strings.TrimSpace(req.ResponseLanguage)
+		if lang == "" {
+			lang = strings.TrimSpace(req.Language)
+		}
+		if lang == "" {
+			lang = "Hinglish"
+		}
+
 		if DB != nil {
 			_, err := DB.Exec(`UPDATE users SET 
-				ai_provider=$1, api_key=$2, system_prompt=$3, auto_reply=$4, ai_model=$5, ai_temperature=$6, notification_phone=$7, import_catalog_details=$8
-				WHERE LOWER(username)=LOWER($9)`,
-				provider, req.APIKey, req.SystemPrompt, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, username)
+				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10
+				WHERE LOWER(username)=LOWER($11)`,
+				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, username)
 
 			if err != nil {
 				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update AI settings in database: " + err.Error()})
@@ -120,13 +162,17 @@ func AITestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Username     string  `json:"username"`
-		Query        string  `json:"query"`
-		Provider     string  `json:"provider"`
-		APIKey       string  `json:"api_key"`
-		SystemPrompt string  `json:"system_prompt"`
-		Model        string  `json:"model"`
-		Temperature  float64 `json:"temperature"`
+		Username         string  `json:"username"`
+		Query            string  `json:"query"`
+		BusinessName     string  `json:"business_name"`
+		BusinessType     string  `json:"business_type"`
+		ResponseLanguage string  `json:"response_language"`
+		Language         string  `json:"language"`
+		Provider         string  `json:"provider"`
+		APIKey           string  `json:"api_key"`
+		SystemPrompt     string  `json:"system_prompt"`
+		Model            string  `json:"model"`
+		Temperature      float64 `json:"temperature"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -140,7 +186,23 @@ func AITestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, imageURL := whatsapp.GenerateAIReply(username, "playground_tester", req.Query, req.Provider, req.APIKey, req.SystemPrompt)
+	bName := strings.TrimSpace(req.BusinessName)
+	bType := strings.TrimSpace(req.BusinessType)
+	lang := strings.TrimSpace(req.ResponseLanguage)
+	if lang == "" {
+		lang = strings.TrimSpace(req.Language)
+	}
+
+	catalogContext := whatsapp.GetCatalogContext(username)
+	customPrompt := strings.TrimSpace(req.SystemPrompt)
+	if customPrompt == "" {
+		if bName == "" && DB != nil {
+			_ = DB.QueryRow("SELECT COALESCE(business_name, account_name, ''), COALESCE(business_type, 'Kirana / General Store'), COALESCE(response_language, 'Hinglish') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&bName, &bType, &lang)
+		}
+		customPrompt = whatsapp.BuildUniversalSystemPrompt(bName, bType, lang, catalogContext)
+	}
+
+	reply, imageURL := whatsapp.GenerateAIReply(username, "playground_tester", req.Query, req.Provider, req.APIKey, customPrompt)
 
 	if reply == "" {
 		reply = fmt.Sprintf("Hello! Thank you for contacting us. I am your 24/7 AI assistant. Regarding '%s', our team will assist you shortly!", req.Query)

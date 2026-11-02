@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wa-server/payment"
 )
 
 // ChatMessage structure for Sliding Window
@@ -26,19 +28,58 @@ type CachedChatSession struct {
 }
 
 type UserConfigRAM struct {
-	Provider      string
-	APIKey        string
-	SystemPrompt  string
-	Model         string
-	Temperature   float64
-	AutoReply     bool
-	ImportCatalog bool
+	Provider         string
+	APIKey           string
+	BusinessName     string
+	BusinessType     string
+	Language         string
+	SystemPrompt     string
+	Model            string
+	Temperature      float64
+	AutoReply        bool
+	ImportCatalog    bool
 	CatalogText      string
 	HasOnlinePayment bool
 	PaytmMid         string
 	MerchantVpa      string
 	PayeeName        string
 	LastCached       time.Time
+}
+
+// Token-Optimized Universal System Prompt Template
+const universalSystemPrompt = `You are a polite, human-like sales agent for "%s" (a %s). 
+Your output language MUST BE strictly: %s.
+
+CORE DIRECTIVES:
+1. ROLE: Greet politely, use relevant emojis, and act as a helpful shopkeeper. Use WhatsApp formatting (*bold*, _italic_, > quotes) to make replies beautiful.
+2. CATALOG STRICTNESS: You are provided with a product catalog. You MUST ONLY sell, quote, or discuss items present in this catalog. NEVER hallucinate products, prices, or fake information.
+3. CONCISENESS: Keep responses short and conversational. Do not write long paragraphs.
+4. ORDER FUNNEL: Guide the customer to select products. Once they select, calculate the total and summarize clearly (e.g., "*1x Item* - Rs.X"). 
+5. CONFIRMATION: You MUST explicitly ask "Should I confirm your order?" before proceeding.
+6. PAYMENT TRIGGER: Once the customer says "Yes" or confirms the order summary, you MUST output the exact keyword: [INITIATE_PAYMENT_QR] and nothing else.
+7. OUT OF SCOPE: If the user asks non-business questions, politely redirect them to shopping.`
+
+// BuildUniversalSystemPrompt builds the final token-optimized prompt dynamically
+func BuildUniversalSystemPrompt(businessName, businessType, language, catalogContext string) string {
+	bName := strings.TrimSpace(businessName)
+	if bName == "" {
+		bName = "Rahul Store"
+	}
+	bType := strings.TrimSpace(businessType)
+	if bType == "" {
+		bType = "Kirana / General Store"
+	}
+	lang := strings.TrimSpace(language)
+	if lang == "" {
+		lang = "Hinglish"
+	}
+
+	finalPrompt := fmt.Sprintf(universalSystemPrompt, bName, bType, lang)
+	// Append Catalog Data after this...
+	if strings.TrimSpace(catalogContext) != "" {
+		finalPrompt += "\n\n" + strings.TrimSpace(catalogContext)
+	}
+	return finalPrompt
 }
 
 var (
@@ -77,17 +118,20 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 	cfg := &UserConfigRAM{
 		Provider:      "groq",
 		APIKey:        "",
+		BusinessName:  cleanUsr,
+		BusinessType:  "Kirana / General Store",
+		Language:      "Hinglish",
 		SystemPrompt:  "",
 		Model:         "openai/gpt-oss-20b",
 		Temperature:   0.7,
 		AutoReply:     true,
-		ImportCatalog: false,
+		ImportCatalog: true,
 		CatalogText:   "",
 		LastCached:    time.Now(),
 	}
 
 	if DB != nil {
-		var p, k, s, m string
+		var p, k, s, m, bName, bType, lang string
 		var t float64
 		var ar, ic bool
 		err := DB.QueryRow(`SELECT 
@@ -97,8 +141,11 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(ai_model, 'openai/gpt-oss-20b'), 
 			COALESCE(ai_temperature, 0.7), 
 			COALESCE(auto_reply, true), 
-			COALESCE(import_catalog_details, true) 
-			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic)
+			COALESCE(import_catalog_details, true),
+			COALESCE(business_name, account_name, ''),
+			COALESCE(business_type, 'Kirana / General Store'),
+			COALESCE(response_language, 'Hinglish')
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -110,6 +157,15 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.Temperature = t
 			cfg.AutoReply = ar
 			cfg.ImportCatalog = true
+			if bName != "" {
+				cfg.BusinessName = bName
+			}
+			if bType != "" {
+				cfg.BusinessType = bType
+			}
+			if lang != "" {
+				cfg.Language = lang
+			}
 		}
 
 		// Check if tenant has payment configured
@@ -430,23 +486,30 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		}
 	}
 
-	sysPrompt := strings.TrimSpace(systemPrompt)
-	if sysPrompt == "" {
-		sysPrompt = fmt.Sprintf("Assistant for @%s.", cleanUsr)
-	}
-
-	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
-	if len(history) == 0 || history[len(history)-1].Content != incomingText {
-		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
+	var bName, bType, lang string
+	if DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(business_name, account_name, ''), COALESCE(business_type, 'Kirana / General Store'), COALESCE(response_language, 'Hinglish') FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&bName, &bType, &lang)
 	}
 
 	catalogContext := ""
 	if importCatalog {
 		catalogContext = GetCatalogContext(cleanUsr)
 	}
-	stableSysPrompt := sysPrompt
-	if importCatalog && catalogContext != "" {
-		stableSysPrompt += "\n\n" + catalogContext
+
+	sysPrompt := strings.TrimSpace(systemPrompt)
+	stableSysPrompt := ""
+	if sysPrompt != "" {
+		stableSysPrompt = sysPrompt
+		if importCatalog && catalogContext != "" {
+			stableSysPrompt += "\n\n" + catalogContext
+		}
+	} else {
+		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, catalogContext)
+	}
+
+	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
+	if len(history) == 0 || history[len(history)-1].Content != incomingText {
+		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 	}
 
 	aiResponse, err := CallAIModelWithHistory(provider, model, temp, selectedApiKey, stableSysPrompt, history)
@@ -496,34 +559,31 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		return "", ""
 	}
 
-	sysPrompt := strings.TrimSpace(cfg.SystemPrompt)
-	if sysPrompt == "" {
-		sysPrompt = fmt.Sprintf("Assistant for @%s.", cleanUsr)
-	}
-
 	// Fetch current sliding window (contains prior messages + latest incoming customer message)
 	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
 	if len(history) == 0 || history[len(history)-1].Content != incomingText {
 		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
 	}
 
-	paymentOptions := "Payment: Cash on Delivery (COD) ONLY."
-	if cfg.HasOnlinePayment {
-		paymentOptions = "Payment: Cash on Delivery (COD) OR Online Payment (UPI / QR / Paytm)."
+	// Dynamic token-optimized universal system prompt
+	bName := cfg.BusinessName
+	if bName == "" {
+		bName = cleanUsr
+	}
+	bType := cfg.BusinessType
+	if bType == "" {
+		bType = "Kirana / General Store"
+	}
+	lang := cfg.Language
+	if lang == "" {
+		lang = "Hinglish"
 	}
 
-	orderInstructions := fmt.Sprintf("\n\n%s\n%s\nRules: Collect step-by-step: 1) Products & Quantity, 2) Full Name, 3) Delivery Address & Phone, 4) Payment Method.\nAt the end of EVERY response where order, items, or payment is discussed, append:\n<ORDER_JSON>{\"customer_phone\":\"%s\",\"delivery_phone\":\"\",\"customer_name\":\"\",\"delivery_address\":\"\",\"items\":[],\"total_amount\":0,\"payment_mode\":\"cod\"|\"online\"|\"unselected\",\"payment_status\":\"unpaid\"|\"paid\"}</ORDER_JSON>",
-		cfg.CatalogText, paymentOptions, cleanPhone)
-
-	if cfg.HasOnlinePayment {
-		orderInstructions += "\nIf customer chose Online Payment and confirmed items/amount, output: <PAYMENT_TRIGGER amount=\"AMOUNT\" order_id=\"ORDER_ID\">. System will auto-generate the official QR code."
-	}
-
-	stableSysPrompt := sysPrompt + orderInstructions
+	stableSysPrompt := BuildUniversalSystemPrompt(bName, bType, lang, cfg.CatalogText)
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
 	if err == nil && aiResponse != "" {
-		// 1. Process <ORDER_JSON>
+		// 1. Process <ORDER_JSON> if emitted
 		jsonRegex := regexp.MustCompile(`(?i)<ORDER_JSON>([\s\S]*?)</ORDER_JSON>`)
 		if jsonMatch := jsonRegex.FindStringSubmatch(aiResponse); len(jsonMatch) > 1 && DB != nil {
 			var orderMap map[string]interface{}
@@ -562,25 +622,88 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 			aiResponse = jsonRegex.ReplaceAllString(aiResponse, "")
 		}
 
-		// 2. Process <PAYMENT_TRIGGER>
+		// 2. Process [INITIATE_PAYMENT_QR] and <PAYMENT_TRIGGER>
+		hasPaymentTrigger := strings.Contains(aiResponse, "[INITIATE_PAYMENT_QR]")
 		payRegex := regexp.MustCompile(`(?i)<PAYMENT_TRIGGER\s+amount=["']?([0-9.]+)["']?\s+order_id=["']?([^"'>]+)["']?\s*/?>`)
+		payMatch := payRegex.FindStringSubmatch(aiResponse)
 		var matchedImg string
-		if payMatch := payRegex.FindStringSubmatch(aiResponse); len(payMatch) > 2 && cfg.HasOnlinePayment {
-			amountStr := payMatch[1]
-			orderIDStr := payMatch[2]
+
+		if (hasPaymentTrigger || len(payMatch) > 2) && cfg.HasOnlinePayment {
+			amountStr := "0"
+			orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+
+			if len(payMatch) > 2 {
+				amountStr = strings.TrimSpace(payMatch[1])
+				if o := strings.TrimSpace(payMatch[2]); o != "" && o != "ORDER_ID" {
+					orderIDStr = o
+				}
+			} else if DB != nil {
+				var dbOrd string
+				var dbAmt float64
+				_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE username=$1 AND customer_phone=$2 LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
+				if dbOrd != "" {
+					orderIDStr = dbOrd
+				}
+				if dbAmt > 0 {
+					amountStr = fmt.Sprintf("%.2f", dbAmt)
+				}
+			}
+
+			if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
+				priceRegex := regexp.MustCompile(`(?i)(?:rs\.?|inr|₹)\s*([0-9]+(?:\.[0-9]+)?)`)
+				if pMatches := priceRegex.FindAllStringSubmatch(aiResponse, -1); len(pMatches) > 0 {
+					amountStr = pMatches[len(pMatches)-1][1]
+				} else if pMatches := priceRegex.FindAllStringSubmatch(incomingText, -1); len(pMatches) > 0 {
+					amountStr = pMatches[len(pMatches)-1][1]
+				}
+			}
+
 			vpa := cfg.MerchantVpa
 			if vpa == "" {
 				vpa = "paytm.s1f6syj@pty"
 			}
 			pName := cfg.PayeeName
 			if pName == "" {
+				pName = bName
+			}
+			if pName == "" {
 				pName = cleanUsr
 			}
+
+			// Standard UPI string fallback
 			upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
-			qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s", upiURI)
-			aiResponse = payRegex.ReplaceAllString(aiResponse, "")
-			aiResponse += fmt.Sprintf("\n\n💳 *ONLINE PAYMENT LINK & QR CODE* 💳\n• Amount: ₹%s\n• Order ID: %s\n• Click to Pay via UPI (GPay/PhonePe/Paytm):\n%s\n\n(Scan the QR code above or click the link to complete payment)", amountStr, orderIDStr, upiURI)
-			matchedImg = qrURL
+
+			// 1. Dynamic QR Generation via Cloudflare Worker
+			workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "")
+			if qrErr == nil && workerQRURL != "" {
+				matchedImg = workerQRURL
+				log.Printf("⚡ [Cloudflare Worker Dynamic QR] Generated for Order: %s | URL: %s", orderIDStr, workerQRURL)
+			} else {
+				// Reliable fallback QR server if Worker call fails
+				matchedImg = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s", upiURI)
+				log.Printf("ℹ️ [Cloudflare Worker Fallback] Using standard QR for Order %s: %v", orderIDStr, qrErr)
+			}
+
+			// 2. Async Payment Verification (Webhook Pattern - No polling on Render server)
+			mid := cfg.PaytmMid
+			if mid != "" {
+				go func(m, ord string) {
+					errPoll := payment.StartWorkerPaymentCheck(m, ord, "")
+					if errPoll != nil {
+						log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
+					}
+				}(mid, orderIDStr)
+			}
+
+			paymentDetailsBlock := fmt.Sprintf("\n\n💳 *ONLINE PAYMENT LINK & QR CODE* 💳\n• Amount: ₹%s\n• Order ID: %s\n• Click to Pay via UPI (GPay/PhonePe/Paytm):\n%s\n\n(Scan the QR code above or click the link to complete payment)", amountStr, orderIDStr, upiURI)
+
+			if hasPaymentTrigger {
+				aiResponse = strings.ReplaceAll(aiResponse, "[INITIATE_PAYMENT_QR]", paymentDetailsBlock)
+			} else {
+				aiResponse = payRegex.ReplaceAllString(aiResponse, "") + paymentDetailsBlock
+			}
+		} else if hasPaymentTrigger {
+			aiResponse = strings.ReplaceAll(aiResponse, "[INITIATE_PAYMENT_QR]", "✅ *Aapka Cash On Delivery (COD) Order Confirm ho gaya hai!* 🚚\nHamari team jald hi aapka order dispatch karegi. Delivery ke time cash payment ready rakhein.\n\nDhanyawad! 🙏")
 		}
 
 		return strings.TrimSpace(aiResponse), matchedImg

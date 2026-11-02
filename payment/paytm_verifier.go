@@ -1,14 +1,17 @@
 package payment
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,11 +45,49 @@ type PaytmStatusResponse struct {
 }
 
 // In-Memory thread-safe payment config cache for 512MB RAM performance (0ms lookup)
-var onPaymentVerifiedCallback func(tenantID, orderID, amount, txnID string)
+var (
+	onPaymentVerifiedCallback func(tenantID, orderID, amount, txnID string)
+	onWebhookPaymentReceived  func(orderID, status, amount string) error
+)
 
 // SetPaymentVerifiedCallback registers the function to call when payment is confirmed
 func SetPaymentVerifiedCallback(fn func(tenantID, orderID, amount, txnID string)) {
 	onPaymentVerifiedCallback = fn
+}
+
+// SetWebhookPaymentReceivedCallback registers an optional handler for webhook processing
+func SetWebhookPaymentReceivedCallback(fn func(orderID, status, amount string) error) {
+	onWebhookPaymentReceived = fn
+}
+
+// WorkerQRRequest is the payload sent to Cloudflare Worker to generate dynamic QR
+type WorkerQRRequest struct {
+	VPA       string `json:"vpa"`
+	Name      string `json:"name"`
+	OrderID   string `json:"orderId"`
+	Amount    string `json:"amount"`
+	CloudName string `json:"cloudName"`
+}
+
+// WorkerQRResponse represents response from Cloudflare Worker /generate
+type WorkerQRResponse struct {
+	Status   string `json:"status,omitempty"`
+	ImageURL string `json:"imageUrl"`
+	Error    string `json:"error,omitempty"`
+}
+
+// WorkerStartCheckRequest is the payload sent to Cloudflare Worker to begin async polling
+type WorkerStartCheckRequest struct {
+	MID        string `json:"mid"`
+	OrderID    string `json:"orderId"`
+	WebhookURL string `json:"webhookUrl"`
+}
+
+// PaymentWebhookPayload is the JSON payload received at /webhook/payment from Cloudflare Worker
+type PaymentWebhookPayload struct {
+	OrderID string `json:"orderId"`
+	Status  string `json:"status"`
+	Amount  string `json:"amount"`
 }
 
 var (
@@ -425,3 +466,264 @@ func GenerateQRHandler(w http.ResponseWriter, r *http.Request) {
 		"merchant":   cfg.MerchantVPA,
 	})
 }
+
+// GetAppWebhookURL determines the full public URL for receiving payment webhooks
+func GetAppWebhookURL() string {
+	renderURL := strings.TrimSpace(os.Getenv("RENDER_EXTERNAL_URL"))
+	if renderURL != "" {
+		return strings.TrimSuffix(renderURL, "/") + "/webhook/payment"
+	}
+	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
+	if appURL != "" {
+		return strings.TrimSuffix(appURL, "/") + "/webhook/payment"
+	}
+	baseURL := strings.TrimSpace(os.Getenv("BASE_URL"))
+	if baseURL != "" {
+		return strings.TrimSuffix(baseURL, "/") + "/webhook/payment"
+	}
+	return "https://eduta-ai.onrender.com/webhook/payment"
+}
+
+// GenerateWorkerDynamicQR calls the Cloudflare Worker to dynamically generate a branded QR code
+// Endpoint: https://wamart.rkmtech633.workers.dev/generate
+// Payload: {"vpa": "...", "name": "...", "orderId": "...", "amount": "...", "cloudName": "..."}
+// Returns the image URL and the downloaded byte array for whatsmeow media upload
+func GenerateWorkerDynamicQR(vpa, name, orderID, amount, cloudName string) (string, []byte, error) {
+	cleanVPA := strings.TrimSpace(vpa)
+	cleanName := strings.TrimSpace(name)
+	cleanOrderID := strings.TrimSpace(orderID)
+	cleanAmount := strings.TrimSpace(amount)
+	cleanCloud := strings.TrimSpace(cloudName)
+
+	if cleanCloud == "" {
+		cleanCloud = strings.TrimSpace(os.Getenv("CLOUDINARY_CLOUD_NAME"))
+		if cleanCloud == "" {
+			cleanCloud = strings.TrimSpace(os.Getenv("CLOUDINARY_NAME"))
+		}
+		if cleanCloud == "" {
+			cleanCloud = "rkmtech633"
+		}
+	}
+
+	reqBody := WorkerQRRequest{
+		VPA:       cleanVPA,
+		Name:      cleanName,
+		OrderID:   cleanOrderID,
+		Amount:    cleanAmount,
+		CloudName: cleanCloud,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to encode worker qr request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://wamart.rkmtech633.workers.dev/generate", bytes.NewReader(jsonBytes))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create worker request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "EduCloud-PaymentWorkerClient/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("worker generate request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read worker response: %w", err)
+	}
+
+	var qrResp WorkerQRResponse
+	if err := json.Unmarshal(bodyBytes, &qrResp); err != nil {
+		var rawMap map[string]interface{}
+		if errMap := json.Unmarshal(bodyBytes, &rawMap); errMap == nil {
+			if u, ok := rawMap["imageUrl"].(string); ok && u != "" {
+				qrResp.ImageURL = u
+			} else if u, ok := rawMap["url"].(string); ok && u != "" {
+				qrResp.ImageURL = u
+			}
+		}
+	}
+
+	imageURL := strings.TrimSpace(qrResp.ImageURL)
+	if imageURL == "" {
+		return "", nil, fmt.Errorf("worker did not return imageUrl (status: %d, body: %s)", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Download image as byte array to send via whatsmeow
+	imgResp, err := client.Get(imageURL)
+	if err != nil {
+		return imageURL, nil, fmt.Errorf("failed to download qr image from %s: %w", imageURL, err)
+	}
+	defer imgResp.Body.Close()
+
+	imgBytes, err := io.ReadAll(io.LimitReader(imgResp.Body, 1024*1024*8)) // 8MB limit
+	if err != nil {
+		return imageURL, nil, fmt.Errorf("failed to read downloaded qr image bytes: %w", err)
+	}
+
+	return imageURL, imgBytes, nil
+}
+
+// StartWorkerPaymentCheck sends an asynchronous request to the Cloudflare Worker to offload Paytm polling
+// Endpoint: https://wamart.rkmtech633.workers.dev/start-check
+// Payload: {"mid": "...", "orderId": "...", "webhookUrl": "..."}
+func StartWorkerPaymentCheck(mid, orderID, webhookURL string) error {
+	cleanMID := strings.TrimSpace(mid)
+	cleanOrderID := strings.TrimSpace(orderID)
+	cleanWebhook := strings.TrimSpace(webhookURL)
+	if cleanWebhook == "" {
+		cleanWebhook = GetAppWebhookURL()
+	}
+
+	if cleanMID == "" || cleanOrderID == "" {
+		return fmt.Errorf("mid and orderId are required for start-check")
+	}
+
+	reqBody := WorkerStartCheckRequest{
+		MID:        cleanMID,
+		OrderID:    cleanOrderID,
+		WebhookURL: cleanWebhook,
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to encode start-check request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://wamart.rkmtech633.workers.dev/start-check", bytes.NewReader(jsonBytes))
+	if err != nil {
+		return fmt.Errorf("failed to build start-check request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "EduCloud-PaymentWorkerClient/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("start-check request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*64))
+	log.Printf("📡 [Cloudflare Worker Poll Initiated] Order: %s | Status: %d | Webhook: %s | Resp: %s", cleanOrderID, resp.StatusCode, cleanWebhook, string(bodyBytes))
+	return nil
+}
+
+// PaymentWebhookHandler receives asynchronous payment confirmation callbacks from Cloudflare Worker
+// Endpoint: POST /webhook/payment
+// Payload: {"orderId": "...", "status": "SUCCESS", "amount": "..."}
+func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1024*128))
+	if err != nil {
+		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	var payload PaymentWebhookPayload
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		var altPayload struct {
+			OrderID string `json:"order_id"`
+			Status  string `json:"status"`
+			Amount  string `json:"amount"`
+		}
+		if err2 := json.Unmarshal(bodyBytes, &altPayload); err2 == nil {
+			payload.OrderID = altPayload.OrderID
+			payload.Status = altPayload.Status
+			payload.Amount = altPayload.Amount
+		} else {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	orderID := strings.TrimSpace(payload.OrderID)
+	status := strings.ToUpper(strings.TrimSpace(payload.Status))
+	amount := strings.TrimSpace(payload.Amount)
+
+	log.Printf("🔔 [Payment Webhook Received] OrderID: %s, Status: %s, Amount: %s", orderID, status, amount)
+
+	if orderID == "" {
+		http.Error(w, `{"error":"orderId is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	isSuccess := status == "SUCCESS" || status == "TXN_SUCCESS" || status == "PAID"
+
+	var username, customerPhone string
+	var totalAmount float64
+
+	// Update Neon DB
+	if globalDB != nil {
+		// 1. Fetch current order info
+		_ = globalDB.QueryRow(`
+			SELECT username, customer_phone, total_amount 
+			FROM customer_order_states WHERE order_id = $1 LIMIT 1
+		`, orderID).Scan(&username, &customerPhone, &totalAmount)
+
+		if isSuccess {
+			// 2. Mark order as paid & confirmed
+			_, err = globalDB.Exec(`
+				UPDATE customer_order_states 
+				SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() 
+				WHERE order_id = $1
+			`, orderID)
+			if err != nil {
+				log.Printf("⚠️ Error updating customer_order_states for %s: %v", orderID, err)
+			}
+
+			// 3. Insert into leads table
+			if username != "" {
+				leadInquiry := fmt.Sprintf("Order %s | Amount: ₹%s | Cloudflare Worker Async Verified", orderID, amount)
+				_, _ = globalDB.Exec(`
+					INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+					VALUES ($1, $2, $3, 'Confirmed Paid (Paytm Cloudflare Worker)', NOW())
+				`, username, customerPhone, leadInquiry)
+			}
+		}
+	}
+
+	if amount == "" && totalAmount > 0 {
+		amount = fmt.Sprintf("%.2f", totalAmount)
+	}
+
+	// Trigger registered callback (instant whatsmeow message to customer & lead alert to merchant)
+	if isSuccess && onPaymentVerifiedCallback != nil {
+		tenantUser := username
+		if tenantUser == "" {
+			tenantUser = "admin"
+		}
+		go onPaymentVerifiedCallback(tenantUser, orderID, amount, "WORKER_VERIFIED")
+	}
+
+	if isSuccess && onWebhookPaymentReceived != nil {
+		go func() {
+			_ = onWebhookPaymentReceived(orderID, status, amount)
+		}()
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "ok",
+		"received": true,
+		"orderId":  orderID,
+		"verified": isSuccess,
+	})
+}
+

@@ -123,11 +123,12 @@ func main() {
 	http.HandleFunc("/api/admin/delete-user", corsMiddleware(api.DeleteUserHandler))
 	http.HandleFunc("/api/admin/toggle-automation", corsMiddleware(api.ToggleAutomationHandler))
 
-	// Zero-Fee Paytm Payment Gateway Routes
+	// Zero-Fee Paytm Payment Gateway Routes & Cloudflare Worker Webhook
 	http.HandleFunc("/api/payment/config", corsMiddleware(payment.ConfigHandler))
 	http.HandleFunc("/api/admin/tenant/payment-config", corsMiddleware(payment.ConfigHandler))
 	http.HandleFunc("/api/payment/generate-qr", corsMiddleware(payment.GenerateQRHandler))
 	http.HandleFunc("/api/payment/verify", corsMiddleware(payment.VerifyHandler))
+	http.HandleFunc("/webhook/payment", corsMiddleware(payment.PaymentWebhookHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

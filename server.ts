@@ -377,20 +377,26 @@ async function generateAIReply(
     return `#${idx + 1} ${item.name}: ${item.price}${variantsStr}${desc}`;
   }).join('\n');
 
+  const businessName = user?.business_name || accountName || 'Rahul Store';
+  const businessType = user?.business_type || 'Kirana / General Store';
+  const language = user?.response_language || 'Hinglish';
+
+  const universalSystemPrompt = `You are a polite, human-like sales agent for "${businessName}" (a ${businessType}). 
+Your output language MUST BE strictly: ${language}.
+
+CORE DIRECTIVES:
+1. ROLE: Greet politely, use relevant emojis, and act as a helpful shopkeeper. Use WhatsApp formatting (*bold*, _italic_, > quotes) to make replies beautiful.
+2. CATALOG STRICTNESS: You are provided with a product catalog. You MUST ONLY sell, quote, or discuss items present in this catalog. NEVER hallucinate products, prices, or fake information.
+3. CONCISENESS: Keep responses short and conversational. Do not write long paragraphs.
+4. ORDER FUNNEL: Guide the customer to select products. Once they select, calculate the total and summarize clearly (e.g., "*1x Item* - Rs.X"). 
+5. CONFIRMATION: You MUST explicitly ask "Should I confirm your order?" before proceeding.
+6. PAYMENT TRIGGER: Once the customer says "Yes" or confirms the order summary, you MUST output the exact keyword: [INITIATE_PAYMENT_QR] and nothing else.
+7. OUT OF SCOPE: If the user asks non-business questions, politely redirect them to shopping.`;
+
   const compactSystemPrompt = [
-    `You are the 24/7 WhatsApp AI Sales Assistant for "${accountName}".`,
-    activePrompt ? `Guideline: ${activePrompt.slice(0, 200)}.` : `Be polite, persuasive and concise (2-3 sentences max).`,
-    catalogLines ? `Available Catalog Products:\n${catalogLines}` : `No products currently listed.`,
-    `${paymentRulesText}`,
-    `${orderContext}`,
-    `ORDER INSTRUCTIONS: When customer wants to buy, collect step-by-step: 1) Products & Quantity, 2) Full Name, 3) Delivery Address & Phone, 4) Payment Method (${hasOnlinePayment ? 'COD or Online' : 'COD only'}).`,
-    `At the end of EVERY response where order, items, address, or payment is discussed, append a hidden state block:`,
-    `<ORDER_JSON>{"customer_phone":"${customerPhone}","delivery_phone":"","customer_name":"","delivery_address":"","items":[],"total_amount":0,"payment_mode":"cod"|"online"|"unselected","payment_status":"unpaid"|"paid"}</ORDER_JSON>`,
-    hasOnlinePayment 
-      ? `CRITICAL: If customer chose Online Payment and confirmed items/amount, output: <PAYMENT_TRIGGER amount="AMOUNT" order_id="ORDER_ID">. The system will auto-generate the official QR code.` 
-      : `Do NOT offer online payment. Strictly offer Cash on Delivery.`,
-    `IF payment_status is "paid", confirm order warmly and state that items will be dispatched soon. Never ask for payment again once paid.`
-  ].filter(Boolean).join('\n');
+    universalSystemPrompt,
+    catalogLines ? `Available Products Catalog:\n${catalogLines}` : ''
+  ].filter(Boolean).join('\n\n');
 
   const systemInstruction = compactSystemPrompt;
   const index0SystemMessage = {
@@ -2375,23 +2381,33 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS temperature NUMERIC(3,2) DEFAULT 0.7;`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
           dbRes = await pool.query(
-            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply FROM users WHERE LOWER(username) = LOWER($1)`,
+            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language FROM users WHERE LOWER(username) = LOWER($1)`,
             [username]
           );
         }
 
         if (dbRes.rows.length > 0) {
           const row = dbRes.rows[0];
+          const bName = row.business_name || user?.business_name || user?.account_name || 'Rahul Store';
+          const bType = row.business_type || user?.business_type || 'Kirana / General Store';
+          const lang = row.response_language || user?.response_language || 'Hinglish';
           return res.json({
+            business_name: bName,
+            business_type: bType,
+            response_language: lang,
+            language: lang,
             platform: row.ai_provider || user?.ai_provider || 'Groq',
             model: row.model || user?.model || 'llama-3.3-70b-versatile',
             temperature: row.temperature !== null && row.temperature !== undefined ? Number(row.temperature) : (user?.temperature ?? 0.7),
             notification_phone: row.notification_phone || user?.notification_phone || '',
             api_key: row.api_key || user?.api_key || '',
-            system_prompt: row.system_prompt || user?.system_prompt || 'You are an automated WhatsApp sales assistant. Answer customer questions politely and guide them through our catalog.',
+            system_prompt: row.system_prompt || user?.system_prompt || '',
             auto_reply: row.auto_reply !== null && row.auto_reply !== undefined ? Boolean(row.auto_reply) : (user?.auto_reply ?? true)
           });
         }
@@ -2401,19 +2417,27 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
     }
   }
 
+  const defaultBName = user?.business_name || user?.account_name || 'Rahul Store';
+  const defaultBType = user?.business_type || 'Kirana / General Store';
+  const defaultLang = user?.response_language || 'Hinglish';
+
   return res.json({
+    business_name: defaultBName,
+    business_type: defaultBType,
+    response_language: defaultLang,
+    language: defaultLang,
     platform: user?.ai_provider || 'Groq',
     model: user?.model || 'llama-3.3-70b-versatile',
     temperature: user?.temperature ?? 0.7,
     notification_phone: user?.notification_phone || user?.phone || '',
     api_key: user?.api_key || '',
-    system_prompt: user?.system_prompt || 'You are an automated WhatsApp sales assistant. Answer customer questions politely and guide them through our catalog.',
+    system_prompt: user?.system_prompt || '',
     auto_reply: user?.auto_reply ?? true
   });
 });
 
 app.post('/api/ai/settings', async (req: Request, res: Response) => {
-  const { username = '', ai_provider, platform, model, temperature, notification_phone, api_key, system_prompt, auto_reply } = req.body || {};
+  const { username = '', ai_provider, platform, model, temperature, notification_phone, api_key, system_prompt, auto_reply, business_name, business_type, response_language, language } = req.body || {};
   let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
 
   const resolvedPlatform = platform || ai_provider || 'Groq';
@@ -2423,6 +2447,9 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
   const resolvedApiKey = String(api_key || '').trim();
   const resolvedPrompt = system_prompt !== undefined ? String(system_prompt) : '';
   const resolvedAutoReply = auto_reply !== undefined ? Boolean(auto_reply) : true;
+  const resolvedBName = String(business_name || '').trim();
+  const resolvedBType = String(business_type || 'Kirana / General Store').trim();
+  const resolvedLang = String(response_language || language || 'Hinglish').trim();
 
   if (user) {
     user.ai_provider = resolvedPlatform;
@@ -2432,6 +2459,9 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
     if (resolvedApiKey) user.api_key = resolvedApiKey;
     user.system_prompt = resolvedPrompt;
     user.auto_reply = resolvedAutoReply;
+    user.business_name = resolvedBName;
+    user.business_type = resolvedBType;
+    user.response_language = resolvedLang;
   }
 
   if (getPool()) {
@@ -2440,8 +2470,8 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
       try {
         try {
           await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7 WHERE LOWER(username) = LOWER($8)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, username]
+            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10 WHERE LOWER(username) = LOWER($11)`,
+            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, username]
           );
         } catch (dbColErr) {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'Groq';`);
@@ -2449,12 +2479,15 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS temperature NUMERIC(3,2) DEFAULT 0.7;`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
 
           await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7 WHERE LOWER(username) = LOWER($8)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, username]
+            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10 WHERE LOWER(username) = LOWER($11)`,
+            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, username]
           );
         }
       } catch (dbErr) {
@@ -2660,6 +2693,63 @@ app.post('/api/customer/order-state', async (req: Request, res: Response) => {
   }
   await saveCustomerOrderState(username, customer_phone, order_data);
   return res.json({ status: 'success', message: 'Customer order state updated.' });
+});
+
+// --- 12K. ASYNC PAYMENT WEBHOOK RECEIVER (CLOUDFLARE WORKER) ---
+app.post('/webhook/payment', async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const orderId = body?.orderId || body?.order_id || '';
+  const status = (body?.status || '').toUpperCase();
+  const amount = body?.amount || '';
+
+  console.log(`🔔 [Node Payment Webhook Received] OrderID: ${orderId}, Status: ${status}, Amount: ${amount}`);
+
+  if (!orderId) {
+    return res.status(400).json({ error: 'orderId is required' });
+  }
+
+  const isSuccess = status === 'SUCCESS' || status === 'TXN_SUCCESS' || status === 'PAID';
+
+  if (isSuccess && getPool()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const orderRes = await pool.query(
+          `SELECT username, customer_phone, total_amount FROM customer_order_states WHERE order_id = $1 LIMIT 1`,
+          [orderId]
+        );
+        const row = orderRes.rows[0];
+        const username = row?.username || 'admin';
+        const customerPhone = row?.customer_phone || '';
+        const resolvedAmount = amount || (row?.total_amount ? String(row.total_amount) : '0');
+
+        await pool.query(
+          `UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE order_id = $1`,
+          [orderId]
+        );
+
+        if (username) {
+          const leadInquiry = `Order ${orderId} | Amount: ₹${resolvedAmount} | Cloudflare Worker Async Verified`;
+          await pool.query(
+            `INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Confirmed Paid (Paytm Cloudflare Worker)', NOW())`,
+            [username, customerPhone, leadInquiry]
+          );
+        }
+      } catch (err: any) {
+        console.error('Failed to update DB on payment webhook:', err.message);
+      }
+    }
+  }
+
+  return res.json({
+    status: 'ok',
+    received: true,
+    orderId,
+    verified: isSuccess
+  });
 });
 
 app.get('/api/business/dashboard', async (req: Request, res: Response) => {
@@ -3140,9 +3230,16 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
 
 // 16. AI PROMPT PLAYGROUND TESTER
 app.post('/api/ai/test', async (req: Request, res: Response) => {
-  const { username = 'admin', query, provider = 'Groq', api_key = '', system_prompt = '', model = '', temperature } = req.body || {};
+  const { username = 'admin', query, provider = 'Groq', api_key = '', system_prompt = '', model = '', temperature, business_name, business_type, response_language, language } = req.body || {};
   if (!query) {
     return res.status(400).json({ error: 'Query is required' });
+  }
+
+  const u = memoryUsers.get(username.toLowerCase());
+  if (u) {
+    if (business_name) u.business_name = business_name;
+    if (business_type) u.business_type = business_type;
+    if (response_language || language) u.response_language = response_language || language;
   }
 
   const result = await generateAIReply(username, 'playground_tester', query, provider, api_key, system_prompt, model, temperature);
