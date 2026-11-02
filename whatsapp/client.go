@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -1295,11 +1296,18 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageReplyFromURL(activeClient, senderPhone, imgURL, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {
-						log.Printf("⚠️ Error sending AI image reply to +%s: %v", senderPhone, sendErr)
+						log.Printf("⚠️ Error sending AI image reply to +%s: %v. Immediately falling back to instant text reply!", senderPhone, sendErr)
+						textErr := SendReplyMessage(activeClient, senderPhone, replyText, v.Info.ID, v.Info.Sender, v.Message)
+						if textErr != nil {
+							log.Printf("⚠️ Fallback text reply also failed for +%s: %v", senderPhone, textErr)
+						} else {
+							log.Printf("⚡ Fallback AI text reply delivered to +%s (as native WhatsApp reply)", senderPhone)
+						}
+						deliveredReply = replyText
 					} else {
 						log.Printf("⚡ AI image reply delivered to +%s (as native WhatsApp reply)", senderPhone)
+						deliveredReply = "[Image Sent] " + replyText
 					}
-					deliveredReply = "[Image Sent] " + replyText
 				} else if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendReplyMessage(activeClient, senderPhone, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {
@@ -1548,27 +1556,42 @@ func SendImageReplyFromURL(client *whatsmeow.Client, phone, imageURL, caption st
 			}
 		}
 	} else if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
-		clientHttp := &http.Client{Timeout: 20 * time.Second}
+		clientHttp := &http.Client{Timeout: 15 * time.Second}
 		resp, fetchErr := clientHttp.Get(imageURL)
 		if fetchErr != nil {
 			return fmt.Errorf("image download failed: %v", fetchErr)
 		}
 		defer resp.Body.Close()
-		imgBytes, err = io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("image URL returned HTTP %d: %s", resp.StatusCode, imageURL)
+		}
+		imgBytes, err = io.ReadAll(io.LimitReader(resp.Body, 1024*1024*8))
 		if err != nil {
 			return err
 		}
 	} else {
 		return fmt.Errorf("unsupported image format or empty URL")
 	}
-	if len(imgBytes) == 0 {
-		return fmt.Errorf("empty image payload")
+	if len(imgBytes) < 50 {
+		return fmt.Errorf("empty or too small image payload (%d bytes)", len(imgBytes))
 	}
+
+	// Validate magic bytes to prevent uploading corrupted files or HTML error pages
+	isValidImage := bytes.HasPrefix(imgBytes, []byte("\x89PNG")) || bytes.HasPrefix(imgBytes, []byte("\xff\xd8")) || bytes.HasPrefix(imgBytes, []byte("RIFF")) || bytes.HasPrefix(imgBytes, []byte("GIF8"))
+	if !isValidImage {
+		preview := string(imgBytes[:min(30, len(imgBytes))])
+		return fmt.Errorf("downloaded content is not a valid image format (starts with: %q)", preview)
+	}
+
+	mimeType := http.DetectContentType(imgBytes)
+	if !strings.HasPrefix(mimeType, "image/") {
+		return fmt.Errorf("invalid image mime type: %s", mimeType)
+	}
+
 	uploaded, err := client.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
 	if err != nil {
 		return fmt.Errorf("whatsapp media upload failed: %v", err)
 	}
-	mimeType := http.DetectContentType(imgBytes)
 
 	lidCacheLock.RLock()
 	targetJID, hasTargetJID := phoneToJID[cleanPhone]

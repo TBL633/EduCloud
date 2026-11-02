@@ -501,7 +501,7 @@ func GenerateWorkerDynamicQR(vpa, name, orderID, amount, cloudName string) (stri
 			cleanCloud = strings.TrimSpace(os.Getenv("CLOUDINARY_NAME"))
 		}
 		if cleanCloud == "" {
-			cleanCloud = "rkmtech633"
+			cleanCloud = "hq67khm3"
 		}
 	}
 
@@ -518,55 +518,102 @@ func GenerateWorkerDynamicQR(vpa, name, orderID, amount, cloudName string) (stri
 		return "", nil, fmt.Errorf("failed to encode worker qr request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", cleanVPA, cleanName, cleanAmount, cleanOrderID, cleanOrderID)
+
+	// Pre-construct exact Cloudinary dynamic QR URL as per specification:
+	// https://res.cloudinary.com/hq67khm3/image/upload/l_fetch:{base64QrUrl}/w_450,h_450,y_-120/fl_layer_apply/v1793634745/WaMart.jpg
+	qrAPIURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
+	base64QrUrl := base64.StdEncoding.EncodeToString([]byte(qrAPIURL))
+	exactCloudinaryURL := fmt.Sprintf("https://res.cloudinary.com/%s/image/upload/l_fetch:%s/w_450,h_450,y_-120/fl_layer_apply/v1793634745/WaMart.jpg", cleanCloud, base64QrUrl)
+
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://wamart.rkmtech633.workers.dev/generate", bytes.NewReader(jsonBytes))
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to create worker request: %w", err)
+		return generateReliableFallbackQR(upiURI)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "EduCloud-PaymentWorkerClient/1.0")
 
 	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, fmt.Errorf("worker generate request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to read worker response: %w", err)
-	}
-
-	var qrResp WorkerQRResponse
-	if err := json.Unmarshal(bodyBytes, &qrResp); err != nil {
-		var rawMap map[string]interface{}
-		if errMap := json.Unmarshal(bodyBytes, &rawMap); errMap == nil {
-			if u, ok := rawMap["imageUrl"].(string); ok && u != "" {
-				qrResp.ImageURL = u
-			} else if u, ok := rawMap["url"].(string); ok && u != "" {
-				qrResp.ImageURL = u
+	var imageURL string
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		bodyBytes, errRead := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		if errRead == nil {
+			var qrResp WorkerQRResponse
+			if errJson := json.Unmarshal(bodyBytes, &qrResp); errJson == nil && qrResp.ImageURL != "" {
+				imageURL = strings.TrimSpace(qrResp.ImageURL)
+			} else {
+				var rawMap map[string]interface{}
+				if errMap := json.Unmarshal(bodyBytes, &rawMap); errMap == nil {
+					if u, ok := rawMap["imageUrl"].(string); ok && u != "" {
+						imageURL = strings.TrimSpace(u)
+					}
+				}
 			}
 		}
+	} else if resp != nil {
+		resp.Body.Close()
 	}
 
-	imageURL := strings.TrimSpace(qrResp.ImageURL)
+	// Ensure exact Cloudinary asset path: /v1793634745/WaMart.jpg instead of obsolete /WaMart.png
+	if imageURL != "" && strings.Contains(imageURL, "/WaMart.png") {
+		imageURL = strings.Replace(imageURL, "/WaMart.png", "/v1793634745/WaMart.jpg", 1)
+	}
 	if imageURL == "" {
-		return "", nil, fmt.Errorf("worker did not return imageUrl (status: %d, body: %s)", resp.StatusCode, string(bodyBytes))
+		imageURL = exactCloudinaryURL
 	}
 
-	// Download image as byte array to send via whatsmeow
+	// Download image as byte array to verify and send via whatsmeow
 	imgResp, err := client.Get(imageURL)
 	if err != nil {
-		return imageURL, nil, fmt.Errorf("failed to download qr image from %s: %w", imageURL, err)
+		log.Printf("⚠️ [Worker QR Warning] Failed to download image from %s: %v. Using fallback QR.", imageURL, err)
+		return generateReliableFallbackQR(upiURI)
 	}
 	defer imgResp.Body.Close()
 
+	if imgResp.StatusCode != http.StatusOK {
+		log.Printf("⚠️ [Worker QR Warning] Worker image URL (%s) returned HTTP %d (Cloudinary asset missing). Using fallback QR.", imageURL, imgResp.StatusCode)
+		return generateReliableFallbackQR(upiURI)
+	}
+
 	imgBytes, err := io.ReadAll(io.LimitReader(imgResp.Body, 1024*1024*8)) // 8MB limit
-	if err != nil {
-		return imageURL, nil, fmt.Errorf("failed to read downloaded qr image bytes: %w", err)
+	if err != nil || len(imgBytes) < 50 {
+		return generateReliableFallbackQR(upiURI)
+	}
+
+	// Validate magic bytes to ensure it's a real image and not an HTML error document
+	isValidImage := bytes.HasPrefix(imgBytes, []byte("\x89PNG")) || bytes.HasPrefix(imgBytes, []byte("\xff\xd8")) || bytes.HasPrefix(imgBytes, []byte("RIFF")) || bytes.HasPrefix(imgBytes, []byte("GIF8"))
+	if !isValidImage {
+		log.Printf("⚠️ [Worker QR Warning] Downloaded file from %s is not a valid image format. Using fallback QR.", imageURL)
+		return generateReliableFallbackQR(upiURI)
 	}
 
 	return imageURL, imgBytes, nil
+}
+
+// generateReliableFallbackQR produces a guaranteed valid QR image from high-availability local generator or remote server
+func generateReliableFallbackQR(upiURI string) (string, []byte, error) {
+	// 1. In-memory zero-network generation: skip2/go-qrcode (100% reliable, zero external downtime risk, 0ms latency)
+	localBytes, localErr := qrcode.Encode(upiURI, qrcode.Medium, 400)
+	if localErr == nil && len(localBytes) > 50 && bytes.HasPrefix(localBytes, []byte("\x89PNG")) {
+		base64Data := "data:image/png;base64," + base64.StdEncoding.EncodeToString(localBytes)
+		return base64Data, localBytes, nil
+	}
+
+	// 2. Remote fallback if local encoder has any error
+	fallbackURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fallbackURL)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		bytesData, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024*1024*2))
+		if readErr == nil && len(bytesData) > 50 && bytes.HasPrefix(bytesData, []byte("\x89PNG")) {
+			return fallbackURL, bytesData, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("failed to generate fallback QR image: %v", localErr)
 }
 
 // StartWorkerPaymentCheck sends an asynchronous request to the Cloudflare Worker to offload Paytm polling
