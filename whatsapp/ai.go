@@ -711,7 +711,7 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 			// uploads to whatsmeow, initiates /start-check polling, and sends the follow-up text.
 		}
 
-		return strings.TrimSpace(aiResponse), matchedImg
+		return strings.TrimSpace(aiResponse), ""
 	}
 	if err != nil || aiResponse == "" {
 		log.Printf("⚠️ GenerateAIReplyRAM error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
