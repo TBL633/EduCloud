@@ -137,7 +137,7 @@ func GenerateUPIString(config PaymentConfig, amount float64, orderId string) str
 		payeeName = strings.TrimSpace(config.Username)
 	}
 	if payeeName == "" {
-		payeeName = "EduCloud Merchant"
+		payeeName = "WaMart Merchant"
 	}
 
 	formattedAmount := fmt.Sprintf("%.2f", amount)
@@ -203,7 +203,7 @@ func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "EduCloud-PaytmVerifier/1.0")
+	req.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -299,7 +299,7 @@ func GetPaymentConfig(tenantUsername string) PaymentConfig {
 	}
 }
 
-// HTTP API Handlers for EduCloud Multi-Tenant SaaS Integration
+// HTTP API Handlers for WaMart Multi-Tenant SaaS Integration
 
 // ConfigHandler handles GET and POST requests for tenant payment setup
 func ConfigHandler(w http.ResponseWriter, r *http.Request) {
@@ -481,7 +481,7 @@ func GetAppWebhookURL() string {
 	if baseURL != "" {
 		return strings.TrimSuffix(baseURL, "/") + "/webhook/payment"
 	}
-	return "https://eduta-ai.onrender.com/webhook/payment"
+	return "https://wamart.onrender.com/webhook/payment"
 }
 
 // GenerateWorkerDynamicQR calls the Cloudflare Worker to dynamically generate a branded QR code
@@ -532,7 +532,7 @@ func GenerateWorkerDynamicQR(vpa, name, orderID, amount, cloudName string) (stri
 		return generateReliableFallbackQR(upiURI)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "EduCloud-PaymentWorkerClient/1.0")
+	req.Header.Set("User-Agent", "WaMart-PaymentWorkerClient/1.0")
 
 	resp, err := client.Do(req)
 	var imageURL string
@@ -648,7 +648,7 @@ func StartWorkerPaymentCheck(mid, orderID, webhookURL string) error {
 		return fmt.Errorf("failed to build start-check request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "EduCloud-PaymentWorkerClient/1.0")
+	req.Header.Set("User-Agent", "WaMart-PaymentWorkerClient/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

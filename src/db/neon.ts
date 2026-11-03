@@ -22,6 +22,9 @@ export interface User {
   system_prompt: string;
   auto_reply: boolean;
   automation_access: boolean;
+  paytm_mid?: string;
+  paytm_vpa?: string;
+  store_policies?: string;
   status: 'Connected' | 'QR_Ready' | 'Disconnected';
   qr: string;
   created_at: string;
@@ -159,7 +162,12 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`); } catch (e) {}
-    try { await pool.query(`ALTER TABLE products DROP COLUMN IF EXISTS image_url;`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS in_stock BOOLEAN DEFAULT true;`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`); } catch (e) {}
     try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_username_lower ON products(LOWER(username));`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS neon_media_objects CASCADE;`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS user_media CASCADE;`); } catch (e) {}
@@ -285,7 +293,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       await pool.query(
         `INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        ['admin', 'admin@eduta.ai', hashedAdminPass, 'admin', 'admin', 'Master Admin Account', true]
+        ['admin', 'admin@wamart.ai', hashedAdminPass, 'admin', 'admin', 'Master Admin Account', true]
       );
       console.log('👑 [Neon DB] Master Admin user seeded in Neon database.');
     }

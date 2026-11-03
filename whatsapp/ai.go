@@ -37,6 +37,7 @@ type UserConfigRAM struct {
 	AutoReply        bool
 	ImportCatalog    bool
 	CatalogText      string
+	StorePolicies    string
 	HasOnlinePayment bool
 	PaytmMid         string
 	MerchantVpa      string
@@ -44,51 +45,56 @@ type UserConfigRAM struct {
 	LastCached       time.Time
 }
 
-// Master E-Commerce Sales Agent System Prompt Template (Strict 5-Step Funnel)
-const universalSystemPrompt = `You are an expert Sales Agent for "%s" (a %s). 
+// Structs for AI JSON State Machine (Function Calling / Event Driven)
+type AICartItem struct {
+	ProductID string `json:"product_id"`
+	Qty       int    `json:"qty"`
+}
+
+type AIProfileData struct {
+	Address string `json:"address,omitempty"`
+	Name    string `json:"name,omitempty"`
+}
+
+type AIResponseStateJSON struct {
+	Action          string         `json:"action"` // "browsing", "add_to_cart", "ask_details", "update_profile", "generate_qr"
+	ReplyToCustomer string         `json:"reply_to_customer"`
+	CartItems       []AICartItem   `json:"cart_items,omitempty"`
+	ProfileData     *AIProfileData `json:"profile_data,omitempty"`
+}
+
+// Master E-Commerce Sales Agent System Prompt Template (STRICT JSON ENFORCEMENT)
+const universalSystemPromptJSON = `You are a sales agent for "%s" (a %s).
+Store Policy: %s
 Your output language MUST BE strictly: %s.
 
-CRITICAL DIRECTIVES:
+CRITICAL DIRECTIVES & JSON ENFORCEMENT:
+You MUST output ONLY valid JSON. No markdown code block tags outside the JSON, no conversational text outside the JSON.
+Your JSON response MUST strictly follow this schema:
+{
+  "action": "browsing",
+  "reply_to_customer": "Your polite response or menu text in %s",
+  "cart_items": [ { "product_id": "string", "qty": 1 } ],
+  "profile_data": { "address": "string", "name": "string" }
+}
+
+ACTIONS (Choose exactly one):
+1. "browsing": Default for general inquiry or showing catalog items.
+2. "add_to_cart": Customer wants to buy or select item(s). Include cart_items array with product_id and qty.
+3. "ask_details": Asking customer for address, name, or payment mode preference.
+4. "update_profile": Customer provided their name or delivery address. Put details in profile_data.
+5. "generate_qr": Customer confirmed checkout and selected online payment.
+
+CRITICAL RULES:
 1. CATALOG ONLY: Never invent products or prices. Only sell items listed in the provided Product Catalog.
-2. HUMAN & POLITE: Use appropriate emojis, formatting (*bold*, _italic_), and speak like a polite, helpful human shopkeeper.
-3. CONCISE REPLIES: Keep responses very short and easy to read on mobile. 
+2. HUMAN & POLITE: Make reply_to_customer polite, helpful, with WhatsApp formatting (*bold*, _italic_, emojis).
+3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When the customer confirms checkout, simply return action 'generate_qr'.`
 
-THE E-COMMERCE FUNNEL (YOU MUST FOLLOW THESE STEPS IN ORDER):
-
-STEP 1: PRODUCT SELECTION
-Ask the customer what they want. Help them choose variants/quantities based on the catalog.
-If they want to change or modify their order (e.g., "I want 2kg instead of 1kg"), acknowledge the change and update their cart immediately.
-
-STEP 2: ORDER SUMMARY & CONFIRMATION
-Once the customer stops adding items, generate a clear bill:
-"Order Summary:
-*1x Item A* - Rs. X
-*2x Item B* - Rs. Y
-*Total: Rs. Z*
-Shall I proceed to confirm this order?"
-
-STEP 3: CUSTOMER DETAILS (COLLECT ONE BY ONE)
-If they confirm the summary, politely ask for their details to complete the order. Ask for these ONE AT A TIME (do not ask for all at once):
-A. Ask for their Full Name.
-B. Once name is received, ask for their Complete Delivery Address.
-C. Once address is received, ask for a Contact Phone Number for delivery.
-
-STEP 4: PAYMENT METHOD SELECTION
-After collecting all details, say: "Thank you. How would you like to pay?
-1. Online Payment (UPI / QR Code)
-2. Cash on Delivery (COD)"
-
-STEP 5: FINAL CHECKOUT TRIGGER
-- If the customer chooses "Online" or "UPI", you MUST output the exact keyword: [INITIATE_PAYMENT_QR] and say "Here is your secure payment QR code. We will process your order as soon as payment is received."
-- If the customer chooses "COD" or "Cash", say: "Your Cash on Delivery order is confirmed! It will be delivered soon to [Address]."
-
-Do not skip any steps in the funnel.`
-
-// BuildUniversalSystemPrompt builds the final token-optimized prompt dynamically
-func BuildUniversalSystemPrompt(businessName, businessType, language, catalogContext string) string {
+// BuildUniversalSystemPrompt builds the final token-optimized JSON system prompt dynamically
+func BuildUniversalSystemPrompt(businessName, businessType, language, storePolicies, catalogContext string) string {
 	bName := strings.TrimSpace(businessName)
 	if bName == "" {
-		bName = "Rahul Store"
+		bName = "WaMart Store"
 	}
 	bType := strings.TrimSpace(businessType)
 	if bType == "" {
@@ -98,9 +104,12 @@ func BuildUniversalSystemPrompt(businessName, businessType, language, catalogCon
 	if lang == "" {
 		lang = "Hinglish"
 	}
+	policies := strings.TrimSpace(storePolicies)
+	if policies == "" {
+		policies = "Standard delivery and returns applicable."
+	}
 
-	finalPrompt := fmt.Sprintf(universalSystemPrompt, bName, bType, lang)
-	// Append Catalog Data after this...
+	finalPrompt := fmt.Sprintf(universalSystemPromptJSON, bName, bType, policies, lang, lang)
 	if strings.TrimSpace(catalogContext) != "" {
 		finalPrompt += "\n\n" + strings.TrimSpace(catalogContext)
 	}
@@ -156,7 +165,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 	}
 
 	if DB != nil {
-		var p, k, s, m, bName, bType, lang string
+		var p, k, s, m, bName, bType, lang, pol string
 		var t float64
 		var ar, ic bool
 		err := DB.QueryRow(`SELECT 
@@ -169,8 +178,9 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(import_catalog_details, true),
 			COALESCE(business_name, account_name, ''),
 			COALESCE(business_type, 'Kirana / General Store'),
-			COALESCE(response_language, 'Hinglish')
-			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang)
+			COALESCE(response_language, 'Hinglish'),
+			COALESCE(store_policies, '')
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -182,6 +192,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.Temperature = t
 			cfg.AutoReply = ar
 			cfg.ImportCatalog = true
+			cfg.StorePolicies = pol
 			if bName != "" {
 				cfg.BusinessName = bName
 			}
@@ -422,51 +433,121 @@ func updateSlidingWindow(sessionKey string, role string, text string) []ChatMess
 	return []ChatMessage{{Role: role, Content: text}}
 }
 
-// Helper to retrieve live product catalog items to feed into AI system prompt
+// Helper to retrieve live in-stock product catalog items grouped by category to feed into AI system prompt
 func GetCatalogContext(username string) string {
 	if DB == nil {
 		return ""
 	}
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
-	rows, err := DB.Query(`SELECT name, price, COALESCE(description, ''), COALESCE(unit_type, ''), COALESCE(whatsapp_catalog_link, '') 
-		FROM products WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2) ORDER BY id ASC`, cleanUsr, cleanUsr+"@gmail.com")
+	rows, err := DB.Query(`SELECT id, name, price, COALESCE(description, ''), COALESCE(unit_type, ''), COALESCE(whatsapp_catalog_link, ''), COALESCE(category, 'General') 
+		FROM products 
+		WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)) AND (in_stock IS TRUE OR in_stock IS NULL) 
+		ORDER BY category ASC, id ASC`, cleanUsr, cleanUsr+"@gmail.com")
 	if err != nil {
 		return ""
 	}
 	defer rows.Close()
 
-	var sb strings.Builder
+	type prodItem struct {
+		id       int64
+		name     string
+		price    string
+		desc     string
+		unitType string
+		waLink   string
+		category string
+	}
+
+	catMap := make(map[string][]prodItem)
+	var catOrder []string
 	hasProducts := false
+
 	for rows.Next() {
-		var name, price, desc, unitType, waCatalogLink string
-		if err := rows.Scan(&name, &price, &desc, &unitType, &waCatalogLink); err == nil {
-			name = strings.TrimSpace(name)
-			if name == "" {
+		var item prodItem
+		if err := rows.Scan(&item.id, &item.name, &item.price, &item.desc, &item.unitType, &item.waLink, &item.category); err == nil {
+			item.name = strings.TrimSpace(item.name)
+			if item.name == "" {
 				continue
 			}
-			if !hasProducts {
-				sb.WriteString("Products:\n")
-				hasProducts = true
+			item.category = strings.TrimSpace(item.category)
+			if item.category == "" {
+				item.category = "General"
 			}
-			price = strings.TrimSpace(price)
-			line := "- " + name
-			if price != "" {
-				line += ": " + price
-				unitType = strings.TrimSpace(unitType)
-				if unitType != "" && unitType != "custom" {
-					line += "/" + unitType
+			if _, exists := catMap[item.category]; !exists {
+				catOrder = append(catOrder, item.category)
+			}
+			catMap[item.category] = append(catMap[item.category], item)
+			hasProducts = true
+		}
+	}
+
+	if !hasProducts {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Product Catalog (In Stock Items):\n")
+	for _, cat := range catOrder {
+		sb.WriteString(fmt.Sprintf("\nCategory: %s\n", cat))
+		for _, p := range catMap[cat] {
+			priceStr := strings.TrimSpace(p.price)
+			line := fmt.Sprintf("- product_id: %d | %s", p.id, p.name)
+			if priceStr != "" {
+				line += ": Rs. " + priceStr
+				unit := strings.TrimSpace(p.unitType)
+				if unit != "" && unit != "custom" {
+					line += "/" + unit
 				}
 			}
-			if desc = strings.TrimSpace(desc); desc != "" {
+			if desc := strings.TrimSpace(p.desc); desc != "" {
 				line += " - " + desc
 			}
-			if waCatalogLink = strings.TrimSpace(waCatalogLink); waCatalogLink != "" {
-				line += " (" + waCatalogLink + ")"
+			if link := strings.TrimSpace(p.waLink); link != "" {
+				line += " (" + link + ")"
 			}
 			sb.WriteString(line + "\n")
 		}
 	}
+
 	return strings.TrimSpace(sb.String())
+}
+
+// ParseAIResponseJSON parses the AI state machine JSON output, extracts reply_to_customer, logs formatted JSON, and handles payment triggers
+func ParseAIResponseJSON(rawResponse string) (*AIResponseStateJSON, string, error) {
+	trimmed := strings.TrimSpace(rawResponse)
+	codeBlockRegex := regexp.MustCompile(`(?s)^\s*```(?:json)?\s*(.*?)\s*```\s*$`)
+	if matches := codeBlockRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
+		trimmed = strings.TrimSpace(matches[1])
+	}
+
+	firstBrace := strings.Index(trimmed, "{")
+	lastBrace := strings.LastIndex(trimmed, "}")
+	if firstBrace != -1 && lastBrace > firstBrace {
+		trimmed = trimmed[firstBrace : lastBrace+1]
+	}
+
+	var state AIResponseStateJSON
+	err := json.Unmarshal([]byte(trimmed), &state)
+	if err != nil {
+		log.Printf("⚠️ [AI JSON Response Parsing Failed]: %v | Raw text output: %s", err, rawResponse)
+		return nil, rawResponse, err
+	}
+
+	prettyJSON, _ := json.MarshalIndent(state, "", "  ")
+	log.Printf("📦 [Parsed AI JSON State Response]:\n%s", string(prettyJSON))
+
+	replyText := strings.TrimSpace(state.ReplyToCustomer)
+	if replyText == "" {
+		replyText = rawResponse
+	}
+
+	if strings.ToLower(strings.TrimSpace(state.Action)) == "generate_qr" {
+		if !strings.Contains(replyText, "[INITIATE_PAYMENT_QR]") {
+			replyText = strings.TrimSpace(replyText) + "\n\n[INITIATE_PAYMENT_QR]"
+		}
+	}
+
+	return &state, replyText, nil
 }
 
 // 2. Main AI Auto-Reply Generator
@@ -529,7 +610,7 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 			stableSysPrompt += "\n\n" + catalogContext
 		}
 	} else {
-		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, catalogContext)
+		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, "", catalogContext)
 	}
 
 	// Returning Customer Context Injection
@@ -557,7 +638,25 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		return "", ""
 	}
 
-	return aiResponse, ""
+	parsedState, replyText, parseErr := ParseAIResponseJSON(aiResponse)
+	if parseErr == nil && parsedState != nil {
+		action := strings.ToLower(strings.TrimSpace(parsedState.Action))
+		if parsedState.ProfileData != nil || action == "update_profile" {
+			go UpdateCustomerProfileFromData(cleanUsr, cleanPhone, parsedState.ProfileData)
+		}
+		if action == "add_to_cart" && len(parsedState.CartItems) > 0 {
+			go AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
+		}
+		if action == "generate_qr" {
+			go func() {
+				calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
+				if errCalc == nil && calcRes != nil {
+					_, _ = DispatchCloudflareWorkerQR(cleanUsr, cleanPhone, calcRes)
+				}
+			}()
+		}
+	}
+	return strings.TrimSpace(replyText), ""
 }
 
 // 3. RAM-First AI Auto-Reply Generator (Instant 0ms RAM lookup & Minimal Token Prompt Caching)
@@ -636,10 +735,29 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 	// Update customer profile asynchronously from incoming text
 	go ExtractAndPersistCustomerDetails(cleanUsr, cleanPhone, incomingText)
 
-	stableSysPrompt := BuildUniversalSystemPrompt(bName, bType, lang, cfg.CatalogText) + custContext
+	stableSysPrompt := BuildUniversalSystemPrompt(bName, bType, lang, cfg.StorePolicies, cfg.CatalogText) + custContext
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
 	if err == nil && aiResponse != "" {
+		parsedState, replyText, parseErr := ParseAIResponseJSON(aiResponse)
+		if parseErr == nil && parsedState != nil {
+			action := strings.ToLower(strings.TrimSpace(parsedState.Action))
+			if parsedState.ProfileData != nil || action == "update_profile" {
+				go UpdateCustomerProfileFromData(cleanUsr, cleanPhone, parsedState.ProfileData)
+			}
+			if action == "add_to_cart" && len(parsedState.CartItems) > 0 {
+				go AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
+			}
+			if action == "generate_qr" {
+				go func() {
+					calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
+					if errCalc == nil && calcRes != nil {
+						_, _ = DispatchCloudflareWorkerQR(cleanUsr, cleanPhone, calcRes)
+					}
+				}()
+			}
+			aiResponse = replyText
+		}
 		// 1. Process <ORDER_JSON> if emitted
 		jsonRegex := regexp.MustCompile(`(?i)<ORDER_JSON>([\s\S]*?)</ORDER_JSON>`)
 		if jsonMatch := jsonRegex.FindStringSubmatch(aiResponse); len(jsonMatch) > 1 && DB != nil {
@@ -858,7 +976,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("User-Agent", "EduCloud-WhatsApp-Gateway/1.0")
+		req.Header.Set("User-Agent", "WaMart-WhatsApp-Gateway/1.0")
 
 		client := &http.Client{Timeout: 4 * time.Second}
 		resp, err := client.Do(req)

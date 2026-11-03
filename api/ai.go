@@ -19,7 +19,7 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			username = "admin"
 		}
 
-		var provider, apiKey, sysPrompt, aiModel, notifPhone, bName, bType, lang string
+		var provider, apiKey, sysPrompt, aiModel, notifPhone, bName, bType, lang, pMid, pVpa, policies string
 		var temp float64
 		var autoReply, importCatalogDetails bool
 		importCatalogDetails = true
@@ -36,9 +36,12 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 				COALESCE(import_catalog_details, true),
 				COALESCE(business_name, account_name, ''),
 				COALESCE(business_type, 'Kirana / General Store'),
-				COALESCE(response_language, 'Hinglish')
+				COALESCE(response_language, 'Hinglish'),
+				COALESCE(paytm_mid, ''),
+				COALESCE(paytm_vpa, ''),
+				COALESCE(store_policies, '')
 				FROM users WHERE LOWER(username)=LOWER($1)`, username).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang)
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang, &pMid, &pVpa, &policies)
 		}
 
 		if bName == "" {
@@ -68,6 +71,9 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			"ai_temperature":         temp,
 			"notification_phone":     notifPhone,
 			"import_catalog_details": importCatalogDetails,
+			"paytm_mid":              pMid,
+			"paytm_vpa":              pVpa,
+			"store_policies":         policies,
 		})
 		return
 	}
@@ -90,6 +96,9 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			Temperature          float64 `json:"temperature"`
 			NotificationPhone    string  `json:"notification_phone"`
 			ImportCatalogDetails bool    `json:"import_catalog_details"`
+			PaytmMid             string  `json:"paytm_mid"`
+			PaytmVpa             string  `json:"paytm_vpa"`
+			StorePolicies        string  `json:"store_policies"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -129,11 +138,35 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			lang = "Hinglish"
 		}
 
+		paytmMid := strings.TrimSpace(req.PaytmMid)
+		paytmVpa := strings.TrimSpace(req.PaytmVpa)
+		policies := strings.TrimSpace(req.StorePolicies)
+
 		if DB != nil {
 			_, err := DB.Exec(`UPDATE users SET 
-				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10
-				WHERE LOWER(username)=LOWER($11)`,
-				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, username)
+				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10,
+				paytm_mid=$11, paytm_vpa=$12, store_policies=$13
+				WHERE LOWER(username)=LOWER($14)`,
+				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, paytmMid, paytmVpa, policies, username)
+
+			if err != nil {
+				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update AI settings in database: " + err.Error()})
+				return
+			}
+
+			// Upsert tenant_payment_configs if paytm fields are provided
+			if paytmMid != "" || paytmVpa != "" {
+				payEnabled := paytmMid != "" || paytmVpa != ""
+				_, _ = DB.Exec(`INSERT INTO tenant_payment_configs (username, enabled, paytm_mid, merchant_vpa, payee_name, updated_at)
+					VALUES ($1, $2, $3, $4, $5, NOW())
+					ON CONFLICT (username) DO UPDATE SET
+						enabled = EXCLUDED.enabled,
+						paytm_mid = COALESCE(NULLIF(EXCLUDED.paytm_mid, ''), tenant_payment_configs.paytm_mid),
+						merchant_vpa = COALESCE(NULLIF(EXCLUDED.merchant_vpa, ''), tenant_payment_configs.merchant_vpa),
+						updated_at = NOW()`,
+					username, payEnabled, paytmMid, paytmVpa, bName)
+			}
+		}
 
 			if err != nil {
 				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update AI settings in database: " + err.Error()})
@@ -196,10 +229,11 @@ func AITestHandler(w http.ResponseWriter, r *http.Request) {
 	catalogContext := whatsapp.GetCatalogContext(username)
 	customPrompt := strings.TrimSpace(req.SystemPrompt)
 	if customPrompt == "" {
+		var policies string
 		if bName == "" && DB != nil {
-			_ = DB.QueryRow("SELECT COALESCE(business_name, account_name, ''), COALESCE(business_type, 'Kirana / General Store'), COALESCE(response_language, 'Hinglish') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&bName, &bType, &lang)
+			_ = DB.QueryRow("SELECT COALESCE(business_name, account_name, ''), COALESCE(business_type, 'Kirana / General Store'), COALESCE(response_language, 'Hinglish'), COALESCE(store_policies, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&bName, &bType, &lang, &policies)
 		}
-		customPrompt = whatsapp.BuildUniversalSystemPrompt(bName, bType, lang, catalogContext)
+		customPrompt = whatsapp.BuildUniversalSystemPrompt(bName, bType, lang, policies, catalogContext)
 	}
 
 	reply, imageURL := whatsapp.GenerateAIReply(username, "playground_tester", req.Query, req.Provider, req.APIKey, customPrompt)
@@ -247,7 +281,7 @@ func TestLeadAlertHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	alertText := fmt.Sprintf("🚨 *TEST LEAD ALERT DISPATCH* 🚨\n\n• Account: @%s\n• Target: +%s\n• Engine: EduCloud Go WhatsApp Gateway\n• Time: %s\n\n✅ If you received this, your automated lead capture notification is fully operational!",
+	alertText := fmt.Sprintf("🚨 *TEST LEAD ALERT DISPATCH* 🚨\n\n• Account: @%s\n• Target: +%s\n• Engine: WaMart Go WhatsApp Gateway\n• Time: %s\n\n✅ If you received this, your automated lead capture notification is fully operational!",
 		username, cleanPhone, time.Now().Format("02 Jan 15:04:05"))
 
 	whatsapp.PushToLiveChat(username, cleanPhone, alertText, "lead_alert")

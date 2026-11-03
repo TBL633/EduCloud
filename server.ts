@@ -56,8 +56,23 @@ export interface CatalogItem {
   item_type: 'product' | 'service';
   unit_type?: string;
   variants?: Array<{ variant: string; price: string }>;
+  whatsapp_catalog_link?: string;
+  image_url?: string;
+  category?: string;
+  in_stock?: boolean;
   created_at: string;
 }
+
+export interface CategoryItem {
+  id: number;
+  username: string;
+  category_name: string;
+  category_image_url: string;
+  created_at: string;
+}
+
+const memoryCategories: CategoryItem[] = [];
+let nextCategoryId = 1;
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -116,7 +131,7 @@ const stats = {
 memoryUsers.set(adminUser, {
   id: nextUserId++,
   username: adminUser,
-  email: 'admin@eduta.ai',
+  email: 'admin@wamart.ai',
   password: adminPass,
   role: 'admin',
   user_type: 'admin',
@@ -367,35 +382,55 @@ async function generateAIReply(
     orderContext += `\nExisting Order State: Name: ${existingOrder.customer_name || 'Not provided'} | Address: ${existingOrder.delivery_address || 'Not provided'} | Items: ${JSON.stringify(existingOrder.items || [])} | Total: ₹${existingOrder.total_amount || 0} | Payment Mode: ${existingOrder.payment_mode || 'unselected'} | Payment Status: ${existingOrder.payment_status || 'unpaid'}`;
   }
 
-  // --- ULTRA-COMPACT MINIMUM-TOKEN SYSTEM PROMPT WITH SMART ORDER FORM RULES ---
-  const catalogLines = catalog.map((item, idx) => {
-    let variantsStr = '';
-    if (Array.isArray(item.variants) && item.variants.length > 0) {
-      variantsStr = ` (${item.variants.map((v: any) => `${v.variant}: ${v.price}`).join(', ')})`;
-    }
-    const desc = item.details ? ` - ${item.details.slice(0, 80)}` : '';
-    return `#${idx + 1} ${item.name}: ${item.price}${variantsStr}${desc}`;
-  }).join('\n');
+  // --- RAG CATEGORY FILTER & JSON ENFORCED SYSTEM PROMPT ---
+  const inStockCatalog = catalog.filter((item: any) => item.in_stock !== false);
+  const groupedCatalog: Record<string, typeof catalog> = {};
+  inStockCatalog.forEach((item: any) => {
+    const cat = item.category || 'General';
+    if (!groupedCatalog[cat]) groupedCatalog[cat] = [];
+    groupedCatalog[cat].push(item);
+  });
 
-  const businessName = user?.business_name || accountName || 'Rahul Store';
+  const catalogLines = Object.entries(groupedCatalog).map(([catName, items]) => {
+    const lines = (items as any[]).map((item, idx) => {
+      let variantsStr = '';
+      if (Array.isArray(item.variants) && item.variants.length > 0) {
+        variantsStr = ` (${item.variants.map((v: any) => `${v.variant}: ${v.price}`).join(', ')})`;
+      }
+      const desc = item.details ? ` - ${item.details.slice(0, 80)}` : '';
+      return `- product_id: ${item.id || idx + 1} | ${item.name}: Rs. ${item.price}${variantsStr}${desc}`;
+    }).join('\n');
+    return `Category: ${catName}\n${lines}`;
+  }).join('\n\n');
+
+  const businessName = user?.business_name || accountName || 'WaMart Store';
   const businessType = user?.business_type || 'Kirana / General Store';
   const language = user?.response_language || 'Hinglish';
+  const storePolicies = user?.store_policies || 'Standard delivery and returns applicable.';
 
-  const universalSystemPrompt = `You are a polite, human-like sales agent for "${businessName}" (a ${businessType}). 
+  const universalSystemPrompt = `You are a sales agent for "${businessName}" (a ${businessType}).
+Store Policy: ${storePolicies}
 Your output language MUST BE strictly: ${language}.
 
-CORE DIRECTIVES:
-1. ROLE: Greet politely, use relevant emojis, and act as a helpful shopkeeper. Use WhatsApp formatting (*bold*, _italic_, > quotes) to make replies beautiful.
-2. CATALOG STRICTNESS: You are provided with a product catalog. You MUST ONLY sell, quote, or discuss items present in this catalog. NEVER hallucinate products, prices, or fake information.
-3. CONCISENESS: Keep responses short and conversational. Do not write long paragraphs.
-4. ORDER FUNNEL: Guide the customer to select products. Once they select, calculate the total and summarize clearly (e.g., "*1x Item* - Rs.X"). 
-5. CONFIRMATION: You MUST explicitly ask "Should I confirm your order?" before proceeding.
-6. PAYMENT TRIGGER: Once the customer says "Yes" or confirms the order summary, you MUST output the exact keyword: [INITIATE_PAYMENT_QR] and nothing else.
-7. OUT OF SCOPE: If the user asks non-business questions, politely redirect them to shopping.`;
+CRITICAL DIRECTIVES & JSON ENFORCEMENT:
+You MUST output ONLY valid JSON. No markdown code block tags outside the JSON, no conversational text outside the JSON.
+Your JSON response MUST strictly follow this schema:
+{
+  "action": "browsing",
+  "reply_to_customer": "Your polite response or menu text in ${language}",
+  "cart_items": [ { "product_id": "string", "qty": 1 } ],
+  "profile_data": { "address": "string", "name": "string" }
+}
+
+ACTIONS: "browsing", "add_to_cart", "ask_details", "update_profile", "generate_qr"
+RULES:
+1. CATALOG ONLY: Only sell in-stock items listed in the Product Catalog.
+2. HUMAN & POLITE: Make reply_to_customer polite with WhatsApp formatting (*bold*, _italic_, emojis).
+3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When customer confirms checkout, return action 'generate_qr'.`;
 
   const compactSystemPrompt = [
     universalSystemPrompt,
-    catalogLines ? `Available Products Catalog:\n${catalogLines}` : ''
+    catalogLines ? `Product Catalog (In Stock Items):\n${catalogLines}` : ''
   ].filter(Boolean).join('\n\n');
 
   const systemInstruction = compactSystemPrompt;
@@ -728,7 +763,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
   }
 
   // Global Admin lands on Admin Portal, Normal users land on Business Portal
-  const isGlobalAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin' || (user.email && user.email.toLowerCase() === 'admin@eduta.ai');
+  const isGlobalAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin' || (user.email && (user.email.toLowerCase() === 'admin@wamart.ai' || user.email.toLowerCase() === 'admin@eduta.ai'));
   const targetPortal = isGlobalAdmin ? 'admin_portal' : 'business_portal';
 
   return res.json({
@@ -779,7 +814,7 @@ async function sendEmailOtp(email: string, otpCode: string, fullName: string): P
   if (neonAuthUrl) {
     const authHeaders = {
       'Content-Type': 'application/json',
-      'User-Agent': 'EduCloud-SaaS/1.0'
+      'User-Agent': 'WaMart-SaaS/1.0'
     };
 
     const attemptsToTry = [
@@ -833,12 +868,12 @@ async function sendEmailOtp(email: string, otpCode: string, fullName: string): P
   const smtpPort = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || '587', 10);
   const smtpUser = (process.env.SMTP_USER || process.env.EMAIL_USER || process.env.SMTP_USERNAME || '').trim();
   const smtpPass = (process.env.SMTP_PASS || process.env.EMAIL_PASS || process.env.SMTP_PASSWORD || '').trim();
-  const smtpFrom = (process.env.SMTP_FROM || process.env.EMAIL_FROM || 'EduCloud Verification <auth@eduta.ai>').trim();
+  const smtpFrom = (process.env.SMTP_FROM || process.env.EMAIL_FROM || 'WaMart Verification <auth@wamart.ai>').trim();
 
   const htmlContent = `
     <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; background: #0f172a; color: #f8fafc; border-radius: 16px; padding: 32px; border: 1px solid #1e293b;">
       <div style="text-align: center; margin-bottom: 24px;">
-        <h2 style="color: #f59e0b; margin: 0; font-size: 24px;">EduCloud SaaS</h2>
+        <h2 style="color: #f59e0b; margin: 0; font-size: 24px;">WaMart</h2>
         <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Account Email Verification</p>
       </div>
       <div style="background: #1e293b; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 24px;">
@@ -849,7 +884,7 @@ async function sendEmailOtp(email: string, otpCode: string, fullName: string): P
         </div>
         <p style="font-size: 12px; color: #64748b; margin-bottom: 0;">This OTP code will expire in 10 minutes. Do not share this code with anyone.</p>
       </div>
-      <p style="font-size: 11px; color: #475569; text-align: center; margin: 0;">&copy; EduCloud Automated Commerce & SaaS Gateway</p>
+      <p style="font-size: 11px; color: #475569; text-align: center; margin: 0;">&copy; WaMart Automated Commerce & SaaS Gateway</p>
     </div>
   `;
 
@@ -865,8 +900,8 @@ async function sendEmailOtp(email: string, otpCode: string, fullName: string): P
       await transporter.sendMail({
         from: smtpFrom,
         to: email,
-        subject: `[EduCloud] Your Verification OTP Code: ${otpCode}`,
-        text: `Your EduCloud verification code is: ${otpCode}`,
+        subject: `[WaMart] Your Verification OTP Code: ${otpCode}`,
+        text: `Your WaMart verification code is: ${otpCode}`,
         html: htmlContent
       });
 
@@ -888,10 +923,10 @@ async function sendEmailOtp(email: string, otpCode: string, fullName: string): P
     });
 
     const info = await transporter.sendMail({
-      from: 'EduCloud Verification <auth@eduta.ai>',
+      from: 'WaMart Verification <auth@wamart.ai>',
       to: email,
-      subject: `[EduCloud] Your Verification OTP Code: ${otpCode}`,
-      text: `Your EduCloud verification code is: ${otpCode}`,
+      subject: `[WaMart] Your Verification OTP Code: ${otpCode}`,
+      text: `Your WaMart verification code is: ${otpCode}`,
       html: htmlContent
     });
 
@@ -1003,7 +1038,7 @@ app.post(['/api/auth/verify-otp', '/api/auth/neon/verify-otp'], async (req: Requ
       'Content-Type': 'application/json',
       'Origin': requestOrigin,
       'Referer': requestOrigin,
-      'User-Agent': 'EduCloud-SaaS/1.0'
+      'User-Agent': 'WaMart-SaaS/1.0'
     };
 
     const verifyAttemptsToTry = [
@@ -1907,7 +1942,7 @@ app.all('/api/whatsapp/incoming', async (req: Request, res: Response) => {
     if (mode === 'subscribe' && token) {
       return res.status(200).send(challenge);
     }
-    return res.json({ status: 'active', gateway: 'EduCloud 24/7 Inbound AI Auto-Reply Receiver Active' });
+    return res.json({ status: 'active', gateway: 'WaMart 24/7 Inbound AI Auto-Reply Receiver Active' });
   }
 
   const body = req.body || {};
@@ -2372,7 +2407,7 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
         let dbRes;
         try {
           dbRes = await pool.query(
-            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply FROM users WHERE LOWER(username) = LOWER($1)`,
+            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language, COALESCE(paytm_mid, '') as paytm_mid, COALESCE(paytm_vpa, '') as paytm_vpa, COALESCE(store_policies, '') as store_policies FROM users WHERE LOWER(username) = LOWER($1)`,
             [username]
           );
         } catch (colErr) {
@@ -2386,8 +2421,11 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`);
           dbRes = await pool.query(
-            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language FROM users WHERE LOWER(username) = LOWER($1)`,
+            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language, COALESCE(paytm_mid, '') as paytm_mid, COALESCE(paytm_vpa, '') as paytm_vpa, COALESCE(store_policies, '') as store_policies FROM users WHERE LOWER(username) = LOWER($1)`,
             [username]
           );
         }
@@ -2408,7 +2446,10 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
             notification_phone: row.notification_phone || user?.notification_phone || '',
             api_key: row.api_key || user?.api_key || '',
             system_prompt: row.system_prompt || user?.system_prompt || '',
-            auto_reply: row.auto_reply !== null && row.auto_reply !== undefined ? Boolean(row.auto_reply) : (user?.auto_reply ?? true)
+            auto_reply: row.auto_reply !== null && row.auto_reply !== undefined ? Boolean(row.auto_reply) : (user?.auto_reply ?? true),
+            paytm_mid: row.paytm_mid || (user as any)?.paytm_mid || '',
+            paytm_vpa: row.paytm_vpa || (user as any)?.paytm_vpa || '',
+            store_policies: row.store_policies || (user as any)?.store_policies || ''
           });
         }
       } catch (err) {
@@ -2432,12 +2473,15 @@ app.get('/api/ai/settings', async (req: Request, res: Response) => {
     notification_phone: user?.notification_phone || user?.phone || '',
     api_key: user?.api_key || '',
     system_prompt: user?.system_prompt || '',
-    auto_reply: user?.auto_reply ?? true
+    auto_reply: user?.auto_reply ?? true,
+    paytm_mid: (user as any)?.paytm_mid || '',
+    paytm_vpa: (user as any)?.paytm_vpa || '',
+    store_policies: (user as any)?.store_policies || ''
   });
 });
 
 app.post('/api/ai/settings', async (req: Request, res: Response) => {
-  const { username = '', ai_provider, platform, model, temperature, notification_phone, api_key, system_prompt, auto_reply, business_name, business_type, response_language, language } = req.body || {};
+  const { username = '', ai_provider, platform, model, temperature, notification_phone, api_key, system_prompt, auto_reply, business_name, business_type, response_language, language, paytm_mid, paytm_vpa, store_policies } = req.body || {};
   let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
 
   const resolvedPlatform = platform || ai_provider || 'Groq';
@@ -2450,6 +2494,9 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
   const resolvedBName = String(business_name || '').trim();
   const resolvedBType = String(business_type || 'Kirana / General Store').trim();
   const resolvedLang = String(response_language || language || 'Hinglish').trim();
+  const resolvedPaytmMid = String(paytm_mid || '').trim();
+  const resolvedPaytmVpa = String(paytm_vpa || '').trim();
+  const resolvedStorePolicies = String(store_policies || '').trim();
 
   if (user) {
     user.ai_provider = resolvedPlatform;
@@ -2462,6 +2509,9 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
     user.business_name = resolvedBName;
     user.business_type = resolvedBType;
     user.response_language = resolvedLang;
+    (user as any).paytm_mid = resolvedPaytmMid;
+    (user as any).paytm_vpa = resolvedPaytmVpa;
+    (user as any).store_policies = resolvedStorePolicies;
   }
 
   if (getPool()) {
@@ -2470,8 +2520,8 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
       try {
         try {
           await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10 WHERE LOWER(username) = LOWER($11)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, username]
+            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10, paytm_mid = $11, paytm_vpa = $12, store_policies = $13 WHERE LOWER(username) = LOWER($14)`,
+            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, resolvedPaytmMid, resolvedPaytmVpa, resolvedStorePolicies, username]
           );
         } catch (dbColErr) {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'Groq';`);
@@ -2484,10 +2534,13 @@ app.post('/api/ai/settings', async (req: Request, res: Response) => {
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
           await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`);
+          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`);
 
           await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10 WHERE LOWER(username) = LOWER($11)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, username]
+            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10, paytm_mid = $11, paytm_vpa = $12, store_policies = $13 WHERE LOWER(username) = LOWER($14)`,
+            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, resolvedPaytmMid, resolvedPaytmVpa, resolvedStorePolicies, username]
           );
         }
       } catch (dbErr) {
@@ -2522,45 +2575,193 @@ app.post('/api/ai/test-lead-alert', async (req: Request, res: Response) => {
   });
 });
 
-// 12. SMART AI PRODUCT & SERVICE CATALOG
+// 12. CATEGORIES ENDPOINT (/api/categories)
+app.all('/api/categories', async (req: Request, res: Response) => {
+  if (req.method === 'GET') {
+    const username = ((req.query.username as string) || '').trim().toLowerCase();
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`
+            CREATE TABLE IF NOT EXISTS categories (
+              id SERIAL PRIMARY KEY,
+              username VARCHAR(255) NOT NULL,
+              category_name VARCHAR(255) NOT NULL,
+              category_image_url TEXT DEFAULT '',
+              created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(username, category_name)
+            );
+          `);
+
+          const catRes = await pool.query(
+            `SELECT c.id, c.category_name, COALESCE(c.category_image_url, '') as category_image_url, COUNT(p.id)::int as product_count
+             FROM categories c
+             LEFT JOIN products p ON LOWER(p.category) = LOWER(c.category_name) AND LOWER(p.username) = LOWER(c.username)
+             WHERE LOWER(c.username) = LOWER($1)
+             GROUP BY c.id, c.category_name, c.category_image_url
+             ORDER BY c.id ASC`,
+            [username]
+          );
+
+          return res.json({
+            status: 'success',
+            categories: catRes.rows
+          });
+        } catch (err) {
+          console.warn('Categories DB fetch error:', err);
+        }
+      }
+    }
+
+    const filtered = memoryCategories.filter(c => c.username.toLowerCase() === username);
+    const result = filtered.map(c => {
+      const pCount = memoryCatalog.filter(p => p.username.toLowerCase() === username && (p.category || '').toLowerCase() === c.category_name.toLowerCase()).length;
+      return {
+        id: c.id,
+        category_name: c.category_name,
+        category_image_url: c.category_image_url,
+        product_count: pCount
+      };
+    });
+
+    return res.json({
+      status: 'success',
+      categories: result
+    });
+  }
+
+  if (req.method === 'POST') {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch {}
+    }
+    const username = String(body?.username || '').trim().toLowerCase();
+    const categoryName = String(body?.category_name || body?.category || '').trim();
+    const categoryImageUrl = String(body?.category_image_url || body?.image_url || '').trim();
+
+    if (!categoryName) {
+      return res.status(400).json({ status: 'error', message: 'Category Name is required' });
+    }
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`
+            CREATE TABLE IF NOT EXISTS categories (
+              id SERIAL PRIMARY KEY,
+              username VARCHAR(255) NOT NULL,
+              category_name VARCHAR(255) NOT NULL,
+              category_image_url TEXT DEFAULT '',
+              created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(username, category_name)
+            );
+          `);
+
+          const insertRes = await pool.query(
+            `INSERT INTO categories (username, category_name, category_image_url)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (username, category_name) DO UPDATE SET category_image_url = EXCLUDED.category_image_url
+             RETURNING id`,
+            [username, categoryName, categoryImageUrl]
+          );
+
+          return res.json({
+            status: 'success',
+            id: insertRes.rows[0]?.id || 1,
+            message: 'Category created successfully!'
+          });
+        } catch (err: any) {
+          return res.status(500).json({ status: 'error', message: err?.message || 'Database error creating category' });
+        }
+      }
+    }
+
+    let existing = memoryCategories.find(c => c.username.toLowerCase() === username && c.category_name.toLowerCase() === categoryName.toLowerCase());
+    if (existing) {
+      existing.category_image_url = categoryImageUrl;
+    } else {
+      existing = {
+        id: nextCategoryId++,
+        username,
+        category_name: categoryName,
+        category_image_url: categoryImageUrl,
+        created_at: new Date().toISOString()
+      };
+      memoryCategories.push(existing);
+    }
+
+    return res.json({
+      status: 'success',
+      id: existing.id,
+      message: 'Category created successfully!'
+    });
+  }
+
+  if (req.method === 'DELETE') {
+    const id = parseInt((req.query.id as string) || (req.body?.id as string) || '0', 10);
+    const username = String(req.query.username || req.body?.username || '').trim().toLowerCase();
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(
+            `DELETE FROM categories WHERE id = $1 AND LOWER(username) = LOWER($2)`,
+            [id, username]
+          );
+          return res.json({ status: 'success', message: 'Category deleted' });
+        } catch (err: any) {
+          return res.status(500).json({ status: 'error', message: err?.message || 'Failed to delete category' });
+        }
+      }
+    }
+
+    const idx = memoryCategories.findIndex(c => c.id === id && c.username.toLowerCase() === username);
+    if (idx !== -1) {
+      memoryCategories.splice(idx, 1);
+    }
+
+    return res.json({ status: 'success', message: 'Category deleted' });
+  }
+
+  return res.status(405).json({ status: 'error', message: 'Method not allowed' });
+});
+
+// 12C. SMART AI PRODUCT & SERVICE CATALOG (/api/products)
 app.get('/api/products', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
+  const username = ((req.query.username as string) || '').trim().toLowerCase();
 
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
-        let rows;
-        try {
-          rows = await pool.query(
-            `SELECT id, name, price, description, COALESCE(ai_tag, '') as ai_tag, COALESCE(item_type, 'product') as item_type, COALESCE(unit_type, 'custom') as unit_type, COALESCE(variants, '[]'::jsonb) as variants
-             FROM products WHERE username = $1 ORDER BY id ASC`,
-            [username]
-          );
-        } catch (dbColErr) {
-          await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`);
-          await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`);
-          await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`);
-          await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`);
-          rows = await pool.query(
-            `SELECT id, name, price, description, COALESCE(ai_tag, '') as ai_tag, COALESCE(item_type, 'product') as item_type, COALESCE(unit_type, 'custom') as unit_type, COALESCE(variants, '[]'::jsonb) as variants
-             FROM products WHERE username = $1 ORDER BY id ASC`,
-            [username]
-          );
-        }
+        let rows = await pool.query(
+          `SELECT id, name, COALESCE(price, '₹0') as price, COALESCE(description, '') as description, COALESCE(category, '') as category, COALESCE(in_stock, true) as in_stock, COALESCE(mrp, 0)::float as mrp, COALESCE(sale_price, 0)::float as sale_price, COALESCE(product_image_url, image_url, '') as product_image_url, COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link
+           FROM products WHERE LOWER(username) = LOWER($1) ORDER BY id ASC`,
+          [username]
+        );
 
         if (rows.rows.length > 0) {
           const products = rows.rows.map((r, index) => ({
             id: r.id,
             name: r.name,
             price: r.price,
+            mrp: r.mrp,
+            sale_price: r.sale_price,
             details: r.description,
-            tag: r.ai_tag || `<ITEM_${index + 1}>`,
-            item_type: r.item_type || 'product',
-            unit_type: r.unit_type || 'custom',
-            variants: typeof r.variants === 'string' ? JSON.parse(r.variants || '[]') : (r.variants || [])
+            description: r.description,
+            category: r.category,
+            category_name: r.category,
+            in_stock: r.in_stock,
+            product_image_url: r.product_image_url,
+            image_url: r.product_image_url,
+            whatsapp_catalog_link: r.whatsapp_catalog_link,
+            whatsapp_url: r.whatsapp_catalog_link
           }));
-          return res.json({ products });
+          return res.json({ status: 'success', products });
         }
       } catch (err) {
         console.warn('DB products fetch fallback:', err);
@@ -2568,84 +2769,152 @@ app.get('/api/products', async (req: Request, res: Response) => {
     }
   }
 
-  let items = memoryCatalog.filter(m => m.username.toLowerCase() === username.toLowerCase());
+  let items = memoryCatalog.filter(m => m.username.toLowerCase() === username);
   const products = items.map((m, index) => ({
     id: m.id,
     name: m.name,
     price: m.price,
+    mrp: (m as any).mrp || 0,
+    sale_price: (m as any).sale_price || parseFloat(String(m.price).replace(/[^\d.]/g, '')) || 0,
     details: m.details,
-    tag: m.tag || `<ITEM_${index + 1}>`,
-    item_type: m.item_type || 'product',
-    unit_type: m.unit_type || 'custom',
-    variants: m.variants || []
+    description: m.details,
+    category: m.category || '',
+    category_name: m.category || '',
+    in_stock: m.in_stock ?? true,
+    product_image_url: m.image_url || '',
+    image_url: m.image_url || '',
+    whatsapp_catalog_link: m.whatsapp_catalog_link || '',
+    whatsapp_url: m.whatsapp_catalog_link || ''
   }));
-  return res.json({ products });
+  return res.json({ status: 'success', products });
 });
 
 app.post('/api/products', async (req: Request, res: Response) => {
-  const { name, price = '', details = '', username = '', item_type = 'product', unit_type = 'custom', variants = [] } = req.body || {};
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const id = parseInt(String(body?.id || 0), 10);
+  const {
+    name = '',
+    price = '',
+    mrp = 0,
+    sale_price = 0,
+    description = '',
+    details = '',
+    username = '',
+    item_type = 'product',
+    unit_type = 'custom',
+    variants = [],
+    whatsapp_catalog_link = '',
+    whatsapp_url = '',
+    image_url = '',
+    product_image_url = '',
+    category = '',
+    category_name = '',
+    in_stock = true
+  } = body || {};
+
+  const cleanUser = String(username).trim().toLowerCase();
+  const catName = String(category_name || category || '').trim();
+  const imgUrl = String(product_image_url || image_url || '').trim();
+  const waUrl = String(whatsapp_url || whatsapp_catalog_link || '').trim();
+  const mrpVal = parseFloat(mrp) || 0;
+  const salePriceVal = parseFloat(sale_price) || 0;
+  const descStr = String(description || details || '').trim();
+  const inStockVal = Boolean(in_stock);
+
+  // If toggling stock status directly with id
+  if (id > 0 && !name) {
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`UPDATE products SET in_stock = $1 WHERE id = $2 AND LOWER(username) = LOWER($3)`, [inStockVal, id, cleanUser]);
+          return res.json({ status: 'success', message: 'Stock status updated' });
+        } catch (e) {}
+      }
+    }
+    const memItem = memoryCatalog.find(m => m.id === id);
+    if (memItem) {
+      memItem.in_stock = inStockVal;
+    }
+    return res.json({ status: 'success', message: 'Stock status updated' });
+  }
+
   if (!name) {
     return res.status(400).json({ error: 'Product Name is required' });
   }
 
   let summaryPrice = price;
-  if (!summaryPrice && Array.isArray(variants) && variants.length > 0) {
-    summaryPrice = variants.map((v: any) => `${v.variant}: ${String(v.price).startsWith('₹') ? v.price : '₹' + v.price}`).join(', ');
+  if (!summaryPrice && salePriceVal > 0) {
+    summaryPrice = `₹${salePriceVal}`;
   }
   if (!summaryPrice) {
     summaryPrice = '₹0';
   }
 
-  const aiTag = `<ITEM_${(isDbConnected() ? Math.floor(Math.random() * 900 + 100) : memoryCatalog.length + 1)}>`;
   const jsonVariants = JSON.stringify(variants);
 
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
+        if (id > 0) {
+          await pool.query(
+            `UPDATE products SET category = $2, name = $3, description = $4, mrp = $5, sale_price = $6, price = $7, item_type = $8, unit_type = $9, variants = $10::jsonb, whatsapp_catalog_link = $11, image_url = $12, product_image_url = $12, in_stock = $13 WHERE id = $14 AND LOWER(username) = LOWER($1)`,
+            [cleanUser, catName, name, descStr, mrpVal, salePriceVal, summaryPrice, item_type, unit_type, jsonVariants, waUrl, imgUrl, inStockVal, id]
+          );
+          return res.json({ status: 'success', id, message: 'Product updated!' });
+        }
+
         const result = await pool.query(
-          `INSERT INTO products (username, name, price, description, ai_tag, item_type, unit_type, variants)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id`,
-          [username, name, summaryPrice, details, aiTag, item_type, unit_type, jsonVariants]
+          `INSERT INTO products (username, category, name, description, price, mrp, sale_price, item_type, unit_type, variants, whatsapp_catalog_link, image_url, product_image_url, in_stock)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $12, $13) RETURNING id`,
+          [cleanUser, catName, name, descStr, summaryPrice, mrpVal, salePriceVal, item_type, unit_type, jsonVariants, waUrl, imgUrl, inStockVal]
         );
         const newId = result.rows[0]?.id;
         return res.json({
           status: 'success',
-          message: `${item_type === 'service' ? 'Service' : 'Product'} saved to Catalog!`,
-          product: {
-            id: newId,
-            name,
-            price: summaryPrice,
-            details,
-            tag: aiTag,
-            item_type,
-            unit_type,
-            variants
-          }
+          id: newId,
+          message: 'Product saved to catalog!',
+          product: { id: newId, name, price: summaryPrice, mrp: mrpVal, sale_price: salePriceVal, category: catName, in_stock: inStockVal }
         });
       } catch (err: any) {
-        console.error('Failed to insert product in Neon DB:', err);
+        console.error('Failed to insert/update product in Neon DB:', err);
       }
     }
   }
 
+  // Fallback to in-memory catalog
   const newItem: CatalogItem = {
-    id: nextCatalogId++,
-    username,
+    id: id > 0 ? id : nextCatalogId++,
+    username: cleanUser,
     name,
     price: summaryPrice,
-    details,
-    tag: aiTag,
+    details: descStr,
+    tag: `<ITEM_${id || memoryCatalog.length + 1}>`,
     item_type: (item_type as any) || 'product',
     unit_type,
     variants,
+    whatsapp_catalog_link: waUrl,
+    image_url: imgUrl,
+    category: catName,
+    in_stock: inStockVal,
     created_at: new Date().toISOString()
   };
-  memoryCatalog.push(newItem);
+  if (id > 0) {
+    const idx = memoryCatalog.findIndex(m => m.id === id);
+    if (idx !== -1) memoryCatalog[idx] = newItem;
+    else memoryCatalog.push(newItem);
+  } else {
+    memoryCatalog.push(newItem);
+  }
 
   return res.json({
     status: 'success',
-    message: `${item_type === 'service' ? 'Service' : 'Product'} saved to Catalog!`,
+    id: newItem.id,
+    message: 'Product saved to catalog!',
     product: newItem
   });
 });
@@ -3261,7 +3530,7 @@ app.get('*', (_req: Request, res: Response) => {
 
 // START SERVER
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 EdutaAI Server listening on port ${PORT}`);
+  console.log(`🚀 WaMart Server listening on port ${PORT}`);
   try {
     await initNeonDatabase(memoryUsers);
   } catch (err: any) {

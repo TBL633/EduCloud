@@ -93,7 +93,7 @@ func sendNeonAuthOTP(email, fullName, password string) (bool, string) {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "EduCloud-SaaS/1.0")
+		req.Header.Set("User-Agent", "WaMart-SaaS/1.0")
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -154,7 +154,7 @@ func verifyNeonAuthOTP(email, code string) bool {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "EduCloud-SaaS/1.0")
+		req.Header.Set("User-Agent", "WaMart-SaaS/1.0")
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -221,7 +221,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isGlobalAdmin := dbRole == "admin" || strings.ToLower(dbUsername) == "admin" || strings.ToLower(dbEmail) == "admin@eduta.ai"
+	isGlobalAdmin := dbRole == "admin" || strings.ToLower(dbUsername) == "admin" || strings.ToLower(dbEmail) == "admin@wamart.ai" || strings.ToLower(dbEmail) == "admin@eduta.ai"
 	targetPortal := "business_portal"
 	if isGlobalAdmin {
 		targetPortal = "admin_portal"

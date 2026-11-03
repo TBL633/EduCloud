@@ -318,6 +318,220 @@ func ExtractAndPersistCustomerDetails(username, phone, text string) {
 	}
 }
 
+type CartItemDetail struct {
+	ProductID   string  `json:"product_id"`
+	ProductName string  `json:"product_name"`
+	UnitPrice   float64 `json:"unit_price"`
+	Qty         int     `json:"qty"`
+	LineTotal   float64 `json:"line_total"`
+}
+
+type CartCalculationResult struct {
+	Username      string           `json:"username"`
+	CustomerPhone string           `json:"customer_phone"`
+	TotalAmount   float64          `json:"total_amount"`
+	PaytmMid      string           `json:"paytm_mid"`
+	PaytmVpa      string           `json:"paytm_vpa"`
+	PayeeName     string           `json:"payee_name"`
+	Items         []CartItemDetail `json:"items"`
+	ItemCount     int              `json:"item_count"`
+}
+
+// UpdateCustomerProfileFromData updates customer profile with saved_name and saved_address
+func UpdateCustomerProfileFromData(username, customerPhone string, profile *AIProfileData) error {
+	if profile == nil {
+		return nil
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	if cleanPhone == "" {
+		return fmt.Errorf("empty customer phone number")
+	}
+
+	name := strings.TrimSpace(profile.Name)
+	addr := strings.TrimSpace(profile.Address)
+	if name == "" && addr == "" {
+		return nil
+	}
+
+	cp, _ := GetCustomerProfile(cleanUsr, cleanPhone)
+	if cp == nil {
+		cp = &CustomerProfile{
+			Username: cleanUsr,
+			WANumber: cleanPhone,
+		}
+	}
+	if name != "" {
+		cp.FullName = name
+	}
+	if addr != "" {
+		cp.DeliveryAddress = addr
+	}
+	_ = UpsertCustomerProfile(cleanUsr, cp)
+
+	if DB == nil {
+		return nil
+	}
+
+	query := `INSERT INTO customers (username, wa_number, full_name, saved_name, delivery_address, saved_address, updated_at)
+		VALUES ($1, $2, $3, $3, $4, $4, NOW())
+		ON CONFLICT (username, wa_number) DO UPDATE SET
+			full_name = CASE WHEN EXCLUDED.full_name != '' THEN EXCLUDED.full_name ELSE customers.full_name END,
+			saved_name = CASE WHEN EXCLUDED.saved_name != '' THEN EXCLUDED.saved_name ELSE customers.saved_name END,
+			delivery_address = CASE WHEN EXCLUDED.delivery_address != '' THEN EXCLUDED.delivery_address ELSE customers.delivery_address END,
+			saved_address = CASE WHEN EXCLUDED.saved_address != '' THEN EXCLUDED.saved_address ELSE customers.saved_address END,
+			updated_at = NOW()`
+	_, err := DB.Exec(query, cleanUsr, cleanPhone, name, addr)
+	if err != nil {
+		log.Printf("⚠️ UpdateCustomerProfileFromData error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
+		return err
+	}
+
+	log.Printf("👤 [Customer Profile Updated]: @%s (+%s) | Name: %s | Address: %s", cleanUsr, cleanPhone, name, addr)
+	return nil
+}
+
+// AddItemsToActiveCart inserts customer selected items into active_carts DB table
+func AddItemsToActiveCart(username, customerPhone string, cartItems []AICartItem) error {
+	if DB == nil || len(cartItems) == 0 {
+		return nil
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	if cleanPhone == "" {
+		return fmt.Errorf("empty customer phone number")
+	}
+
+	for _, item := range cartItems {
+		pID := strings.TrimSpace(item.ProductID)
+		if pID == "" {
+			continue
+		}
+		qty := item.Qty
+		if qty <= 0 {
+			qty = 1
+		}
+
+		query := `INSERT INTO active_carts (username, customer_phone, product_id, qty, updated_at)
+			VALUES ($1, $2, $3, $4, NOW())
+			ON CONFLICT (username, customer_phone, product_id) DO UPDATE SET
+				qty = active_carts.qty + EXCLUDED.qty,
+				updated_at = NOW()`
+		_, err := DB.Exec(query, cleanUsr, cleanPhone, pID, qty)
+		if err != nil {
+			log.Printf("⚠️ AddItemsToActiveCart error for @%s (+%s, Item: %s): %v", cleanUsr, cleanPhone, pID, err)
+		} else {
+			log.Printf("🛒 [Active Cart Updated]: @%s (+%s) | Product ID: %s | Qty: %d", cleanUsr, cleanPhone, pID, qty)
+		}
+	}
+	return nil
+}
+
+// CalculateCartTotalAndFetchCredentials executes the Math Engine: queries active_carts, joins products to calculate REAL total, fetches paytm credentials, and logs to console
+func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*CartCalculationResult, error) {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+
+	res := &CartCalculationResult{
+		Username:      cleanUsr,
+		CustomerPhone: cleanPhone,
+		Items:         []CartItemDetail{},
+	}
+
+	if DB == nil {
+		return res, fmt.Errorf("database connection not available")
+	}
+
+	query := `SELECT c.product_id, c.qty, COALESCE(p.name, 'Product #' || c.product_id), COALESCE(p.price, '0') 
+		FROM active_carts c 
+		LEFT JOIN products p ON (CAST(c.product_id AS TEXT) = CAST(p.id AS TEXT) OR LOWER(p.name) = LOWER(c.product_id)) AND LOWER(p.username) = LOWER(c.username)
+		WHERE LOWER(c.username) = LOWER($1) AND c.customer_phone = $2`
+
+	rows, err := DB.Query(query, cleanUsr, cleanPhone)
+	if err != nil {
+		log.Printf("⚠️ Math Engine Query Error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
+		return res, err
+	}
+	defer rows.Close()
+
+	var calculatedTotal float64 = 0
+	var itemCount int = 0
+	numRegex := regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
+
+	for rows.Next() {
+		var pID, pName, priceStr string
+		var qty int
+		if err := rows.Scan(&pID, &qty, &pName, &priceStr); err == nil {
+			unitPrice := 0.0
+			if match := numRegex.FindString(priceStr); match != "" {
+				fmt.Sscanf(match, "%f", &unitPrice)
+			}
+			lineTotal := unitPrice * float64(qty)
+			calculatedTotal += lineTotal
+			itemCount += qty
+
+			res.Items = append(res.Items, CartItemDetail{
+				ProductID:   pID,
+				ProductName: pName,
+				UnitPrice:   unitPrice,
+				Qty:         qty,
+				LineTotal:   lineTotal,
+			})
+		}
+	}
+
+	res.TotalAmount = calculatedTotal
+	res.ItemCount = itemCount
+
+	// Fetch Paytm Credentials from users table or tenant_payment_configs
+	var pMid, pVpa, bName string
+	errUsr := DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, '') 
+		FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&pMid, &pVpa, &bName)
+
+	if errUsr != nil || pMid == "" || pVpa == "" {
+		var tMid, tVpa, tName string
+		_ = DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, '') 
+			FROM tenant_payment_configs WHERE LOWER(username) = LOWER($1)`, cleanUsr).Scan(&tMid, &tVpa, &tName)
+		if pMid == "" {
+			pMid = tMid
+		}
+		if pVpa == "" {
+			pVpa = tVpa
+		}
+		if bName == "" {
+			bName = tName
+		}
+	}
+
+	res.PaytmMid = pMid
+	res.PaytmVpa = pVpa
+	res.PayeeName = bName
+
+	log.Printf("🧮 [MATH ENGINE CALCULATION SUCCESS]:")
+	log.Printf("   • Account: @%s | Customer: +%s", cleanUsr, cleanPhone)
+	log.Printf("   • Real Total Amount: ₹%.2f (%d items)", res.TotalAmount, res.ItemCount)
+	log.Printf("   • Items Breakdown: %+v", res.Items)
+	log.Printf("   • Payment Credentials: Paytm MID = '%s' | Paytm VPA = '%s' | Payee Name = '%s'", res.PaytmMid, res.PaytmVpa, res.PayeeName)
+
+	// Save calculated state to customer_order_states
+	if len(res.Items) > 0 {
+		itemsJSON, _ := json.Marshal(res.Items)
+		ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+		_, _ = DB.Exec(`INSERT INTO customer_order_states 
+			(username, customer_phone, items, total_amount, payment_mode, payment_status, order_status, order_id, updated_at)
+			VALUES ($1, $2, $3::jsonb, $4, 'online', 'unpaid', 'in_progress', $5, NOW())
+			ON CONFLICT (username, customer_phone) DO UPDATE SET
+				items = EXCLUDED.items,
+				total_amount = EXCLUDED.total_amount,
+				payment_mode = 'online',
+				order_id = EXCLUDED.order_id,
+				updated_at = NOW()`,
+			cleanUsr, cleanPhone, string(itemsJSON), res.TotalAmount, ordID)
+	}
+
+	return res, nil
+}
+
 // ResolveOrderAmountAndID resolves the order total amount and order ID for dynamic payment QR generation
 func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText string) (string, string) {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
@@ -326,8 +540,15 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 	amountStr := "0"
 	orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
 
-	// 1. Check customer_order_states first
-	if DB != nil {
+	// 1. Math Engine calculation from active_carts
+	calcRes, err := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
+	if err == nil && calcRes != nil && calcRes.TotalAmount > 0 {
+		amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
+		log.Printf("🧮 [ResolveOrderAmountAndID Math Engine Success]: Total ₹%s for @%s (+%s)", amountStr, cleanUsr, cleanPhone)
+	}
+
+	// 2. Check customer_order_states second if cart was cleared or pre-calculated
+	if (amountStr == "0" || amountStr == "0.00" || amountStr == "") && DB != nil {
 		var dbOrd string
 		var dbAmt float64
 		_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE username=$1 AND customer_phone=$2 LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
@@ -339,7 +560,7 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 		}
 	}
 
-	// 2. Check for Rs. or ₹ or amount in replyText or customer text
+	// 3. Fallback regex on replyText or incomingText
 	if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
 		priceRegex := regexp.MustCompile(`(?i)(?:rs\.?|inr|₹)\s*([0-9]+(?:\.[0-9]+)?)`)
 		if pMatches := priceRegex.FindAllStringSubmatch(replyText, -1); len(pMatches) > 0 {
@@ -354,5 +575,69 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 	}
 
 	return amountStr, orderIDStr
+}
+
+// DispatchCloudflareWorkerQR triggers Cloudflare Worker /generate, delivers QR image via whatsmeow, and calls /start-check
+func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCalculationResult) (string, error) {
+	if calcRes == nil {
+		return "", fmt.Errorf("calcRes is nil")
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+
+	amtStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
+	if calcRes.TotalAmount <= 0 {
+		amtStr = "10.00"
+	}
+
+	ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+	vpa := strings.TrimSpace(calcRes.PaytmVpa)
+	if vpa == "" {
+		vpa = "paytmqr2810050501111585i1a141s9@paytm"
+	}
+	payee := strings.TrimSpace(calcRes.PayeeName)
+	if payee == "" {
+		payee = "WaMart Store"
+	}
+	pMid := strings.TrimSpace(calcRes.PaytmMid)
+	if pMid == "" {
+		pMid = "WaMartMerchantMID"
+	}
+
+	cloudName := "hq67khm3" // Fixed correct Cloudinary Cloud Name as requested
+
+	// 1. POST request to Cloudflare Worker /generate URL
+	qrURL, imgBytes, err := payment.GenerateWorkerDynamicQR(vpa, payee, ordID, amtStr, cloudName)
+	if err != nil {
+		log.Printf("⚠️ [Cloudflare Worker QR Error]: %v", err)
+		return "", err
+	}
+
+	log.Printf("⚡ [Cloudflare Worker Dynamic QR Generated] Order: %s | URL: %s | Bytes: %d", ordID, qrURL, len(imgBytes))
+
+	// 2. Send ImageMessage via whatsmeow using static thumbnail
+	client := GetOrCreateClient(cleanUsr)
+	if client != nil && client.IsLoggedIn() {
+		_ = EnsureConnected(client)
+		caption := fmt.Sprintf("📱 *Scan & Pay via UPI / Paytm*\n\n• Order ID: *%s*\n• Total Amount: *₹%s*\n• Payee: *%s*\n\n_Payment hone par aapka order automatic confirm ho jayega!_ 🙏", ordID, amtStr, payee)
+		errSend := SendImageFromURL(client, cleanPhone, qrURL, caption)
+		if errSend != nil {
+			log.Printf("⚠️ Error delivering Worker QR image to +%s: %v", cleanPhone, errSend)
+		} else {
+			log.Printf("⚡ [Cloudflare Worker QR Image Delivered] to +%s", cleanPhone)
+			PushToLiveChat(cleanUsr, cleanPhone, caption, "outgoing_ai")
+		}
+	}
+
+	// 3. Immediately trigger Worker's /start-check endpoint for background polling
+	webhookURL := payment.GetAppWebhookURL()
+	go func() {
+		errCheck := payment.StartWorkerPaymentCheck(pMid, ordID, webhookURL)
+		if errCheck != nil {
+			log.Printf("⚠️ [Worker Start-Check Error] for %s: %v", ordID, errCheck)
+		}
+	}()
+
+	return qrURL, nil
 }
 

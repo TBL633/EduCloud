@@ -139,6 +139,9 @@ func migrateSchema() {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS import_catalog_details BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS automation_access BOOLEAN DEFAULT true;`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`,
 		`CREATE TABLE IF NOT EXISTS tenant_whatsapp_sessions (
 			username VARCHAR(100) PRIMARY KEY,
@@ -180,6 +183,21 @@ func migrateSchema() {
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_catalog_link TEXT DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_data TEXT DEFAULT '';`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS in_stock BOOLEAN DEFAULT true;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INT DEFAULT 0;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS mrp NUMERIC(10, 2) DEFAULT 0;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10, 2) DEFAULT 0;`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS product_image_url TEXT DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS categories (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(100) NOT NULL,
+			category_name VARCHAR(255) NOT NULL,
+			category_image_url TEXT DEFAULT '',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			CONSTRAINT unq_cat_user_name UNIQUE (username, category_name)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_categories_usr ON categories(username);`,
 		`CREATE TABLE IF NOT EXISTS customer_chats (
 			id SERIAL PRIMARY KEY,
 			username VARCHAR(100) NOT NULL,
@@ -246,6 +264,8 @@ func migrateSchema() {
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION DEFAULT 0;`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION DEFAULT 0;`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_order_details TEXT DEFAULT '';`,
+		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_address TEXT DEFAULT '';`,
+		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_name VARCHAR(255) DEFAULT '';`,
 		`CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;`,
@@ -268,6 +288,16 @@ func migrateSchema() {
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			CONSTRAINT unq_order_usr_cust UNIQUE (username, customer_phone)
 		);`,
+		`CREATE TABLE IF NOT EXISTS active_carts (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(100) NOT NULL,
+			customer_phone VARCHAR(50) NOT NULL,
+			product_id VARCHAR(100) NOT NULL,
+			qty INT NOT NULL DEFAULT 1,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_active_carts_usr_phone ON active_carts(username, customer_phone);`,
 	}
 
 	for _, q := range queries {
@@ -291,7 +321,7 @@ func createDefaultAdmin() {
 		hashedPass := []byte("admin123")
 		_, err := DB.Exec(`INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
 			VALUES ($1, $2, $3, 'admin', 'admin', 'Master Administrator', true)`,
-			adminUser, "admin@eduta.ai", string(hashedPass))
+			adminUser, "admin@wamart.ai", string(hashedPass))
 		if err == nil {
 			log.Println("👑 Master Admin initialized in Neon DB.")
 		}

@@ -848,7 +848,7 @@ func FetchReverseGeocodeLocation(lat, lon float64) (shortPlace string, fullAddre
 		return "", ""
 	}
 	// OpenStreetMap requires a distinctive User-Agent header
-	req.Header.Set("User-Agent", "EduCloud-WhatsApp-Bot/1.0 (Location-Resolver)")
+	req.Header.Set("User-Agent", "WaMart-WhatsApp-Bot/1.0 (Location-Resolver)")
 
 	resp, err := nominatimHTTPClient.Do(req)
 	if err != nil {
@@ -1123,7 +1123,7 @@ func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone 
 		"• *Time*: %s\n\n"+
 		"📦 *Order / Inquiry Message*:\n\"%s\"\n\n"+
 		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s\n\n"+
-		"EduCloud Automated Commerce Gateway",
+		"WaMart Automated Commerce Gateway",
 		cleanUsr, cleanCustomer, paymentMethodStr, leadStatus, locTime, leadDetails, cleanCustomer)
 
 	// Dispatch Automated WhatsApp Lead Alert directly to notification_phone
@@ -1192,7 +1192,7 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 		"• *Status*: Payment Verified & Order Confirmed\n"+
 		"• *Time*: %s\n\n"+
 		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s\n\n"+
-		"EduCloud Automated Commerce Gateway",
+		"WaMart Automated Commerce Gateway",
 		cleanUsr, cleanPhone, amount, orderID, txnID, locTime, cleanPhone)
 
 	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
@@ -1311,7 +1311,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		// Zero-Delay Smart Human-Override Check (Read Receipt Race Condition)
 		if _, isReadByHuman := MessageReadByHuman.Load(string(v.Info.ID)); isReadByHuman {
-			log.Printf("👤 Skipping AI - Human is active (Message %s read by business owner)", string(v.Info.ID))
+			log.Printf("👤 Human took over - Skipping AI pipeline for message %s", string(v.Info.ID))
 			return
 		}
 

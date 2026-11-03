@@ -52,9 +52,29 @@ CREATE TABLE IF NOT EXISTS products (
 ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_catalog_link TEXT DEFAULT '';
-ALTER TABLE products DROP COLUMN IF EXISTS image_url;
-DROP TABLE IF EXISTS neon_media_objects CASCADE;
-DROP TABLE IF EXISTS user_media CASCADE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS in_stock BOOLEAN DEFAULT true;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INT DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS mrp NUMERIC(10, 2) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10, 2) DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS product_image_url TEXT DEFAULT '';
+
+-- 3B. Categories Table
+CREATE TABLE IF NOT EXISTS categories (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+    category_name VARCHAR(255) NOT NULL,
+    category_image_url TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_cat_user_name UNIQUE (username, category_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_username ON categories(username);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_products_username ON products(username);
 
@@ -115,7 +135,7 @@ CREATE INDEX IF NOT EXISTS idx_campaign_logs_camp_id ON campaign_logs(campaign_i
 INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
 VALUES (
     'admin',
-    'admin@eduta.ai',
+    'admin@wamart.ai',
     'admin123', -- plain lightweight password for admin
     'admin',
     'admin',
@@ -160,7 +180,22 @@ CREATE TABLE IF NOT EXISTS customers (
     CONSTRAINT unq_cust_usr_wa UNIQUE (username, wa_number)
 );
 CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_address TEXT DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_name VARCHAR(255) DEFAULT '';
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS max_delivery_radius_km DOUBLE PRECISION DEFAULT 15.0;
+
+-- 6. Active Carts Table (State & Memory)
+CREATE TABLE IF NOT EXISTS active_carts (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    customer_phone VARCHAR(50) NOT NULL,
+    product_id VARCHAR(100) NOT NULL,
+    qty INT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_active_carts_usr_phone ON active_carts(username, customer_phone);
 

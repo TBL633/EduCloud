@@ -26,7 +26,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
-	log.Println("🚀 Starting EdutaAI Multi-Tenant SaaS & Marketing Gateway...")
+	log.Println("🚀 Starting WaMart Multi-Tenant SaaS & Marketing Gateway...")
 
 	// Aggressive GC tuning for Render Free Tier (512MB RAM constraint)
 	// Triggers GC when heap expands by 20% to keep memory < 25MB
@@ -105,6 +105,7 @@ func main() {
 	http.HandleFunc("/api/media", corsMiddleware(api.MediaCatalogHandler))
 
 	// Business Workspace Endpoints (Zero Fake Data)
+	http.HandleFunc("/api/categories", corsMiddleware(api.CategoriesHandler))
 	http.HandleFunc("/api/products", corsMiddleware(api.ProductsHandler))
 	http.HandleFunc("/api/business/dashboard", corsMiddleware(api.BusinessDashboardHandler))
 	http.HandleFunc("/api/leads", corsMiddleware(api.LeadsHandler))
