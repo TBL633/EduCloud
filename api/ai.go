@@ -168,12 +168,6 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-			if err != nil {
-				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update AI settings in database: " + err.Error()})
-				return
-			}
-		}
-
 		// Purge RAM cache so updated settings take effect immediately
 		whatsapp.InvalidateUserConfigCache(username)
 
