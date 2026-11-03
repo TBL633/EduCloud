@@ -515,9 +515,15 @@ func GetCatalogContext(username string) string {
 // ParseAIResponseJSON parses the AI state machine JSON output, extracts reply_to_customer, logs formatted JSON, and handles payment triggers
 func ParseAIResponseJSON(rawResponse string) (*AIResponseStateJSON, string, error) {
 	trimmed := strings.TrimSpace(rawResponse)
-	codeBlockRegex := regexp.MustCompile(`(?s)^\s*```(?:json)?\s*(.*?)\s*```\s*$`)
-	if matches := codeBlockRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
-		trimmed = strings.TrimSpace(matches[1])
+	// Strip markdown code fences if present (e.g. ```json ... ```)
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		if strings.HasPrefix(strings.ToLower(trimmed), "json") {
+			trimmed = strings.TrimSpace(trimmed[4:])
+		}
+		if idx := strings.LastIndex(trimmed, "```"); idx != -1 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
 	}
 
 	firstBrace := strings.Index(trimmed, "{")
