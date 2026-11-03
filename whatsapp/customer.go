@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"wa-server/payment"
 )
 
 // CustomerProfile represents persistent profile details for a WhatsApp customer
