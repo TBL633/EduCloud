@@ -7,14 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"wa-server/payment"
 )
 
 // ChatMessage structure for Sliding Window
@@ -535,6 +532,20 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, catalogContext)
 	}
 
+	// Returning Customer Context Injection
+	custProfile, _ := GetCustomerProfile(cleanUsr, cleanPhone)
+	if custProfile != nil && (custProfile.FullName != "" || custProfile.DeliveryAddress != "") {
+		cName := custProfile.FullName
+		if cName == "" {
+			cName = "Customer"
+		}
+		cAddr := custProfile.DeliveryAddress
+		if cAddr == "" {
+			cAddr = "address on file"
+		}
+		stableSysPrompt += fmt.Sprintf("\n\nCUSTOMER CONTEXT: This is a returning customer named %s. Their saved address is %s. Greet them back. If they order, ask if they want delivery to their saved address or a new one.", cName, cAddr)
+	}
+
 	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
 	if len(history) == 0 || history[len(history)-1].Content != incomingText {
 		history = updateSlidingWindowRAM(cleanUsr, cleanPhone, "user", incomingText)
@@ -607,7 +618,25 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		lang = "Hinglish"
 	}
 
-	stableSysPrompt := BuildUniversalSystemPrompt(bName, bType, lang, cfg.CatalogText)
+	// Customer Profile Persistence & Context Injection for Returning Customers
+	custProfile, _ := GetCustomerProfile(cleanUsr, cleanPhone)
+	var custContext string
+	if custProfile != nil && (custProfile.FullName != "" || custProfile.DeliveryAddress != "") {
+		cName := custProfile.FullName
+		if cName == "" {
+			cName = "Customer"
+		}
+		cAddr := custProfile.DeliveryAddress
+		if cAddr == "" {
+			cAddr = "address on file"
+		}
+		custContext = fmt.Sprintf("\n\nCUSTOMER CONTEXT: This is a returning customer named %s. Their saved address is %s. Greet them back. If they order, ask if they want delivery to their saved address or a new one.", cName, cAddr)
+	}
+
+	// Update customer profile asynchronously from incoming text
+	go ExtractAndPersistCustomerDetails(cleanUsr, cleanPhone, incomingText)
+
+	stableSysPrompt := BuildUniversalSystemPrompt(bName, bType, lang, cfg.CatalogText) + custContext
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, stableSysPrompt, history)
 	if err == nil && aiResponse != "" {
@@ -646,6 +675,21 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 						raw_json = EXCLUDED.raw_json,
 						updated_at = NOW()`,
 					cleanUsr, cleanPhone, delPhone, custName, delAddr, string(itemsBytes), totAmt, payMode, payStatus, ordID, string(rawBytes))
+
+				// Persist into Customer Profiles (Neon DB)
+				if custName != "" || delAddr != "" || delPhone != "" {
+					go func(u, ph, nm, ad, dph, ord string, amt float64) {
+						cp := &CustomerProfile{
+							Username:         u,
+							WANumber:         ph,
+							FullName:         nm,
+							DeliveryAddress:  ad,
+							ContactPhone:     dph,
+							LastOrderDetails: fmt.Sprintf("Order: %s | Amount: ₹%.2f", ord, amt),
+						}
+						_ = UpsertCustomerProfile(u, cp)
+					}(cleanUsr, cleanPhone, custName, delAddr, delPhone, ordID, totAmt)
+				}
 			}
 			aiResponse = jsonRegex.ReplaceAllString(aiResponse, "")
 		}
@@ -653,85 +697,18 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 		// 2. Process [INITIATE_PAYMENT_QR] and <PAYMENT_TRIGGER>
 		hasPaymentTrigger := strings.Contains(aiResponse, "[INITIATE_PAYMENT_QR]")
 		payRegex := regexp.MustCompile(`(?i)<PAYMENT_TRIGGER\s+amount=["']?([0-9.]+)["']?\s+order_id=["']?([^"'>]+)["']?\s*/?>`)
-		payMatch := payRegex.FindStringSubmatch(aiResponse)
-		var matchedImg string
+		if payRegex.MatchString(aiResponse) {
+			hasPaymentTrigger = true
+			aiResponse = payRegex.ReplaceAllString(aiResponse, "[INITIATE_PAYMENT_QR]")
+		}
 
-		if (hasPaymentTrigger || len(payMatch) > 2) && cfg.HasOnlinePayment {
-			amountStr := "0"
-			orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
-
-			if len(payMatch) > 2 {
-				amountStr = strings.TrimSpace(payMatch[1])
-				if o := strings.TrimSpace(payMatch[2]); o != "" && o != "ORDER_ID" {
-					orderIDStr = o
-				}
-			} else if DB != nil {
-				var dbOrd string
-				var dbAmt float64
-				_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE username=$1 AND customer_phone=$2 LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
-				if dbOrd != "" {
-					orderIDStr = dbOrd
-				}
-				if dbAmt > 0 {
-					amountStr = fmt.Sprintf("%.2f", dbAmt)
-				}
+		if hasPaymentTrigger {
+			if !cfg.HasOnlinePayment {
+				aiResponse = strings.ReplaceAll(aiResponse, "[INITIATE_PAYMENT_QR]", "✅ *Aapka Cash On Delivery (COD) Order Confirm ho gaya hai!* 🚚\nHamari team jald hi aapka order dispatch karegi. Delivery ke time cash payment ready rakhein.\n\nDhanyawad! 🙏")
 			}
-
-			if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
-				priceRegex := regexp.MustCompile(`(?i)(?:rs\.?|inr|₹)\s*([0-9]+(?:\.[0-9]+)?)`)
-				if pMatches := priceRegex.FindAllStringSubmatch(aiResponse, -1); len(pMatches) > 0 {
-					amountStr = pMatches[len(pMatches)-1][1]
-				} else if pMatches := priceRegex.FindAllStringSubmatch(incomingText, -1); len(pMatches) > 0 {
-					amountStr = pMatches[len(pMatches)-1][1]
-				}
-			}
-
-			vpa := cfg.MerchantVpa
-			if vpa == "" {
-				vpa = "paytm.s1f6syj@pty"
-			}
-			pName := cfg.PayeeName
-			if pName == "" {
-				pName = bName
-			}
-			if pName == "" {
-				pName = cleanUsr
-			}
-
-			// Standard UPI string fallback
-			upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
-
-			// 1. Dynamic QR Generation via Cloudflare Worker
-			workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "")
-			if qrErr == nil && workerQRURL != "" {
-				matchedImg = workerQRURL
-				log.Printf("⚡ [Cloudflare Worker Dynamic QR] Generated for Order: %s | URL: %s", orderIDStr, workerQRURL)
-			} else {
-				// Reliable fallback QR server if Worker call fails
-				matchedImg = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
-				log.Printf("ℹ️ [Cloudflare Worker Fallback] Using standard QR for Order %s: %v", orderIDStr, qrErr)
-			}
-
-			// 2. Async Payment Verification (Webhook Pattern - No polling on Render server)
-			mid := cfg.PaytmMid
-			if mid != "" {
-				go func(m, ord string) {
-					errPoll := payment.StartWorkerPaymentCheck(m, ord, "")
-					if errPoll != nil {
-						log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
-					}
-				}(mid, orderIDStr)
-			}
-
-			paymentDetailsBlock := fmt.Sprintf("\n\n💳 *ONLINE PAYMENT LINK & QR CODE* 💳\n• Amount: ₹%s\n• Order ID: %s\n• Click to Pay via UPI (GPay/PhonePe/Paytm):\n%s\n\n(Scan the QR code above or click the link to complete payment)", amountStr, orderIDStr, upiURI)
-
-			if hasPaymentTrigger {
-				aiResponse = strings.ReplaceAll(aiResponse, "[INITIATE_PAYMENT_QR]", paymentDetailsBlock)
-			} else {
-				aiResponse = payRegex.ReplaceAllString(aiResponse, "") + paymentDetailsBlock
-			}
-		} else if hasPaymentTrigger {
-			aiResponse = strings.ReplaceAll(aiResponse, "[INITIATE_PAYMENT_QR]", "✅ *Aapka Cash On Delivery (COD) Order Confirm ho gaya hai!* 🚚\nHamari team jald hi aapka order dispatch karegi. Delivery ke time cash payment ready rakhein.\n\nDhanyawad! 🙏")
+			// When cfg.HasOnlinePayment is true, [INITIATE_PAYMENT_QR] is preserved in aiResponse.
+			// The whatsmeow EventHandler intercepts it: sends text before QR, generates Cloudflare Worker dynamic QR,
+			// uploads to whatsmeow, initiates /start-check polling, and sends the follow-up text.
 		}
 
 		return strings.TrimSpace(aiResponse), matchedImg

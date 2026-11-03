@@ -214,6 +214,7 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = DB.Exec("DELETE FROM products WHERE LOWER(username)=LOWER($1)", req.Username)
 		_, _ = DB.Exec("DELETE FROM leads WHERE LOWER(username)=LOWER($1)", req.Username)
 		_, _ = DB.Exec("DELETE FROM customer_chats WHERE LOWER(username)=LOWER($1)", req.Username)
+		_, _ = DB.Exec("DELETE FROM tenant_whatsapp_sessions WHERE LOWER(username)=LOWER($1)", req.Username)
 		_, _ = DB.Exec("DELETE FROM users WHERE LOWER(username)=LOWER($1)", req.Username)
 	}
 

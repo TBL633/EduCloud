@@ -144,3 +144,23 @@ CREATE TABLE IF NOT EXISTS customer_order_states (
     UNIQUE(username, customer_phone)
 );
 CREATE INDEX IF NOT EXISTS idx_order_states_user_phone ON customer_order_states(LOWER(username), customer_phone);
+
+CREATE TABLE IF NOT EXISTS customers (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL DEFAULT '',
+    wa_number VARCHAR(50) NOT NULL,
+    full_name VARCHAR(255) DEFAULT '',
+    delivery_address TEXT DEFAULT '',
+    contact_phone VARCHAR(50) DEFAULT '',
+    latitude DOUBLE PRECISION DEFAULT 0,
+    longitude DOUBLE PRECISION DEFAULT 0,
+    last_order_details TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unq_cust_usr_wa UNIQUE (username, wa_number)
+);
+CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS max_delivery_radius_km DOUBLE PRECISION DEFAULT 15.0;
+

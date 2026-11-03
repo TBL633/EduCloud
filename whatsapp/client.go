@@ -11,11 +11,14 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"wa-server/payment"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -46,6 +49,9 @@ var (
 	// Live Chat Listeners (Browser SSE channels per user)
 	LiveChatStreams = make(map[string]chan map[string]string)
 	StreamLock      sync.Mutex
+
+	// Smart Human-Override: Tracks Message ID -> true when read by human business owner (Read Receipt Race Condition)
+	MessageReadByHuman sync.Map
 
 	// Universal Static JPEG Thumbnail (loaded in memory on startup, zero on-the-fly resizing)
 	UniversalThumbnail []byte
@@ -242,12 +248,127 @@ func InitStore(dbURL string, dbConn *sql.DB) {
 	log.Println("⚠️ Whatsmeow Store: No database URL available.")
 }
 
+// SaveSessionToDB persists tenant session to both tenant_whatsapp_sessions and users tables
+func SaveSessionToDB(username, deviceJID, phone, pushName string) {
+	if DB == nil {
+		return
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if cleanUsr == "" {
+		return
+	}
+	cleanPhone := FormatPhone(phone)
+	if cleanPhone == "" {
+		cleanPhone = regexp.MustCompile(`\D`).ReplaceAllString(deviceJID, "")
+		cleanPhone = strings.Split(cleanPhone, ".")[0]
+	}
+
+	go func() {
+		// 1. Upsert into tenant_whatsapp_sessions
+		sessionQuery := `
+			INSERT INTO tenant_whatsapp_sessions (username, device_jid, phone, status, push_name, linked_at, updated_at)
+			VALUES ($1, $2, $3, 'Connected', $4, NOW(), NOW())
+			ON CONFLICT (username) DO UPDATE SET
+				device_jid = EXCLUDED.device_jid,
+				phone = COALESCE(NULLIF(EXCLUDED.phone, ''), tenant_whatsapp_sessions.phone),
+				status = 'Connected',
+				push_name = COALESCE(NULLIF(EXCLUDED.push_name, ''), tenant_whatsapp_sessions.push_name),
+				updated_at = NOW();
+		`
+		_, _ = DB.Exec(sessionQuery, cleanUsr, deviceJID, cleanPhone, pushName)
+
+		// 2. Sync to users table (guarantees backward compatibility and user login profile)
+		userQuery := `
+			INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
+			VALUES ($1, $1 || '@gmail.com', 'pass123', 'user', 'business_user', $1 || ' Account', $2, $3, 'Connected', NOW(), NOW())
+			ON CONFLICT (username) DO UPDATE SET
+				wa_jid = EXCLUDED.wa_jid,
+				phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
+				status = 'Connected',
+				linked_at = COALESCE(users.linked_at, NOW());
+		`
+		_, _ = DB.Exec(userQuery, cleanUsr, cleanPhone, cleanPhone)
+		_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=COALESCE(linked_at, NOW()) WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", cleanPhone, cleanUsr)
+		log.Printf("💾 [Persistent Session Saved] Device %s (%s) saved for @%s in Neon PostgreSQL.", cleanPhone, deviceJID, cleanUsr)
+	}()
+}
+
+// FindPairedDeviceForUser searches StoreContainer for an existing paired session for this user
+func FindPairedDeviceForUser(username string) *store.Device {
+	if StoreContainer == nil {
+		return nil
+	}
+
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+
+	var savedJID, savedPhone, savedDeviceJID string
+	if DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(device_jid, ''), COALESCE(phone, '') FROM tenant_whatsapp_sessions WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&savedDeviceJID, &savedPhone)
+		_ = DB.QueryRow("SELECT COALESCE(wa_jid, ''), COALESCE(phone, '') FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1)", cleanUsr).Scan(&savedJID, &savedPhone)
+	}
+
+	allDevices, err := StoreContainer.GetAllDevices(context.Background())
+	if err != nil || len(allDevices) == 0 {
+		return nil
+	}
+
+	var pairedDevices []*store.Device
+	for _, dev := range allDevices {
+		if dev != nil && dev.ID != nil && dev.ID.User != "" {
+			pairedDevices = append(pairedDevices, dev)
+		}
+	}
+
+	if len(pairedDevices) == 0 {
+		return nil
+	}
+
+	// 1. Exact match by saved device JID (e.g. 917706070633.0:12@s.whatsapp.net)
+	if savedDeviceJID != "" {
+		for _, dev := range pairedDevices {
+			if dev.ID.String() == savedDeviceJID {
+				return dev
+			}
+		}
+	}
+
+	// 2. Match by normalized phone digits (10-digit mobile suffix)
+	targetDigits := regexp.MustCompile(`\D`).ReplaceAllString(savedJID, "")
+	if targetDigits == "" {
+		targetDigits = regexp.MustCompile(`\D`).ReplaceAllString(savedPhone, "")
+	}
+
+	if targetDigits != "" {
+		for _, dev := range pairedDevices {
+			devUser := dev.ID.User
+			devDigits := regexp.MustCompile(`\D`).ReplaceAllString(devUser, "")
+			if devUser == savedJID || devDigits == targetDigits {
+				return dev
+			}
+			if len(devDigits) >= 10 && len(targetDigits) >= 10 {
+				if devDigits[len(devDigits)-10:] == targetDigits[len(targetDigits)-10:] {
+					return dev
+				}
+			}
+		}
+	}
+
+	// 3. Fallback: If only 1 paired device exists in PostgreSQL store across the system,
+	// bind it to this user so redeploy NEVER leaves the user stranded!
+	if len(pairedDevices) == 1 {
+		return pairedDevices[0]
+	}
+
+	return nil
+}
+
 // Multi-tenant WhatsApp Client: Load from Neon Postgres using saved wa_jid or create new
 func GetOrCreateClient(username string) *whatsmeow.Client {
 	ClientsLock.Lock()
 	defer ClientsLock.Unlock()
 
-	if c, exists := ActiveClients[username]; exists {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if c, exists := ActiveClients[cleanUsr]; exists && c != nil {
 		return c
 	}
 
@@ -257,51 +378,25 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	}
 
 	if StoreContainer == nil {
-		log.Printf("⚠️ StoreContainer is nil; cannot create WhatsApp client for @%s", username)
+		log.Printf("⚠️ StoreContainer is nil; cannot create WhatsApp client for @%s", cleanUsr)
 		return nil
 	}
 
-	var deviceStore *store.Device
-	var savedJID string
-	if DB != nil {
-		_ = DB.QueryRow("SELECT COALESCE(wa_jid, '') FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&savedJID)
-	}
+	// 1. Try to find existing paired device for this user from Neon DB sqlstore
+	deviceStore := FindPairedDeviceForUser(cleanUsr)
 
-	// 1. If user previously paired, retrieve their exact session from Neon PostgreSQL sqlstore
-	if savedJID != "" {
-		cleanSaved := strings.Split(strings.Split(savedJID, "@")[0], ".")[0]
-		cleanSaved = strings.TrimSpace(cleanSaved)
-
-		allDevices, err := StoreContainer.GetAllDevices(context.Background())
-		if err == nil {
-			for _, dev := range allDevices {
-				if dev != nil && dev.ID != nil {
-					cleanDevUser := strings.Split(strings.Split(dev.ID.User, "@")[0], ".")[0]
-					cleanDevUser = strings.TrimSpace(cleanDevUser)
-					if cleanDevUser != "" && (cleanDevUser == cleanSaved || dev.ID.User == savedJID || dev.ID.String() == savedJID) {
-						deviceStore = dev
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// 2. Strict User Isolation: New unlinked device allocation for this user
-	// Every user gets their own dedicated device; NEVER borrow or inherit another customer's WhatsApp device!
+	// 2. If no paired device exists, ONLY THEN allocate a new device
 	if deviceStore == nil {
 		deviceStore = StoreContainer.NewDevice()
 	}
 
-	// Device Socket Conflict Prevention:
-	// If another account is ALREADY running a WhatsApp client for the exact same device JID,
-	// reuse that running client instance instead of opening a second conflicting WebSocket!
+	// 3. Prevent duplicate active client socket conflicts
 	if deviceStore != nil && deviceStore.ID != nil {
 		for otherUsr, otherClient := range ActiveClients {
-			if otherUsr != username && otherClient != nil && otherClient.Store != nil && otherClient.Store.ID != nil {
+			if otherUsr != cleanUsr && otherClient != nil && otherClient.Store != nil && otherClient.Store.ID != nil {
 				if otherClient.Store.ID.User == deviceStore.ID.User {
-					ActiveClients[username] = otherClient
-					log.Printf("🔗 Reusing active WhatsApp client connection for @%s (shares device %s with @%s)", username, deviceStore.ID.User, otherUsr)
+					ActiveClients[cleanUsr] = otherClient
+					log.Printf("🔗 Reusing active WhatsApp client connection for @%s (shares device %s with @%s)", cleanUsr, deviceStore.ID.User, otherUsr)
 					return otherClient
 				}
 			}
@@ -309,15 +404,15 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	}
 
 	// Low-RAM logger: suppresses noisy traces (<2MB RAM per WhatsApp instance)
-	clientLog := waLog.Stdout("Client-"+username, "ERROR", false)
+	clientLog := waLog.Stdout("Client-"+cleanUsr, "ERROR", false)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
 
 	// Incoming Messages & Events Listener
 	client.AddEventHandler(func(evt interface{}) {
-		handleWhatsAppEvents(username, client, evt)
+		handleWhatsAppEvents(cleanUsr, client, evt)
 	})
 
-	ActiveClients[username] = client
+	ActiveClients[cleanUsr] = client
 
 	if client.Store.ID == nil {
 		qrChan, err := client.GetQRChannel(context.Background())
@@ -326,45 +421,24 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 				for evt := range qrChan {
 					if evt.Event == "code" {
 						ClientsLock.Lock()
-						QRChannelMap[username] = evt.Code
+						QRChannelMap[cleanUsr] = evt.Code
 						ClientsLock.Unlock()
 					} else if evt.Event == "success" {
 						ClientsLock.Lock()
-						QRChannelMap[username] = ""
+						QRChannelMap[cleanUsr] = ""
 						ClientsLock.Unlock()
-						if client.Store.ID != nil && DB != nil {
-							jidUser := client.Store.ID.User
-							upsertQuery := `
-								INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-								VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
-								ON CONFLICT (username) DO UPDATE SET
-									wa_jid = EXCLUDED.wa_jid,
-									phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
-									status = 'Connected',
-									linked_at = NOW();
-							`
-							_, _ = DB.Exec(upsertQuery, username, jidUser)
-	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidUser, username)
+						if client.Store.ID != nil {
+							SaveSessionToDB(cleanUsr, client.Store.ID.String(), client.Store.ID.User, "")
 						}
 					}
 				}
 			}()
 		}
-		ConnectWithAutoRetry(client, username)
+		ConnectWithAutoRetry(client, cleanUsr)
 	} else {
-		ConnectWithAutoRetry(client, username)
-		if DB != nil && client.Store.ID != nil {
-			jidUser := client.Store.ID.User
-			upsertQuery := `
-				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
-				ON CONFLICT (username) DO UPDATE SET
-					wa_jid = EXCLUDED.wa_jid,
-					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
-					status = 'Connected',
-					linked_at = NOW();
-			`
-			_, _ = DB.Exec(upsertQuery, username, jidUser)
+		ConnectWithAutoRetry(client, cleanUsr)
+		if client.Store.ID != nil {
+			SaveSessionToDB(cleanUsr, client.Store.ID.String(), client.Store.ID.User, "")
 		}
 	}
 
@@ -422,15 +496,18 @@ func ConnectWithAutoRetry(client *whatsmeow.Client, username string) {
 			}
 
 			err := client.Connect()
-			if err == nil && client.IsConnected() {
-				log.Printf("✅ WhatsApp WebSocket connected successfully for @%s (Attempt %d)", username, attempt)
-				// Send immediate PresenceAvailable so WhatsApp server knows device is Online and routes messages in 0ms!
-				_ = client.SendPresence(context.Background(), types.PresenceAvailable)
-				if DB != nil && client.Store != nil && client.Store.ID != nil {
-					jidUser := client.Store.ID.User
-					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected' WHERE LOWER(username)=LOWER($2)", jidUser, username)
+			if err == nil || (err != nil && strings.Contains(err.Error(), "already connected")) {
+				for w := 0; w < 15; w++ {
+					if client.IsConnected() {
+						log.Printf("✅ WhatsApp WebSocket connected successfully for @%s (Attempt %d)", username, attempt)
+						_ = client.SendPresence(context.Background(), types.PresenceAvailable)
+						if client.Store != nil && client.Store.ID != nil {
+							SaveSessionToDB(username, client.Store.ID.String(), client.Store.ID.User, "")
+						}
+						return
+					}
+					time.Sleep(200 * time.Millisecond)
 				}
-				return
 			}
 
 			log.Printf("⏳ Connect retry %d/10 for @%s (notice: %v)", attempt, username, err)
@@ -534,25 +611,38 @@ func RefreshQRChannel(username string) string {
 }
 
 func GetOrGenerateQR(username string) string {
-	cleanUsr := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 
 	ClientsLock.Lock()
 	client, exists := ActiveClients[cleanUsr]
 	existingCode := QRChannelMap[cleanUsr]
 	ClientsLock.Unlock()
 
+	// 1. If client is ALREADY logged in with a paired session, NEVER create a new device or generate a QR code!
+	if exists && client != nil && client.Store != nil && client.Store.ID != nil {
+		if !client.IsConnected() {
+			ConnectWithAutoRetry(client, cleanUsr)
+		}
+		return ""
+	}
+
+	// 2. Check if a paired device session exists in Neon PostgreSQL for this user
+	if dev := FindPairedDeviceForUser(cleanUsr); dev != nil && dev.ID != nil {
+		log.Printf("📱 [Preserve Session] Found existing paired device (%s) for @%s in DB. Re-attaching instead of generating new QR.", dev.ID.User, cleanUsr)
+		c := GetOrCreateClient(cleanUsr)
+		if c != nil && !c.IsConnected() {
+			ConnectWithAutoRetry(c, cleanUsr)
+		}
+		return ""
+	}
+
+	if existingCode != "" {
+		return existingCode
+	}
+
+	// Only reset unlinked client
 	if exists && client != nil {
-		if client.IsLoggedIn() {
-			return ""
-		}
-		if existingCode != "" {
-			return existingCode
-		}
-		// Reset unlinked client so GetQRChannel can be requested cleanly
 		client.Disconnect()
-		if client.Store != nil && client.Store.ID == nil {
-			_ = client.Store.Delete(context.Background())
-		}
 	}
 
 	// Create fresh device store for new QR code pairing
@@ -585,9 +675,8 @@ func GetOrGenerateQR(username string) string {
 				ClientsLock.Lock()
 				QRChannelMap[cleanUsr] = ""
 				ClientsLock.Unlock()
-				if client.Store.ID != nil && DB != nil {
-					jidUser := client.Store.ID.User
-					_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2)", jidUser, cleanUsr)
+				if client.Store.ID != nil {
+					SaveSessionToDB(cleanUsr, client.Store.ID.String(), client.Store.ID.User, "")
 				}
 			} else if evt.Event == "timeout" {
 				ClientsLock.Lock()
@@ -804,6 +893,29 @@ func FetchReverseGeocodeLocation(lat, lon float64) (shortPlace string, fullAddre
 	}
 
 	return short, geoData.DisplayName
+}
+
+// extractLocationCoords detects if a WhatsApp message contains location or live location coordinates
+func extractLocationCoords(msg *waE2E.Message) (float64, float64, bool) {
+	if msg == nil {
+		return 0, 0, false
+	}
+	if loc := msg.GetLocationMessage(); loc != nil {
+		return loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), true
+	}
+	if liveLoc := msg.GetLiveLocationMessage(); liveLoc != nil {
+		return liveLoc.GetDegreesLatitude(), liveLoc.GetDegreesLongitude(), true
+	}
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return extractLocationCoords(ephem.GetMessage())
+	}
+	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
+		return extractLocationCoords(viewOnce.GetMessage())
+	}
+	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
+		return extractLocationCoords(viewOnceV2.GetMessage())
+	}
+	return 0, 0, false
 }
 
 // Helper to extract text or label from any incoming WhatsApp message payload type, including Catalog Orders, Products, and Locations
@@ -1159,6 +1271,22 @@ func DispatchLeadAlertWhatsAppDirect(username, alertMsg string) {
 // Incoming Message Handler (Client-side Chat + AI Auto-Reply)
 func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
+	case *events.Receipt:
+		// Smart Human-Override (Read Receipt Race Condition): Intercept read receipts
+		if v.Type == types.ReceiptTypeRead || v.Type == types.ReceiptTypeReadSelf || strings.Contains(string(v.Type), "read") {
+			for _, msgID := range v.MessageIDs {
+				idStr := string(msgID)
+				if idStr != "" {
+					MessageReadByHuman.Store(idStr, true)
+					log.Printf("👁️ [Human Read Receipt] Message %s marked as read by business owner. AI override active.", idStr)
+					// Automatic TTL Garbage Collection after 5 minutes to prevent memory leak
+					time.AfterFunc(5*time.Minute, func() {
+						MessageReadByHuman.Delete(idStr)
+					})
+				}
+			}
+		}
+
 	case *events.Message:
 		if v.Info.IsFromMe || v.Info.IsGroup {
 			return
@@ -1181,20 +1309,67 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}(v.Info.ID, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
 		}
 
+		// Zero-Delay Smart Human-Override Check (Read Receipt Race Condition)
+		if _, isReadByHuman := MessageReadByHuman.Load(string(v.Info.ID)); isReadByHuman {
+			log.Printf("👤 Skipping AI - Human is active (Message %s read by business owner)", string(v.Info.ID))
+			return
+		}
+
 		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
 		if senderPhone == "" || len(senderPhone) < 8 || strings.HasPrefix(senderPhone, "120363") {
 			return // Ignore invalid or broadcast JIDs
 		}
 
-		// 2. Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact, Catalog) without reply
-		if isMediaMessage(v.Message) {
-			log.Printf("🚫 Incoming message from +%s (@%s) contains media or catalog. Ignored without reply as requested.", senderPhone, username)
-			return
-		}
+		var msgText string
+		locLat, locLng, hasLocation := extractLocationCoords(v.Message)
+		if hasLocation {
+			log.Printf("📍 [Hyperlocal Location Received] +%s (@%s): Lat=%.6f, Lng=%.6f", senderPhone, username, locLat, locLng)
 
-		msgText := extractMessageText(username, client, v.Message)
-		if msgText == "" {
-			return
+			shortLoc, fullAddr := FetchReverseGeocodeLocation(locLat, locLng)
+			resolvedAddr := fullAddr
+			if resolvedAddr == "" {
+				resolvedAddr = shortLoc
+			}
+			if resolvedAddr == "" {
+				resolvedAddr = fmt.Sprintf("Coordinates: %.6f, %.6f", locLat, locLng)
+			}
+
+			// Update customer profile coordinates and address in Neon DB
+			_ = UpdateCustomerCoordinates(username, senderPhone, locLat, locLng, resolvedAddr)
+
+			// Validate distance with business coordinates
+			busLat, busLng, maxRadius := GetBusinessLocation(username)
+			distKM := CalculateDistance(busLat, busLng, locLat, locLng)
+			log.Printf("📍 [Delivery Radius Validation] +%s -> Distance: %.2f km (Max Allowed: %.1f km)", senderPhone, distKM, maxRadius)
+
+			if distKM > maxRadius {
+				// Distance > MaxRadiusKM: Directly auto-reply (bypassing AI) and halt funnel!
+				outOfRangeReply := fmt.Sprintf("Maaf kijiye! Humari delivery sirf %.1f km tak available hai. Aapki location dukan se %.1f km door hai.", maxRadius, distKM)
+				activeClient := client
+				if activeClient == nil || !activeClient.IsLoggedIn() {
+					activeClient = GetOrCreateClient(username)
+				}
+				if activeClient != nil && activeClient.IsLoggedIn() {
+					_ = SendReplyMessage(activeClient, senderPhone, outOfRangeReply, v.Info.ID, v.Info.Sender, v.Message)
+				}
+				PushToLiveChat(username, senderPhone, outOfRangeReply, "outgoing_ai")
+				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", outOfRangeReply)
+				return // HALT FUNNEL!
+			}
+
+			// Distance <= MaxRadiusKM: Feed location acknowledgment into conversation history
+			msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within delivery radius). Coordinates: %.6f, %.6f", resolvedAddr, distKM, locLat, locLng)
+		} else {
+			// 2. Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact, Catalog) without reply
+			if isMediaMessage(v.Message) {
+				log.Printf("🚫 Incoming message from +%s (@%s) contains media or catalog. Ignored without reply as requested.", senderPhone, username)
+				return
+			}
+
+			msgText = extractMessageText(username, client, v.Message)
+			if msgText == "" {
+				return
+			}
 		}
 
 		lockKey := username + "_" + senderPhone
@@ -1237,6 +1412,12 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				delete(customerInFlightMap, lockKey)
 				customerInFlightLock.Unlock()
 			}()
+
+			// Zero-Delay Smart Human-Override Check inside goroutine before calling AI
+			if _, isReadByHuman := MessageReadByHuman.Load(string(v.Info.ID)); isReadByHuman {
+				log.Printf("👤 Skipping AI - Human is active (Message %s read by business owner)", string(v.Info.ID))
+				return
+			}
 
 			cfg := GetUserConfigRAM(username)
 
@@ -1293,7 +1474,67 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				var deliveredReply string
 
-				if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
+				// Dynamic QR Dispatch & Auto-Verification Trigger Interception
+				if strings.Contains(replyText, "[INITIATE_PAYMENT_QR]") {
+					// 1. Remove the keyword and send the remaining text to the user
+					remainingText := strings.TrimSpace(strings.ReplaceAll(replyText, "[INITIATE_PAYMENT_QR]", ""))
+					if remainingText != "" && activeClient != nil && activeClient.IsLoggedIn() {
+						sendErr := SendReplyMessage(activeClient, senderPhone, remainingText, v.Info.ID, v.Info.Sender, v.Message)
+						if sendErr != nil {
+							log.Printf("⚠️ Error sending text before payment QR to +%s: %v", senderPhone, sendErr)
+						}
+					}
+
+					// 2. Instantly trigger the Cloudflare Worker /generate API to get the Cloudinary QR image
+					amountStr, orderIDStr := ResolveOrderAmountAndID(username, senderPhone, replyText, msgText)
+					vpa := cfg.MerchantVpa
+					if vpa == "" {
+						vpa = "paytm.s1f6syj@pty"
+					}
+					pName := cfg.PayeeName
+					if pName == "" {
+						pName = cfg.BusinessName
+					}
+					if pName == "" {
+						pName = username
+					}
+
+					workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "hq67khm3")
+					if qrErr != nil || workerQRURL == "" {
+						upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
+						workerQRURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
+						log.Printf("ℹ️ [Dynamic QR Fallback] Using standard QR for Order %s: %v", orderIDStr, qrErr)
+					} else {
+						log.Printf("⚡ [Cloudflare Worker Dynamic QR] Intercepted for Order: %s | URL: %s", orderIDStr, workerQRURL)
+					}
+
+					// 3. Send the QR via whatsmeow (using the universal static JPEGThumbnail)
+					caption := fmt.Sprintf("💳 *Pay ₹%s for Order #%s*\nScan the QR code above via any UPI App (GPay/PhonePe/Paytm)", amountStr, orderIDStr)
+					sendQRErr := SendImageReplyFromURL(activeClient, senderPhone, workerQRURL, caption, v.Info.ID, v.Info.Sender, v.Message)
+					if sendQRErr != nil {
+						log.Printf("⚠️ Error sending dynamic QR image to +%s: %v. Sending text fallback.", senderPhone, sendQRErr)
+						_ = SendReplyMessage(activeClient, senderPhone, fmt.Sprintf("💳 Click or scan to pay ₹%s: %s", amountStr, workerQRURL), v.Info.ID, v.Info.Sender, v.Message)
+					}
+
+					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment
+					mid := cfg.PaytmMid
+					if mid != "" {
+						go func(m, ord string) {
+							errPoll := payment.StartWorkerPaymentCheck(m, ord, "")
+							if errPoll != nil {
+								log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
+							}
+						}(mid, orderIDStr)
+					}
+
+					// 5. Send follow-up text: "Please scan the QR above. We will automatically notify you here once the payment is successful."
+					followUpText := "Please scan the QR above. We will automatically notify you here once the payment is successful."
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendMessage(activeClient, senderPhone, followUpText)
+					}
+
+					deliveredReply = remainingText + "\n[QR Code Sent]\n" + followUpText
+				} else if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageReplyFromURL(activeClient, senderPhone, imgURL, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {
 						log.Printf("⚠️ Error sending AI image reply to +%s: %v. Immediately falling back to instant text reply!", senderPhone, sendErr)
@@ -1335,7 +1576,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		ConnectWithAutoRetry(client, username)
 
 	case *events.LoggedOut:
-		fmt.Printf("⚠️ User @%s unlinked from phone. Auto-cleaning WhatsApp session details...\n", username)
+		fmt.Printf("⚠️ User @%s connection closed or unlinked notice. Reason: %v\n", username, v.Reason)
 		ClientsLock.Lock()
 		delete(ActiveClients, username)
 		delete(QRChannelMap, username)
@@ -1343,36 +1584,22 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 		if client != nil {
 			client.Disconnect()
-			if client.Store != nil {
-				_ = client.Store.Delete(context.Background())
-			}
 		}
 
 		if DB != nil {
-			// Only clear WhatsApp device details from DB; keep the registered user account intact!
-			_, _ = DB.Exec("UPDATE users SET wa_jid='', status='Disconnected' WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1)", username)
+			// Update status only; PRESERVE wa_jid and tenant_whatsapp_sessions so on reboot it can reconnect!
+			_, _ = DB.Exec("UPDATE users SET status='Disconnected' WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1)", username)
 		}
 
-		PushToLiveChat(username, "", "WhatsApp session was unlinked from phone.", "session_unlinked")
+		PushToLiveChat(username, "", "WhatsApp session disconnected", "session_unlinked")
 
 	case *events.Connected:
 		if client != nil {
 			_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
-		if client != nil && client.Store.ID != nil && DB != nil {
+		if client != nil && client.Store.ID != nil {
 			jidStr := client.Store.ID.User
-			
-			upsertQuery := `
-				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
-				ON CONFLICT (username) DO UPDATE SET
-					wa_jid = EXCLUDED.wa_jid,
-					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
-					status = 'Connected',
-					linked_at = COALESCE(users.linked_at, NOW());
-			`
-			_, _ = DB.Exec(upsertQuery, username, jidStr)
-	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidStr, username)
+			SaveSessionToDB(username, client.Store.ID.String(), jidStr, "")
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp session connected successfully", "session_connected")
 		}
@@ -1381,19 +1608,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		if client != nil {
 			_ = client.SendPresence(context.Background(), types.PresenceAvailable)
 		}
-		if client != nil && client.Store.ID != nil && DB != nil {
+		if client != nil && client.Store.ID != nil {
 			jidStr := client.Store.ID.User
-			upsertQuery := `
-				INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
-				VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', NOW(), NOW())
-				ON CONFLICT (username) DO UPDATE SET
-					wa_jid = EXCLUDED.wa_jid,
-					phone = COALESCE(NULLIF(users.phone, ''), EXCLUDED.phone),
-					status = 'Connected',
-					linked_at = COALESCE(users.linked_at, NOW());
-			`
-			_, _ = DB.Exec(upsertQuery, username, jidStr)
-	_, _ = DB.Exec("UPDATE users SET wa_jid=$1, phone=$1, status='Connected', linked_at=NOW() WHERE LOWER(username)=LOWER($2) OR LOWER(email)=LOWER($2)", jidStr, username)
+			SaveSessionToDB(username, client.Store.ID.String(), jidStr, "")
 			QRChannelMap[username] = ""
 			PushToLiveChat(username, jidStr, "WhatsApp paired successfully", "session_connected")
 		}
@@ -1402,27 +1619,57 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 // AutoConnectAllSessions initializes and connects all saved WhatsApp clients on boot
 func AutoConnectAllSessions() {
-	if DB == nil {
-		return
+	userMap := make(map[string]bool)
+
+	if DB != nil {
+		rows, err := DB.Query("SELECT DISTINCT username FROM users WHERE wa_jid != '' OR phone != ''")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var u string
+				if errScan := rows.Scan(&u); errScan == nil && u != "" {
+					userMap[strings.ToLower(strings.TrimSpace(u))] = true
+				}
+			}
+		}
+
+		rows2, err2 := DB.Query("SELECT DISTINCT username FROM tenant_whatsapp_sessions WHERE device_jid != ''")
+		if err2 == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var u string
+				if errScan := rows2.Scan(&u); errScan == nil && u != "" {
+					userMap[strings.ToLower(strings.TrimSpace(u))] = true
+				}
+			}
+		}
 	}
-	rows, err := DB.Query("SELECT DISTINCT username FROM users WHERE status='Connected' AND wa_jid!=''")
-	if err != nil {
-		return
+
+	// Also check StoreContainer directly in case DB rows were wiped
+	if StoreContainer != nil {
+		allDevs, errDev := StoreContainer.GetAllDevices(context.Background())
+		if errDev == nil && len(allDevs) > 0 {
+			for _, dev := range allDevs {
+				if dev != nil && dev.ID != nil && dev.ID.User != "" {
+					log.Printf("📱 [Boot Store Check] Found PostgreSQL persistent device: %s (%s)", dev.ID.User, dev.ID.String())
+					if len(userMap) == 0 {
+						userMap["admin"] = true
+					}
+				}
+			}
+		}
 	}
-	defer rows.Close()
 
 	count := 0
-	for rows.Next() {
-		var username string
-		if err := rows.Scan(&username); err == nil && username != "" {
-			go func(usr string) {
-				c := GetOrCreateClient(usr)
-				if c != nil && c.IsLoggedIn() && !c.IsConnected() {
-					ConnectWithAutoRetry(c, usr)
-				}
-			}(username)
-			count++
-		}
+	for usr := range userMap {
+		go func(username string) {
+			c := GetOrCreateClient(username)
+			if c != nil && c.Store != nil && c.Store.ID != nil {
+				log.Printf("🚀 [Persistent Session Restored] Auto-connecting WhatsApp for @%s (Device: %s)...", username, c.Store.ID.User)
+				ConnectWithAutoRetry(c, username)
+			}
+		}(usr)
+		count++
 	}
 	if count > 0 {
 		log.Printf("⚡ [WhatsApp Gateway] Auto-initialized %d active WhatsApp account sessions on boot.", count)
