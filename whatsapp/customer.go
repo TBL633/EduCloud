@@ -275,14 +275,16 @@ func ClearActiveCart(username, customerPhone string) error {
 	if cleanPhone == "" || DB == nil {
 		return nil
 	}
-	_, err := DB.Exec("DELETE FROM active_carts WHERE LOWER(username)=LOWER($1) AND customer_phone=$2", cleanUsr, cleanPhone)
+	// Strictly delete active_carts by customer_phone across all tenant sessions
+	_, err := DB.Exec("DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1 OR (LOWER(username)=LOWER($2) AND customer_phone=$1)", cleanPhone, cleanUsr)
 	if err != nil {
 		log.Printf("⚠️ ClearActiveCart error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return err
 	}
-	log.Printf("🛒 [Active Cart Cleared]: @%s (+%s)", cleanUsr, cleanPhone)
+	log.Printf("🛒 [Active Cart Strictly Cleared]: Customer +%s (@%s)", cleanPhone, cleanUsr)
 	return nil
 }
+
 
 // UpsertCustomerProfile stores or updates customer details in Neon DB and updates RAM cache
 func UpsertCustomerProfile(username string, profile *CustomerProfile) error {
@@ -594,7 +596,11 @@ func AddItemsToActiveCart(username, customerPhone string, cartItems []AICartItem
 		return fmt.Errorf("empty customer phone number")
 	}
 
-	// Purge ghost cart items from previous completed or cancelled orders
+	// Purge stale or previous session items if order was confirmed, paid, cancelled, or older than 1 hour
+	_, _ = DB.Exec(`DELETE FROM active_carts 
+		WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1)
+		  AND (updated_at < NOW() - INTERVAL '1 hour' OR payment_status IN ('PAID', 'CANCELLED', 'CONFIRMED'))`, cleanPhone)
+
 	if cp, _ := GetCustomerProfile(cleanUsr, cleanPhone); cp != nil {
 		if cp.CurrentState == "ORDER_CONFIRMED" || cp.PaymentStatus == "PAID" || cp.PaymentStatus == "CANCELLED" {
 			_ = ClearActiveCart(cleanUsr, cleanPhone)
@@ -613,10 +619,13 @@ func AddItemsToActiveCart(username, customerPhone string, cartItems []AICartItem
 			qty = 1
 		}
 
-		query := `INSERT INTO active_carts (username, customer_phone, product_id, qty, updated_at)
-			VALUES ($1, $2, $3, $4, NOW())
+		// STRICT OVERWRITE: Set qty = EXCLUDED.qty instead of accumulating (+ EXCLUDED.qty)
+		// This strictly prevents repeating AI turns from compounding the quantity (e.g. 1 -> 2 -> 3 -> 4 -> 5)
+		query := `INSERT INTO active_carts (username, customer_phone, product_id, qty, payment_status, updated_at)
+			VALUES ($1, $2, $3, $4, 'UNPAID', NOW())
 			ON CONFLICT (username, customer_phone, product_id) DO UPDATE SET
-				qty = active_carts.qty + EXCLUDED.qty,
+				qty = EXCLUDED.qty,
+				payment_status = 'UNPAID',
 				updated_at = NOW()`
 		_, err := DB.Exec(query, cleanUsr, cleanPhone, pID, qty)
 		if err != nil {
@@ -626,6 +635,111 @@ func AddItemsToActiveCart(username, customerPhone string, cartItems []AICartItem
 		}
 	}
 	return nil
+}
+
+// FetchRealBusinessPaymentCredentials strictly retrieves real merchant Paytm credentials from the database.
+// Completely eliminates fake placeholder fallbacks. Returns an error if credentials are missing.
+func FetchRealBusinessPaymentCredentials(cleanUsr, cleanPhone string) (mid string, vpa string, payeeName string, err error) {
+	if DB == nil {
+		return "", "", "", fmt.Errorf("database not initialized")
+	}
+
+	cleanUsr = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(cleanUsr), "@"))
+
+	// 1. Check users table by exact username, email, and email prefix
+	if cleanUsr != "" {
+		errQuery := DB.QueryRow(`
+			SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, username) 
+			FROM users 
+			WHERE (LOWER(username) = LOWER($1) 
+			   OR LOWER(email) = LOWER($1) 
+			   OR LOWER(username) = LOWER($1) || '@gmail.com' 
+			   OR LOWER(email) LIKE LOWER($1) || '@%' 
+			   OR split_part(LOWER(email), '@', 1) = LOWER($1)
+			   OR LOWER(account_name) = LOWER($1))
+			  AND TRIM(COALESCE(paytm_mid, '')) != '' 
+			  AND TRIM(COALESCE(paytm_vpa, '')) != ''
+			LIMIT 1
+		`, cleanUsr).Scan(&mid, &vpa, &payeeName)
+		if errQuery == nil && mid != "" && vpa != "" {
+			return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+		}
+
+		// 2. Check tenant_payment_configs
+		errPay := DB.QueryRow(`
+			SELECT COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, username) 
+			FROM tenant_payment_configs 
+			WHERE (LOWER(username) = LOWER($1) 
+			   OR LOWER(username) = LOWER($1) || '@gmail.com' 
+			   OR split_part(LOWER(username), '@', 1) = LOWER($1))
+			  AND TRIM(COALESCE(paytm_mid, '')) != '' 
+			  AND TRIM(COALESCE(merchant_vpa, '')) != ''
+			LIMIT 1
+		`, cleanUsr).Scan(&mid, &vpa, &payeeName)
+		if errPay == nil && mid != "" && vpa != "" {
+			return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+		}
+	}
+
+	// 3. Match against connected WhatsApp device phone from active client
+	client := GetOrCreateClient(cleanUsr)
+	if client != nil && client.Store != nil && client.Store.ID != nil && client.Store.ID.User != "" {
+		devUser := client.Store.ID.User
+		devPhone := FormatPhone(devUser)
+		if devPhone != "" {
+			errQuery := DB.QueryRow(`
+				SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, username) 
+				FROM users 
+				WHERE (phone LIKE '%' || $1 OR wa_jid LIKE '%' || $1 || '%')
+				  AND TRIM(COALESCE(paytm_mid, '')) != '' 
+				  AND TRIM(COALESCE(paytm_vpa, '')) != ''
+				LIMIT 1
+			`, devPhone).Scan(&mid, &vpa, &payeeName)
+			if errQuery == nil && mid != "" && vpa != "" {
+				return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+			}
+
+			errQuery2 := DB.QueryRow(`
+				SELECT COALESCE(u.paytm_mid, ''), COALESCE(u.paytm_vpa, ''), COALESCE(u.business_name, u.account_name, u.username)
+				FROM tenant_whatsapp_sessions s
+				JOIN users u ON LOWER(u.username) = LOWER(s.username) OR LOWER(u.email) = LOWER(s.username)
+				WHERE (s.phone LIKE '%' || $1 OR s.device_jid LIKE '%' || $1 || '%')
+				  AND TRIM(COALESCE(u.paytm_mid, '')) != '' 
+				  AND TRIM(COALESCE(u.paytm_vpa, '')) != ''
+				LIMIT 1
+			`, devPhone).Scan(&mid, &vpa, &payeeName)
+			if errQuery2 == nil && mid != "" && vpa != "" {
+				return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+			}
+		}
+	}
+
+	// 4. Query the registered business account that holds active payment credentials in users table
+	errAny := DB.QueryRow(`
+		SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, username) 
+		FROM users 
+		WHERE TRIM(COALESCE(paytm_mid, '')) != '' AND TRIM(COALESCE(paytm_vpa, '')) != ''
+		ORDER BY (CASE WHEN LOWER(role) != 'admin' THEN 0 ELSE 1 END), id DESC
+		LIMIT 1
+	`).Scan(&mid, &vpa, &payeeName)
+	if errAny == nil && mid != "" && vpa != "" {
+		return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+	}
+
+	// 5. Query tenant_payment_configs for any configured credentials
+	errAnyT := DB.QueryRow(`
+		SELECT COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, username) 
+		FROM tenant_payment_configs 
+		WHERE TRIM(COALESCE(paytm_mid, '')) != '' AND TRIM(COALESCE(merchant_vpa, '')) != ''
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&mid, &vpa, &payeeName)
+	if errAnyT == nil && mid != "" && vpa != "" {
+		return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+	}
+
+	// STRICTLY ZERO PLACEHOLDERS: Return error if credentials missing
+	return "", "", "", fmt.Errorf("no real merchant Paytm credentials (MID/VPA) found in database for account '%s'", cleanUsr)
 }
 
 // CalculateCartTotalAndFetchCredentials executes the Math Engine: queries active_carts, joins products to calculate REAL total, fetches paytm credentials, and logs to console
@@ -643,7 +757,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 		return res, fmt.Errorf("database connection not available")
 	}
 
-	// Query active_carts with STRICT join on products to prevent fuzzy match duplicates
+	// Query active_carts strictly for this customer number in the CURRENT interaction loop (last 1 hour)
 	query := `SELECT DISTINCT ON (c.product_id) 
 		c.product_id, c.qty, COALESCE(p.name, 'Product #' || c.product_id), 
 		COALESCE(p.sale_price, 0), COALESCE(p.price, '0'), COALESCE(p.mrp, 0)
@@ -651,19 +765,13 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 		LEFT JOIN products p ON (
 			CAST(c.product_id AS TEXT) = CAST(p.id AS TEXT) 
 			OR LOWER(TRIM(p.name)) = LOWER(TRIM(c.product_id))
-		) AND (
-			LOWER(p.username) = LOWER(c.username) 
-			OR LOWER(p.username) = LOWER(c.username) || '@gmail.com'
-			OR LOWER(c.username) = LOWER(p.username) || '@gmail.com'
-			OR LOWER(p.username) = 'admin'
 		)
-		WHERE (LOWER(c.username) = LOWER($1) OR LOWER(c.username) = LOWER($1) || '@gmail.com' OR LOWER($1) = LOWER(c.username) || '@gmail.com') 
-		  AND c.customer_phone = $2
+		WHERE (c.customer_phone = $1 OR c.customer_phone LIKE '%' || $1)
 		  AND (c.payment_status IS NULL OR c.payment_status = 'UNPAID' OR c.payment_status = 'PENDING' OR c.payment_status = 'BROWSING')
-		  AND c.updated_at >= NOW() - INTERVAL '24 hours'
+		  AND c.updated_at >= NOW() - INTERVAL '1 hour'
 		ORDER BY c.product_id, c.updated_at DESC`
 
-	rows, err := DB.Query(query, cleanUsr, cleanPhone)
+	rows, err := DB.Query(query, cleanPhone)
 	if err != nil {
 		log.Printf("⚠️ Math Engine Query Error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return res, err
@@ -701,54 +809,13 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 		}
 	}
 
-	// Fallback to customer_order_states if active_carts row was already processed
-	if calculatedTotal <= 0 {
-		var prevTotal float64
-		_ = DB.QueryRow(`SELECT COALESCE(total_amount, 0) FROM customer_order_states 
-			WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($1)||'@gmail.com') AND customer_phone=$2 AND payment_status != 'paid' 
-			ORDER BY updated_at DESC LIMIT 1`, cleanUsr, cleanPhone).Scan(&prevTotal)
-		if prevTotal > 0 {
-			calculatedTotal = prevTotal
-		}
-	}
-
 	res.TotalAmount = calculatedTotal
 	res.ItemCount = itemCount
 
-	// Fetch Paytm Credentials from users table or tenant_payment_configs
-	var pMid, pVpa, bName string
-	errUsr := DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, '') 
-		FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&pMid, &pVpa, &bName)
-
-	if errUsr != nil || pMid == "" || pVpa == "" {
-		var tMid, tVpa, tName string
-		_ = DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, '') 
-			FROM tenant_payment_configs WHERE LOWER(username) = LOWER($1)`, cleanUsr).Scan(&tMid, &tVpa, &tName)
-		if pMid == "" {
-			pMid = tMid
-		}
-		if pVpa == "" {
-			pVpa = tVpa
-		}
-		if bName == "" {
-			bName = tName
-		}
-	}
-
-	// Fallback check if user MID/VPA is saved under any account in users or tenant_payment_configs
-	if pMid == "" || pVpa == "" {
-		var anyMid, anyVpa, anyName string
-		_ = DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, '') 
-			FROM users WHERE paytm_mid != '' OR paytm_vpa != '' ORDER BY id DESC LIMIT 1`).Scan(&anyMid, &anyVpa, &anyName)
-		if pMid == "" {
-			pMid = anyMid
-		}
-		if pVpa == "" {
-			pVpa = anyVpa
-		}
-		if bName == "" {
-			bName = anyName
-		}
+	// Fetch STRICTLY REAL Paytm Credentials from DB (Zero placeholder fallback!)
+	pMid, pVpa, bName, credErr := FetchRealBusinessPaymentCredentials(cleanUsr, cleanPhone)
+	if credErr != nil {
+		log.Printf("⚠️ [Math Engine Credential Notice]: %v", credErr)
 	}
 
 	res.PaytmMid = strings.TrimSpace(pMid)
@@ -758,16 +825,11 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
 	res.OrderID = ordID
 
-	log.Printf("💳 [Paytm Credentials Resolved for @%s]: MID = '%s' | VPA = '%s' | Payee = '%s'", cleanUsr, res.PaytmMid, res.PaytmVpa, res.PayeeName)
-	if res.PaytmMid == "" || res.PaytmVpa == "" {
-		log.Printf("⚠️ [WARNING] Paytm MID or VPA is missing in database for @%s! Please configure in Business Portal -> Settings -> AI Settings.", cleanUsr)
-	}
-
 	log.Printf("🧮 [MATH ENGINE CALCULATION SUCCESS]:")
 	log.Printf("   • Account: @%s | Customer: +%s | Order: %s", cleanUsr, cleanPhone, res.OrderID)
-	log.Printf("   • Real Total Amount: ₹%.2f (%d items)", res.TotalAmount, res.ItemCount)
+	log.Printf("   • Real Total Amount: ₹%.2f (%d items strictly in current active loop)", res.TotalAmount, res.ItemCount)
 	log.Printf("   • Items Breakdown: %+v", res.Items)
-	log.Printf("   • Payment Credentials: Paytm MID = '%s' | Paytm VPA = '%s' | Payee Name = '%s'", res.PaytmMid, res.PaytmVpa, res.PayeeName)
+	log.Printf("   • Real Credentials from DB: MID = '%s' | VPA = '%s' | Payee Name = '%s'", res.PaytmMid, res.PaytmVpa, res.PayeeName)
 
 	// Save calculated state to customer_order_states
 	if (len(res.Items) > 0 || res.TotalAmount > 0) && DB != nil {
@@ -835,6 +897,13 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 		return "", fmt.Errorf("cart total is ₹0")
 	}
 
+	vpa := strings.TrimSpace(calcRes.PaytmVpa)
+	pMid := strings.TrimSpace(calcRes.PaytmMid)
+	if vpa == "" || pMid == "" {
+		log.Printf("❌ [DispatchCloudflareWorkerQR] Aborted: Real Paytm MID or VPA missing in DB for @%s. Placeholders strictly prohibited.", cleanUsr)
+		return "", fmt.Errorf("real merchant Paytm MID and VPA must be configured in database")
+	}
+
 	// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING and payment_status to PENDING in DB & Cache immediately!
 	_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
 	_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
@@ -845,17 +914,9 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 		ordID = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
 		calcRes.OrderID = ordID
 	}
-	vpa := strings.TrimSpace(calcRes.PaytmVpa)
-	if vpa == "" {
-		vpa = "paytmqr2810050501111585i1a141s9@paytm"
-	}
 	payee := strings.TrimSpace(calcRes.PayeeName)
 	if payee == "" {
 		payee = "WaMart Store"
-	}
-	pMid := strings.TrimSpace(calcRes.PaytmMid)
-	if pMid == "" {
-		pMid = "WaMartMerchantMID"
 	}
 
 	cloudName := "hq67khm3" // Fixed correct Cloudinary Cloud Name as requested
@@ -871,6 +932,7 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 
 	// 2. Send ImageMessage via whatsmeow using static thumbnail
 	client := GetOrCreateClient(cleanUsr)
+
 	if client != nil && client.IsLoggedIn() {
 		_ = EnsureConnected(client)
 		caption := fmt.Sprintf("📱 *Scan & Pay via UPI / Paytm*\n\n• Order ID: *%s*\n• Total Amount: *₹%s*\n• Payee: *%s*\n\n_Payment hone par aapka order automatic confirm ho jayega!_ 🙏\n_(Order cancel karne ke liye 'Cancel' type karein)_", ordID, amtStr, payee)

@@ -146,7 +146,7 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			_, err := DB.Exec(`UPDATE users SET 
 				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10,
 				paytm_mid=$11, paytm_vpa=$12, store_policies=$13
-				WHERE LOWER(username)=LOWER($14)`,
+				WHERE LOWER(username)=LOWER($14) OR LOWER(email)=LOWER($14) OR LOWER(username)=split_part(LOWER($14), '@', 1) OR LOWER(email) LIKE LOWER($14) || '@%'`,
 				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, paytmMid, paytmVpa, policies, username)
 
 			if err != nil {

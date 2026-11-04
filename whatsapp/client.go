@@ -1237,7 +1237,11 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 		_ = SetCustomerState(cleanUsr, cleanPhone, "ORDER_CONFIRMED")
 		_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PAID")
 		_ = ClearActiveCart(cleanUsr, cleanPhone)
+		if DB != nil {
+			_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, cleanPhone)
+		}
 	}
+
 
 	// Send instant WhatsApp receipt/confirmation to the customer
 	if cleanPhone != "" && len(cleanPhone) >= 10 {
@@ -1482,6 +1486,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
 					_ = SetCustomerState(username, senderPhone, "chatting")
 					_ = ClearActiveCart(username, senderPhone)
+					if DB != nil {
+						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					}
 
 					cancelReply := "Your previous payment request has been cancelled. What would you like to order now?"
 					activeClient := client
@@ -1493,7 +1500,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 					PushToLiveChat(username, senderPhone, cancelReply, "outgoing_ai")
 					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", cancelReply)
-					log.Printf("🚫 [Payment Cancelled via Escape Hatch] @%s (+%s): payment_status set to BROWSING and cart cleared.", username, senderPhone)
+					log.Printf("🚫 [Payment Cancelled via Escape Hatch] @%s (+%s): payment_status set to BROWSING and cart strictly cleared from DB.", username, senderPhone)
 					return // Dropped this cancel event; NEXT incoming message will hit AI normally!
 				}
 
@@ -1547,9 +1554,23 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}
 
 			if strings.EqualFold(custState, "ORDER_CONFIRMED") {
-				// Prior order was confirmed; reset to chatting for new inquiry
+				// Prior order was confirmed; reset to chatting for new inquiry and purge stale cart
 				_ = SetCustomerState(username, senderPhone, "chatting")
+				_ = ClearActiveCart(username, senderPhone)
+				if DB != nil {
+					_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+				}
 			}
+
+			// When customer starts a new browsing session with greeting, purge stale items from previous failed sessions
+			normGreet := strings.ToLower(strings.TrimSpace(msgText))
+			if normGreet == "hi" || normGreet == "hello" || normGreet == "namaste" || normGreet == "start" || normGreet == "menu" || normGreet == "new order" {
+				_ = ClearActiveCart(username, senderPhone)
+				if DB != nil {
+					_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+				}
+			}
+
 
 			cfg := GetUserConfigRAM(username)
 
@@ -1640,34 +1661,48 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						return
 					}
 
-					// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING & payment_status to PENDING
-					_ = SetCustomerState(username, senderPhone, "PAYMENT_PENDING")
-					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
+					// Check for real credentials from calcRes or FetchRealBusinessPaymentCredentials
+					vpa := strings.TrimSpace(calcRes.PaytmVpa)
+					mid := strings.TrimSpace(calcRes.PaytmMid)
+					pName := strings.TrimSpace(calcRes.PayeeName)
 
-					vpa := ""
-					if calcRes != nil && calcRes.PaytmVpa != "" {
-						vpa = calcRes.PaytmVpa
-					}
-					if vpa == "" {
-						vpa = cfg.MerchantVpa
-					}
-					if vpa == "" {
-						vpa = "paytm.s1f6syj@pty"
+					if vpa == "" || mid == "" {
+						realMid, realVpa, realName, credErr := FetchRealBusinessPaymentCredentials(username, senderPhone)
+						if credErr == nil && realMid != "" && realVpa != "" {
+							mid = realMid
+							vpa = realVpa
+							if pName == "" {
+								pName = realName
+							}
+						}
 					}
 
-					pName := ""
-					if calcRes != nil && calcRes.PayeeName != "" {
-						pName = calcRes.PayeeName
+					// STRICT CHECK: IF REAL CREDENTIALS ARE STILL MISSING, HALT AND NOTIFY CUSTOMER!
+					// ZERO PLACEHOLDER FALLBACKS!
+					if vpa == "" || mid == "" {
+						log.Printf("❌ [Real Payment Credentials Missing in DB for @%s]: Halting QR generation. Placeholder fallbacks strictly disabled.", username)
+						_ = SetCustomerState(username, senderPhone, "chatting")
+						_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
+
+						noCredsMsg := "⚠️ *Dukan par online payment setup abhi complete nahi hua hai.*\nKripya *Cash on Delivery (COD)* chunein ya sidhe dukan se sampark karein."
+						if activeClient != nil && activeClient.IsLoggedIn() {
+							_ = SendReplyMessage(activeClient, senderPhone, noCredsMsg, v.Info.ID, v.Info.Sender, v.Message)
+						}
+						PushToLiveChat(username, senderPhone, noCredsMsg, "outgoing_ai")
+						go SaveCustomerChatAndPrune(username, senderPhone, "assistant", noCredsMsg)
+						return
 					}
-					if pName == "" {
-						pName = cfg.PayeeName
-					}
+
 					if pName == "" {
 						pName = cfg.BusinessName
 					}
 					if pName == "" {
-						pName = username
+						pName = "WaMart Store"
 					}
+
+					// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING & payment_status to PENDING
+					_ = SetCustomerState(username, senderPhone, "PAYMENT_PENDING")
+					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
 
 					workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "hq67khm3")
 					if qrErr != nil || workerQRURL == "" {
@@ -1687,21 +1722,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 
 					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment
-					mid := ""
-					if calcRes != nil && calcRes.PaytmMid != "" {
-						mid = calcRes.PaytmMid
-					}
-					if mid == "" {
-						mid = cfg.PaytmMid
-					}
-					if mid == "" {
-						mid = "WaMartMerchantMID"
-					}
-
 					fmt.Printf("🔍 [Payment Verification Dispatch] Account: @%s | Real Business MID: '%s' | VPA: '%s' | Order: %s\n", username, mid, vpa, orderIDStr)
-					if mid == "WaMartMerchantMID" || vpa == "paytm.s1f6syj@pty" {
-						log.Printf("⚠️ [WARNING] Merchant MID or VPA is missing in DB! Using placeholder fallback. Please save real Paytm MID/VPA in Settings.")
-					}
 
 					liveWebhookURL := payment.GetAppWebhookURL()
 					fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", liveWebhookURL, "for Order:", orderIDStr)
@@ -1712,6 +1733,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						}
 					}(mid, orderIDStr, liveWebhookURL)
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
+
 
 					// 5. Send follow-up text: "Please scan the QR above. We will automatically notify you here once the payment is successful."
 					followUpText := "Please scan the QR above. We will automatically notify you here once the payment is successful.\n(Agar aap order cancel karna chahte hain toh 'Cancel' type karein)"
@@ -1739,6 +1761,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
 					_ = SetCustomerPaymentStatus(username, senderPhone, "COD_PENDING")
 					_ = ClearActiveCart(username, senderPhone)
+					if DB != nil {
+						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					}
+
 
 					codConfirmMsg := fmt.Sprintf("🎉 *Aapka Cash on Delivery (COD) Order confirm ho gaya hai!* 🚚📦\n\n• *Order ID*: %s\n• *Total Amount*: ₹%s\n• *Payment Mode*: Cash on Delivery (COD)\n\nHum jald hi aapke diye gaye address par delivery karenge. Dhanyawad! 🙏", orderIDStr, amountStr)
 					if cleanReply != "" {

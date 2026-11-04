@@ -281,16 +281,42 @@ func GetPaymentConfig(tenantUsername string) PaymentConfig {
 		var c PaymentConfig
 		err := globalDB.QueryRow(`
 			SELECT username, enabled, merchant_phone, merchant_vpa, paytm_mid, payee_name 
-			FROM tenant_payment_configs WHERE LOWER(username) = LOWER($1)
+			FROM tenant_payment_configs WHERE (LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com')
+			  AND TRIM(COALESCE(paytm_mid, '')) != ''
 		`, cleanUsr).Scan(&c.Username, &c.Enabled, &c.MerchantPhone, &c.MerchantVPA, &c.PaytmMID, &c.PayeeName)
-		if err == nil {
+		if err == nil && c.PaytmMID != "" {
 			c.TenantID = c.Username
 			configCacheLock.Lock()
 			configCacheMap[cleanUsr] = c
 			configCacheLock.Unlock()
 			return c
 		}
+
+		// Also check users table where AI & business settings save paytm_mid and paytm_vpa
+		var uName, uMid, uVpa, uBiz string
+		errUsr := globalDB.QueryRow(`
+			SELECT username, paytm_mid, paytm_vpa, COALESCE(business_name, account_name, username)
+			FROM users
+			WHERE (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com' OR split_part(LOWER(email), '@', 1) = LOWER($1))
+			  AND TRIM(COALESCE(paytm_mid, '')) != '' AND TRIM(COALESCE(paytm_vpa, '')) != ''
+			LIMIT 1
+		`, cleanUsr).Scan(&uName, &uMid, &uVpa, &uBiz)
+		if errUsr == nil && uMid != "" && uVpa != "" {
+			c = PaymentConfig{
+				TenantID:    cleanUsr,
+				Username:    uName,
+				PaytmMID:    uMid,
+				MerchantVPA: uVpa,
+				PayeeName:   uBiz,
+				Enabled:     true,
+			}
+			configCacheLock.Lock()
+			configCacheMap[cleanUsr] = c
+			configCacheLock.Unlock()
+			return c
+		}
 	}
+
 
 	return PaymentConfig{
 		TenantID: cleanUsr,
@@ -797,9 +823,9 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 				_, _ = globalDB.Exec(`
 					DELETE FROM active_carts 
-					WHERE (LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com') AND customer_phone = $2
-				`, username, customerPhone)
-				log.Printf("🔓 [State Unlocked on Webhook SUCCESS]: @%s (+%s) -> ORDER_CONFIRMED & payment_status = PAID", username, customerPhone)
+					WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1
+				`, customerPhone)
+				log.Printf("🔓 [State Unlocked on Webhook SUCCESS]: @%s (+%s) -> ORDER_CONFIRMED, payment_status = PAID, cart strictly deleted from active_carts", username, customerPhone)
 			}
 
 			if customerPhone != "" && username == "" {
@@ -815,9 +841,10 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 				`, customerPhone)
 				_, _ = globalDB.Exec(`
 					DELETE FROM active_carts 
-					WHERE customer_phone = $1
+					WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1
 				`, customerPhone)
 			}
+
 
 			// 4. Insert into leads table
 			if username != "" {
