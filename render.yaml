@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: whatsmeow-gateway
+    name: wamart
     env: go
     plan: free
     region: singapore

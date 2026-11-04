@@ -221,7 +221,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isGlobalAdmin := dbRole == "admin" || strings.ToLower(dbUsername) == "admin" || strings.ToLower(dbEmail) == "admin@wamart.ai" || strings.ToLower(dbEmail) == "admin@eduta.ai"
+	isGlobalAdmin := dbRole == "admin" || strings.ToLower(dbUsername) == "admin" || strings.ToLower(dbEmail) == "admin@wamart.ai"
 	targetPortal := "business_portal"
 	if isGlobalAdmin {
 		targetPortal = "admin_portal"
@@ -232,7 +232,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		"portal":            targetPortal,
 		"role":              dbRole,
 		"user_type":         dbUserType,
-		"token":             "eduta-token-" + dbUsername,
+		"token":             "wamart-token-" + dbUsername,
 		"username":          dbUsername,
 		"email":             dbEmail,
 		"account_name":      dbAccountName,
@@ -395,7 +395,7 @@ func VerifyOTPHandler(w http.ResponseWriter, r *http.Request) {
 			"status":            "success",
 			"message":           "Email verified! Account created successfully.",
 			"portal":            "business_portal",
-			"token":             "eduta-token-" + cleanUser,
+			"token":             "wamart-token-" + cleanUser,
 			"username":          cleanUser,
 			"role":              "user",
 			"user_type":         "business_user",

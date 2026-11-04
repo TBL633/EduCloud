@@ -1472,13 +1472,18 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			custState := GetCustomerState(username, senderPhone)
 			if strings.EqualFold(payStatus, "PENDING") || strings.EqualFold(custState, "PAYMENT_PENDING") {
 				normMsg := strings.ToLower(strings.TrimSpace(msgText))
-				if normMsg == "cancel" || normMsg == "cancel order" || normMsg == "radd karein" || normMsg == "radd" {
-					// User cancelled payment
-					_ = SetCustomerPaymentStatus(username, senderPhone, "CANCELLED")
+				isEscape := normMsg == "cancel" || strings.Contains(normMsg, "cancel") ||
+					normMsg == "change" || strings.Contains(normMsg, "change") ||
+					normMsg == "modify" || strings.Contains(normMsg, "modify") ||
+					strings.Contains(normMsg, "badal") || strings.Contains(normMsg, "radd")
+
+				if isEscape {
+					// User requested cancellation / order modification via Escape Hatch
+					_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
 					_ = SetCustomerState(username, senderPhone, "chatting")
 					_ = ClearActiveCart(username, senderPhone)
 
-					cancelReply := "❌ Aapka order cancel kar diya gaya hai aur cart clear ho gaya hai. Naya order shuru karne ke liye aap menu ya product ka naam type kar sakte hain."
+					cancelReply := "Your previous payment request has been cancelled. What would you like to order now?"
 					activeClient := client
 					if activeClient == nil || !activeClient.IsLoggedIn() {
 						activeClient = GetOrCreateClient(username)
@@ -1488,8 +1493,42 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 					PushToLiveChat(username, senderPhone, cancelReply, "outgoing_ai")
 					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", cancelReply)
-					log.Printf("🚫 [Payment Cancelled by Customer] @%s (+%s): State reset to 'chatting' and cart cleared.", username, senderPhone)
-					return // DO NOT CALL AI!
+					log.Printf("🚫 [Payment Cancelled via Escape Hatch] @%s (+%s): payment_status set to BROWSING and cart cleared.", username, senderPhone)
+					return // Dropped this cancel event; NEXT incoming message will hit AI normally!
+				}
+
+				// LIVE ACTIVE VERIFICATION CHECK:
+				// When customer messages (e.g. "Done", "Paid", "Ho gya"), instantly query Paytm Soundbox status API
+				// This guarantees instant confirmation even if Cloudflare Worker webhook is delayed or unreachable!
+				calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
+				mid := ""
+				if calcRes != nil && calcRes.PaytmMid != "" {
+					mid = calcRes.PaytmMid
+				}
+				if mid == "" {
+					cfgTmp := GetUserConfigRAM(username)
+					if cfgTmp != nil {
+						mid = cfgTmp.PaytmMid
+					}
+				}
+				var orderID string
+				if calcRes != nil && calcRes.OrderID != "" {
+					orderID = calcRes.OrderID
+				}
+				if orderID == "" && DB != nil {
+					_ = DB.QueryRow(`SELECT order_id FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID)
+				}
+
+				if mid != "" && orderID != "" {
+					statusResp, errVerify := payment.VerifyPaytmPayment(mid, orderID)
+					if errVerify == nil && statusResp != nil {
+						stUpper := strings.ToUpper(statusResp.Status)
+						if stUpper == "TXN_SUCCESS" || stUpper == "SUCCESS" {
+							log.Printf("🎉 [Instant Active Verification SUCCESS on Customer Chat] Order: %s | Amount: ₹%s | Txn: %s", orderID, statusResp.TxnAmount, statusResp.TxnID)
+							TriggerConfirmedPaymentLead(username, senderPhone, orderID, statusResp.TxnAmount, statusResp.TxnID)
+							return // Payment confirmed and receipt sent!
+						}
+					}
 				}
 
 				// Any other message while payment is pending (e.g. "Done", "Ho gya", "Payment done", "Hello"):
@@ -1681,6 +1720,55 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 
 					deliveredReply = remainingText + "\n[QR Code Sent]\n" + followUpText
+				} else if strings.Contains(replyText, "[CONFIRM_COD_ORDER]") {
+					cleanReply := strings.TrimSpace(strings.ReplaceAll(replyText, "[CONFIRM_COD_ORDER]", ""))
+					calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
+					var amountStr, orderIDStr string
+					if calcRes != nil && calcRes.TotalAmount > 0 {
+						amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
+						orderIDStr = calcRes.OrderID
+					}
+					if orderIDStr == "" {
+						orderIDStr = fmt.Sprintf("ORD_COD_%s_%d", senderPhone[max(0, len(senderPhone)-4):], time.Now().Unix()%10000)
+					}
+					if amountStr == "" || amountStr == "0" || amountStr == "0.00" {
+						amountStr, _ = ResolveOrderAmountAndID(username, senderPhone, cleanReply, msgText)
+					}
+
+					// Update customer state to ORDER_CONFIRMED, COD_PENDING & clear cart
+					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
+					_ = SetCustomerPaymentStatus(username, senderPhone, "COD_PENDING")
+					_ = ClearActiveCart(username, senderPhone)
+
+					codConfirmMsg := fmt.Sprintf("🎉 *Aapka Cash on Delivery (COD) Order confirm ho gaya hai!* 🚚📦\n\n• *Order ID*: %s\n• *Total Amount*: ₹%s\n• *Payment Mode*: Cash on Delivery (COD)\n\nHum jald hi aapke diye gaye address par delivery karenge. Dhanyawad! 🙏", orderIDStr, amountStr)
+					if cleanReply != "" {
+						codConfirmMsg = cleanReply + "\n\n" + codConfirmMsg
+					}
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, codConfirmMsg, v.Info.ID, v.Info.Sender, v.Message)
+					}
+
+					// Dispatch lead alert to merchant
+					locTime := time.Now().Format("02 Jan 15:04")
+					alertMsg := fmt.Sprintf("🚨 *CONFIRMED COD ORDER ALERT* 🚨\n\n"+
+						"• *Account*: @%s\n"+
+						"• *Customer*: +%s\n"+
+						"• *Amount*: ₹%s (Cash on Delivery)\n"+
+						"• *Order ID*: %s\n"+
+						"• *Payment Mode*: COD (Unpaid - Collect on Delivery)\n"+
+						"• *Status*: Order Confirmed ✅\n"+
+						"• *Time*: %s\n\n"+
+						"📲 *Chat with Customer*:\nhttps://wa.me/%s\n\n"+
+						"WaMart Automated Commerce Gateway",
+						username, senderPhone, amountStr, orderIDStr, locTime, senderPhone)
+					go DispatchLeadAlertWhatsAppDirect(username, alertMsg)
+
+					if DB != nil {
+						leadInquiry := fmt.Sprintf("COD Order %s | Amount: ₹%s | Cash on Delivery", orderIDStr, amountStr)
+						_, _ = DB.Exec(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+							VALUES ($1, $2, $3, 'Confirmed Order (COD)', NOW())`, username, senderPhone, leadInquiry)
+					}
+					deliveredReply = codConfirmMsg
 				} else if imgURL != "" && activeClient != nil && activeClient.IsLoggedIn() {
 					sendErr := SendImageReplyFromURL(activeClient, senderPhone, imgURL, replyText, v.Info.ID, v.Info.Sender, v.Message)
 					if sendErr != nil {

@@ -57,7 +57,7 @@ type AIProfileData struct {
 }
 
 type AIResponseStateJSON struct {
-	Action          string         `json:"action"` // "browsing", "add_to_cart", "ask_details", "update_profile", "generate_qr"
+	Action          string         `json:"action"` // "browsing", "add_to_cart", "ask_details", "update_profile", "generate_qr", "confirm_cod"
 	ReplyToCustomer string         `json:"reply_to_customer"`
 	CartItems       []AICartItem   `json:"cart_items,omitempty"`
 	ProfileData     *AIProfileData `json:"profile_data,omitempty"`
@@ -81,15 +81,20 @@ Your JSON response MUST strictly follow this schema:
 ACTIONS (Choose exactly one):
 1. "browsing": Default for general inquiry or showing catalog items.
 2. "add_to_cart": Customer wants to buy or select item(s). Include cart_items array with product_id and qty.
-3. "ask_details": Asking customer for address, name, or payment mode preference.
+3. "ask_details": Asking customer for Delivery Address, Name/Phone, or payment mode preference.
 4. "update_profile": Customer provided their name or delivery address. Put details in profile_data.
-5. "generate_qr": Customer confirmed checkout and selected online payment.
+5. "generate_qr": ONLY when the customer has provided address and explicitly confirmed checkout choosing Online / UPI payment.
+6. "confirm_cod": Customer confirmed checkout and explicitly chose Cash on Delivery (COD).
 
-CRITICAL RULES:
-1. CATALOG ONLY: Never invent products or prices. Only sell items listed in the provided Product Catalog.
-2. BEAUTIFUL FORMATTING & EMOJIS: You MUST format your reply_to_customer beautifully using WhatsApp markdown (*bold* for highlights, _italic_, and bullet points) and liberally use appropriate, warm emojis (e.g., 🙏, 📦, 😊, 🛒) in every single reply.
-3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When the customer confirms checkout, simply return action 'generate_qr'.
-4. STRICT PAYMENT SEPARATION: Never hallucinate order confirmation or say "Order confirmed" or "Payment received". Order confirmation is only done via automated payment webhook. When checking out, return action 'generate_qr'.`
+STRICT CHECKOUT FUNNEL RULES:
+1. PRE-QR STAGE: When the customer finalizes items, DO NOT output 'generate_qr' immediately. Instead, output 'ask_details'. You must ask for the Delivery Address and Phone Number.
+2. PAYMENT METHOD SELECTION: Once details are collected, you must explicitly ask: "Would you like to pay via Online (UPI) or Cash on Delivery (COD)?" along with the full Order Summary (Items, Total, Delivery Address).
+3. ONLINE VS COD:
+   - ONLY when the customer explicitly chooses 'Online' or 'UPI', should you return the action 'generate_qr'.
+   - If they choose 'COD' or 'Cash on Delivery', return action 'confirm_cod'.
+4. CATALOG ONLY: Never invent products or prices. Only sell items listed in the provided Product Catalog.
+5. BEAUTIFUL FORMATTING & EMOJIS: You MUST format your reply_to_customer beautifully using WhatsApp markdown (*bold* for highlights, _italic_, and bullet points) and liberally use appropriate, warm emojis (e.g., 🙏, 📦, 😊, 🛒) in every single reply.
+6. NO FAKE PAYMENTS: Never hallucinate payment received or fake order confirmation for online payments. Online confirmation is strictly done via automated payment webhook. For COD orders, use action 'confirm_cod'.`
 
 // BuildUniversalSystemPrompt builds the final token-optimized JSON system prompt dynamically
 func BuildUniversalSystemPrompt(businessName, businessType, language, storePolicies, catalogContext string) string {
@@ -588,6 +593,10 @@ func ParseAIResponseJSON(rawResponse string) (*AIResponseStateJSON, string, erro
 		if !strings.Contains(replyText, "[INITIATE_PAYMENT_QR]") {
 			replyText = strings.TrimSpace(replyText) + "\n\n[INITIATE_PAYMENT_QR]"
 		}
+	} else if strings.ToLower(strings.TrimSpace(state.Action)) == "confirm_cod" {
+		if !strings.Contains(replyText, "[CONFIRM_COD_ORDER]") {
+			replyText = strings.TrimSpace(replyText) + "\n\n[CONFIRM_COD_ORDER]"
+		}
 	}
 
 	return &state, replyText, nil
@@ -693,6 +702,9 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		if action == "generate_qr" {
 			_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
 			_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
+		} else if action == "confirm_cod" {
+			_ = SetCustomerState(cleanUsr, cleanPhone, "ORDER_CONFIRMED")
+			_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "COD_PENDING")
 		}
 	}
 	return strings.TrimSpace(replyText), ""
@@ -791,6 +803,9 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 				// Lock customer state to PAYMENT_PENDING in DB & RAM Cache
 				_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
 				_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
+			} else if action == "confirm_cod" {
+				_ = SetCustomerState(cleanUsr, cleanPhone, "ORDER_CONFIRMED")
+				_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "COD_PENDING")
 			}
 			aiResponse = replyText
 		}

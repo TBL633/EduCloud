@@ -594,6 +594,15 @@ func AddItemsToActiveCart(username, customerPhone string, cartItems []AICartItem
 		return fmt.Errorf("empty customer phone number")
 	}
 
+	// Purge ghost cart items from previous completed or cancelled orders
+	if cp, _ := GetCustomerProfile(cleanUsr, cleanPhone); cp != nil {
+		if cp.CurrentState == "ORDER_CONFIRMED" || cp.PaymentStatus == "PAID" || cp.PaymentStatus == "CANCELLED" {
+			_ = ClearActiveCart(cleanUsr, cleanPhone)
+			_ = SetCustomerState(cleanUsr, cleanPhone, "chatting")
+			_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "BROWSING")
+		}
+	}
+
 	for _, item := range cartItems {
 		pID := strings.TrimSpace(item.ProductID)
 		if pID == "" {
@@ -634,15 +643,14 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 		return res, fmt.Errorf("database connection not available")
 	}
 
-	// Query active_carts and JOIN with products table on ID or name, checking sale_price first
-	query := `SELECT c.product_id, c.qty, COALESCE(p.name, 'Product #' || c.product_id), 
+	// Query active_carts with STRICT join on products to prevent fuzzy match duplicates
+	query := `SELECT DISTINCT ON (c.product_id) 
+		c.product_id, c.qty, COALESCE(p.name, 'Product #' || c.product_id), 
 		COALESCE(p.sale_price, 0), COALESCE(p.price, '0'), COALESCE(p.mrp, 0)
 		FROM active_carts c 
 		LEFT JOIN products p ON (
 			CAST(c.product_id AS TEXT) = CAST(p.id AS TEXT) 
 			OR LOWER(TRIM(p.name)) = LOWER(TRIM(c.product_id))
-			OR LOWER(TRIM(p.name)) LIKE '%' || LOWER(TRIM(c.product_id)) || '%'
-			OR LOWER(TRIM(c.product_id)) LIKE '%' || LOWER(TRIM(p.name)) || '%'
 		) AND (
 			LOWER(p.username) = LOWER(c.username) 
 			OR LOWER(p.username) = LOWER(c.username) || '@gmail.com'
@@ -650,7 +658,10 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 			OR LOWER(p.username) = 'admin'
 		)
 		WHERE (LOWER(c.username) = LOWER($1) OR LOWER(c.username) = LOWER($1) || '@gmail.com' OR LOWER($1) = LOWER(c.username) || '@gmail.com') 
-		  AND c.customer_phone = $2`
+		  AND c.customer_phone = $2
+		  AND (c.payment_status IS NULL OR c.payment_status = 'UNPAID' OR c.payment_status = 'PENDING' OR c.payment_status = 'BROWSING')
+		  AND c.updated_at >= NOW() - INTERVAL '24 hours'
+		ORDER BY c.product_id, c.updated_at DESC`
 
 	rows, err := DB.Query(query, cleanUsr, cleanPhone)
 	if err != nil {
@@ -759,7 +770,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	log.Printf("   • Payment Credentials: Paytm MID = '%s' | Paytm VPA = '%s' | Payee Name = '%s'", res.PaytmMid, res.PaytmVpa, res.PayeeName)
 
 	// Save calculated state to customer_order_states
-	if len(res.Items) > 0 && res.TotalAmount > 0 {
+	if (len(res.Items) > 0 || res.TotalAmount > 0) && DB != nil {
 		itemsJSON, _ := json.Marshal(res.Items)
 		_, _ = DB.Exec(`INSERT INTO customer_order_states 
 			(username, customer_phone, items, total_amount, payment_mode, payment_status, order_status, order_id, updated_at)

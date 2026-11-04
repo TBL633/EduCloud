@@ -693,6 +693,10 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	var payload PaymentWebhookPayload
 	_ = json.Unmarshal(bodyBytes, &payload)
 
+	// User requested exact diagnostic logging
+	log.Printf("WEBHOOK RECEIVED: %+v", payload)
+	log.Printf("🔔 [Payment Webhook Received Raw Payload]: %s", string(bodyBytes))
+
 	orderID := strings.TrimSpace(payload.OrderID)
 	status := strings.ToUpper(strings.TrimSpace(payload.Status))
 	amount := strings.TrimSpace(payload.Amount)
@@ -713,7 +717,6 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Printf("🔔 [Payment Webhook Received] OrderID: %s | Status: %s | Amount: %s\n", orderID, status, amount)
-	log.Printf("🔔 [Payment Webhook Received Raw Payload]: %s", string(bodyBytes))
 
 	if orderID == "" {
 		http.Error(w, `{"error":"orderId is required"}`, http.StatusBadRequest)
@@ -727,13 +730,23 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Update Neon DB
 	if globalDB != nil {
-		// 1. Fetch current order info by order_id (case-insensitive)
+		// 1. Fetch current order info by order_id (case-insensitive exact)
 		_ = globalDB.QueryRow(`
 			SELECT username, customer_phone, total_amount 
 			FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
 		`, orderID).Scan(&username, &customerPhone, &totalAmount)
 
-		// Fallback resolution if exact order_id row wasn't found
+		// 2. Partial match fallback
+		if username == "" || customerPhone == "" {
+			_ = globalDB.QueryRow(`
+				SELECT username, customer_phone, total_amount 
+				FROM customer_order_states 
+				WHERE order_id LIKE '%' || $1 || '%' OR $1 LIKE '%' || order_id || '%' 
+				ORDER BY updated_at DESC LIMIT 1
+			`, orderID).Scan(&username, &customerPhone, &totalAmount)
+		}
+
+		// 3. Fallback resolution if exact order_id row wasn't found (matching 4-digit phone suffix)
 		if (username == "" || customerPhone == "") && strings.HasPrefix(orderID, "ORD_") {
 			parts := strings.Split(orderID, "_")
 			if len(parts) >= 2 {
@@ -745,6 +758,16 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 					ORDER BY updated_at DESC LIMIT 1
 				`, phoneSuffix).Scan(&username, &customerPhone)
 			}
+		}
+
+		// 4. Fallback to latest customer waiting in PENDING
+		if username == "" || customerPhone == "" {
+			_ = globalDB.QueryRow(`
+				SELECT username, wa_number 
+				FROM customers 
+				WHERE payment_status = 'PENDING' 
+				ORDER BY updated_at DESC LIMIT 1
+			`).Scan(&username, &customerPhone)
 		}
 
 		if isSuccess {

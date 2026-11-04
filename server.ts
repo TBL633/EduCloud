@@ -763,7 +763,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
   }
 
   // Global Admin lands on Admin Portal, Normal users land on Business Portal
-  const isGlobalAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin' || (user.email && (user.email.toLowerCase() === 'admin@wamart.ai' || user.email.toLowerCase() === 'admin@eduta.ai'));
+  const isGlobalAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin' || (user.email && user.email.toLowerCase() === 'admin@wamart.ai');
   const targetPortal = isGlobalAdmin ? 'admin_portal' : 'business_portal';
 
   return res.json({
@@ -771,7 +771,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
     portal: targetPortal,
     role: user.role,
     user_type: user.user_type || (isGlobalAdmin ? 'admin' : 'business_user'),
-    token: 'eduta-token-' + user.username,
+    token: 'wamart-token-' + user.username,
     username: user.username,
     email: user.email || '',
     account_name: user.account_name,
@@ -1156,7 +1156,7 @@ app.post(['/api/auth/verify-otp', '/api/auth/neon/verify-otp'], async (req: Requ
     status: 'success',
     message: 'Email verified! Account created successfully.',
     portal: 'business_portal',
-    token: 'eduta-token-' + newUser.username,
+    token: 'wamart-token-' + newUser.username,
     username: newUser.username,
     role: newUser.role,
     user_type: newUser.user_type,
@@ -1221,7 +1221,7 @@ app.post('/api/register', async (req: Request, res: Response) => {
     status: 'success',
     message: 'Business Account Created Successfully!',
     portal: 'business_portal',
-    token: 'eduta-token-' + newUser.username,
+    token: 'wamart-token-' + newUser.username,
     username: newUser.username,
     role: newUser.role,
     user_type: newUser.user_type,
