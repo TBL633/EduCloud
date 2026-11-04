@@ -714,6 +714,17 @@ func FetchRealBusinessPaymentCredentials(cleanUsr, cleanPhone string) (mid strin
 		}
 	}
 
+	// 0. Check instant RAM User Config Cache
+	if ramCfg := GetUserConfigRAM(cleanUsr); ramCfg != nil {
+		if strings.TrimSpace(ramCfg.PaytmMid) != "" && strings.TrimSpace(ramCfg.MerchantVpa) != "" {
+			pName := strings.TrimSpace(ramCfg.BusinessName)
+			if pName == "" {
+				pName = cleanUsr
+			}
+			return strings.TrimSpace(ramCfg.PaytmMid), strings.TrimSpace(ramCfg.MerchantVpa), pName, nil
+		}
+	}
+
 	// 4. Query the registered business account that holds active payment credentials in users table
 	errAny := DB.QueryRow(`
 		SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, username) 
@@ -726,16 +737,26 @@ func FetchRealBusinessPaymentCredentials(cleanUsr, cleanPhone string) (mid strin
 		return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
 	}
 
-	// 5. Query tenant_payment_configs for any configured credentials
+	// 5. Query tenant_payment_configs for any configured credentials (sorted by updated_at)
 	errAnyT := DB.QueryRow(`
 		SELECT COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, username) 
 		FROM tenant_payment_configs 
 		WHERE TRIM(COALESCE(paytm_mid, '')) != '' AND TRIM(COALESCE(merchant_vpa, '')) != ''
-		ORDER BY id DESC
+		ORDER BY updated_at DESC
 		LIMIT 1
 	`).Scan(&mid, &vpa, &payeeName)
 	if errAnyT == nil && mid != "" && vpa != "" {
 		return strings.TrimSpace(mid), strings.TrimSpace(vpa), strings.TrimSpace(payeeName), nil
+	}
+
+	// 6. Check payment package in-memory config
+	pCfg := payment.GetPaymentConfig(cleanUsr)
+	if strings.TrimSpace(pCfg.PaytmMID) != "" && strings.TrimSpace(pCfg.MerchantVPA) != "" {
+		pName := strings.TrimSpace(pCfg.PayeeName)
+		if pName == "" {
+			pName = cleanUsr
+		}
+		return strings.TrimSpace(pCfg.PaytmMID), strings.TrimSpace(pCfg.MerchantVPA), pName, nil
 	}
 
 	// STRICTLY ZERO PLACEHOLDERS: Return error if credentials missing

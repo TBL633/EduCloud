@@ -1572,84 +1572,119 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 
 				// =====================================================================
-				// THE SCREENSHOT UNLOCKER (UPI BYPASS)
+				// 4. THE FALLBACK: SCREENSHOT FORWARDING TO BUSINESS OWNER
 				// =====================================================================
-				hasScreenshot := isIncomingImageOrDocument(v.Message) || strings.HasPrefix(msgText, "[Payment Screenshot]")
+				incomingImg := extractIncomingImageMessage(v.Message)
+				hasScreenshot := incomingImg != nil || isIncomingImageOrDocument(v.Message) || strings.HasPrefix(msgText, "[Payment Screenshot]")
+
 				if hasScreenshot {
-					// 1. Update user's payment_status to "PAID" and state to "ORDER_CONFIRMED" in DB & RAM
-					_ = SetCustomerPaymentStatus(username, senderPhone, "PAID")
-					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
-					if DB != nil {
-						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
-						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND payment_status != 'paid'`, senderPhone)
-					}
+					// DO NOT auto-confirm the order in the system.
+					log.Printf("📸 [Payment Screenshot Received - Fallback Dispute Flow] Customer +%s sent screenshot during PENDING state. Forwarding to business owner for manual verification.", senderPhone)
 
-					// 2. Clear customer's active cart strictly from DB
-					_ = ClearActiveCart(username, senderPhone)
-					if DB != nil {
-						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					// Extract user's cart details (Items, Total), Delivery Address, Customer Phone Number
+					calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
+					var orderID string
+					var totalAmt float64
+					if calcRes != nil {
+						orderID = calcRes.OrderID
+						totalAmt = calcRes.TotalAmount
 					}
-
-					// Resolve Order ID and Amount
-					var orderID, amountStr string
-					if DB != nil {
-						_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount::text, '0.00') FROM customer_order_states WHERE (customer_phone=$1 OR customer_phone LIKE '%' || $1) ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &amountStr)
-					}
-					if orderID == "" {
-						calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
-						if calcRes != nil && calcRes.OrderID != "" {
-							orderID = calcRes.OrderID
-							amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
-						}
+					if orderID == "" && DB != nil {
+						_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount, 0) FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &totalAmt)
 					}
 					if orderID == "" {
 						orderID = fmt.Sprintf("ORD_%s_%d", senderPhone[max(0, len(senderPhone)-4):], time.Now().Unix()%10000)
 					}
 
-					// 3. Send success confirmation via whatsmeow
-					successMsg := "✅ Screenshot received! Aapka payment verify ho gaya hai aur Order confirm ho gaya hai. Hum jald hi delivery karenge."
+					custProfile, _ := GetCustomerProfile(username, senderPhone)
+					custName := senderPhone
+					delAddr := "Not provided"
+					if custProfile != nil {
+						if strings.TrimSpace(custProfile.FullName) != "" {
+							custName = strings.TrimSpace(custProfile.FullName)
+						}
+						if strings.TrimSpace(custProfile.DeliveryAddress) != "" {
+							delAddr = strings.TrimSpace(custProfile.DeliveryAddress)
+						}
+					}
+					if delAddr == "Not provided" && DB != nil {
+						_ = DB.QueryRow(`SELECT COALESCE(NULLIF(delivery_address, ''), 'Not provided') FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&delAddr)
+					}
+
+					// Fetch the Business Owner's Lead Alert Notification Phone Number from the DB (stored in AI settings)
+					var notifPhone string
+					if DB != nil {
+						_ = DB.QueryRow(`
+							SELECT COALESCE(NULLIF(notification_phone, ''), NULLIF(phone, ''), NULLIF(wa_jid, ''), '')
+							FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(email)=LOWER($1) LIMIT 1
+						`, username).Scan(&notifPhone)
+					}
+					cleanNotifPhone := FormatPhone(notifPhone)
+
+					// Forwarding Action: Use whatsmeow to send a message to the Business Owner's Lead Alert number
+					disputeAlert := fmt.Sprintf("🚨 [PAYMENT DISPUTE ALERT]\nCustomer: %s\nAddress: %s\nCart Total: ₹%.2f\nCustomer claims payment is done but API verification failed. Please verify the attached screenshot.",
+						custName, delAddr, totalAmt)
+
 					activeClient := client
 					if activeClient == nil || !activeClient.IsLoggedIn() {
 						activeClient = GetOrCreateClient(username)
 					}
-					if activeClient != nil && activeClient.IsLoggedIn() {
-						_ = SendReplyMessage(activeClient, senderPhone, successMsg, v.Info.ID, v.Info.Sender, v.Message)
+
+					if activeClient != nil && activeClient.IsLoggedIn() && cleanNotifPhone != "" && len(cleanNotifPhone) >= 10 {
+						_ = SendMessage(activeClient, cleanNotifPhone, disputeAlert)
+
+						// Follow immediately by forwarding the actual ImageMessage bytes sent by the customer
+						if incomingImg != nil {
+							go func(c *whatsmeow.Client, target string, img *waE2E.ImageMessage, ord string) {
+								imgBytes, errDown := c.Download(img)
+								if errDown == nil && len(imgBytes) > 0 {
+									_ = SendImageFromBytes(c, target, imgBytes, fmt.Sprintf("📸 Attached Screenshot from %s (Order #%s)", custName, ord))
+									log.Printf("✅ [Screenshot Forwarded] Delivered customer screenshot bytes to business owner +%s", target)
+								} else {
+									log.Printf("⚠️ [Screenshot Download Notice] Could not download image bytes: %v", errDown)
+								}
+							}(activeClient, cleanNotifPhone, incomingImg, orderID)
+						}
+					} else {
+						log.Printf("ℹ️ [Payment Dispute] No valid notification phone for business owner @%s", username)
 					}
-					PushToLiveChat(username, senderPhone, successMsg, "outgoing_ai")
-					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", successMsg)
 
-					// 4. Forward this screenshot / confirmed lead alert to the Business Owner's notification number with the Order ID
-					ownerAlert := fmt.Sprintf("📸 *CONFIRMED ORDER (PAYMENT SCREENSHOT RECEIVED)* 📸\n\n"+
-						"• *Account*: @%s\n"+
-						"• *Customer*: +%s\n"+
-						"• *Order ID*: %s\n"+
-						"• *Amount*: ₹%s\n"+
-						"• *Payment Verification*: Customer Screenshot Uploaded & Verified ✅\n"+
-						"• *Status*: Confirmed & Ready for Delivery\n"+
-						"• *Time*: %s\n\n"+
-						"📲 *Chat with Customer*:\nhttps://wa.me/%s\n\n"+
-						"WaMart Automated Commerce Gateway",
-						username, senderPhone, orderID, amountStr, time.Now().Format("02 Jan 15:04"), senderPhone)
+					// Also push to Live Chat
+					PushToLiveChat(username, senderPhone, disputeAlert, "lead_alert")
 
-					go DispatchLeadAlertWhatsAppDirect(username, ownerAlert)
-
+					// Update customer_order_states with payment_status = 'disputed_screenshot'
 					if DB != nil {
-						inquiry := fmt.Sprintf("Order %s | Amount: ₹%s | Screenshot Verified", orderID, amountStr)
-						_, _ = DB.Exec(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
-							VALUES ($1, $2, $3, 'Confirmed Paid (UPI Screenshot Verified)', NOW())`,
-							strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@")), senderPhone, inquiry)
+						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'disputed_screenshot', updated_at = NOW() WHERE customer_phone=$1 AND payment_status != 'paid'`, senderPhone)
 					}
 
-					log.Printf("🎉 [Screenshot Unlocker SUCCESS] @%s (+%s): Payment verified via screenshot. Order %s confirmed and cart cleared.", username, senderPhone, orderID)
-					return // AI blocked and order funnel completed!
+					// Reply to the Customer: "🙏 Aapka screenshot prapt hua. Humare business owner ise manually verify karke aapko update karenge."
+					custReply := "🙏 Aapka screenshot prapt hua. Humare business owner ise manually verify karke aapko update karenge."
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, custReply, v.Info.ID, v.Info.Sender, v.Message)
+					}
+					PushToLiveChat(username, senderPhone, custReply, "outgoing_ai")
+					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", custReply)
+
+					return // DO NOT CALL AI!
 				}
 
-				// LIVE ACTIVE VERIFICATION CHECK:
-				// When customer messages (e.g. "Done", "Paid", "Ho gya"), query Paytm Soundbox status API if available
+				// =====================================================================
+				// 3. DIRECT GOLANG PAYTM API VERIFICATION (THE CORE CHECK)
+				// =====================================================================
+				// When user's state is 'PENDING' and they type any text (e.g. "Payment Ho Gaya", "Done"):
+				// Do NOT trigger the AI.
+				log.Printf("⚡ [Direct Golang Payment Check Triggered] Inbound text from +%s during PENDING state: '%s'", senderPhone, msgText)
+
 				calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
 				mid := ""
 				if calcRes != nil && calcRes.PaytmMid != "" {
 					mid = calcRes.PaytmMid
+				}
+				if mid == "" {
+					realMid, _, _, errCred := FetchRealBusinessPaymentCredentials(username, senderPhone)
+					if errCred == nil && realMid != "" {
+						mid = realMid
+					}
 				}
 				if mid == "" {
 					cfgTmp := GetUserConfigRAM(username)
@@ -1657,40 +1692,85 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						mid = cfgTmp.PaytmMid
 					}
 				}
+
 				var orderID string
+				var amountStr string
 				if calcRes != nil && calcRes.OrderID != "" {
 					orderID = calcRes.OrderID
+					amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
 				}
 				if orderID == "" && DB != nil {
-					_ = DB.QueryRow(`SELECT order_id FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID)
+					_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount::text, '0.00') FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &amountStr)
 				}
 
-				if mid != "" && orderID != "" {
-					statusResp, errVerify := payment.VerifyPaytmPayment(mid, orderID)
-					if errVerify == nil && statusResp != nil {
-						stUpper := strings.ToUpper(statusResp.Status)
-						if stUpper == "TXN_SUCCESS" || stUpper == "SUCCESS" {
-							log.Printf("🎉 [Instant Active Verification SUCCESS on Customer Chat] Order: %s | Amount: ₹%s | Txn: %s", orderID, statusResp.TxnAmount, statusResp.TxnID)
-							TriggerConfirmedPaymentLead(username, senderPhone, orderID, statusResp.TxnAmount, statusResp.TxnID)
-							return // Payment confirmed and receipt sent!
-						}
-					}
-				}
-
-				// IF IT IS TEXT (Like "Ho gya", "Done", "Payment ho gaya"):
-				// Keep the existing blockade and reply:
-				pendingReply := "Kripya payment complete karke hume **Screenshot (Photo)** bhejein taaki hum order confirm kar sakein. Cancel karne ke liye 'Cancel' type karein."
 				activeClient := client
 				if activeClient == nil || !activeClient.IsLoggedIn() {
 					activeClient = GetOrCreateClient(username)
 				}
-				if activeClient != nil && activeClient.IsLoggedIn() {
-					_ = SendReplyMessage(activeClient, senderPhone, pendingReply, v.Info.ID, v.Info.Sender, v.Message)
+
+				var isTxnSuccess bool
+				var txnID string
+				if mid != "" && orderID != "" {
+					statusResp, errVerify := payment.VerifyPaytmPayment(mid, orderID)
+					if errVerify == nil && statusResp != nil {
+						st := strings.ToUpper(strings.TrimSpace(statusResp.Status))
+						log.Printf("📡 [Paytm Verification Result for %s]: STATUS=%s | Amount=%s | TxnID=%s", orderID, st, statusResp.TxnAmount, statusResp.TxnID)
+						if st == "TXN_SUCCESS" || st == "SUCCESS" {
+							isTxnSuccess = true
+							txnID = statusResp.TxnID
+							if statusResp.TxnAmount != "" {
+								amountStr = statusResp.TxnAmount
+							}
+						}
+					} else {
+						log.Printf("⚠️ [Paytm Verification Error for %s]: %v", orderID, errVerify)
+					}
+				} else {
+					log.Printf("⚠️ [Paytm Verification Skipped]: Missing MID ('%s') or OrderID ('%s')", mid, orderID)
 				}
-				PushToLiveChat(username, senderPhone, pendingReply, "outgoing_ai")
-				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", pendingReply)
-				log.Printf("⏳ [State Lock Active] @%s (+%s): Customer payment is PENDING. AI Muted. Screenshot reminder sent.", username, senderPhone)
-				return // DO NOT CALL AI! Drop the event.
+
+				if isTxnSuccess {
+					// SCENARIO A: Transaction Success
+					// 1. Update payment_status to 'PAID'
+					_ = SetCustomerPaymentStatus(username, senderPhone, "PAID")
+					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
+					if DB != nil {
+						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND payment_status != 'paid'`, senderPhone)
+						_, _ = DB.Exec(`UPDATE active_carts SET payment_status = 'PAID', updated_at = NOW() WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					}
+
+					// 2. Send WhatsApp reply: "✅ Payment Verified! Aapka order confirm ho gaya hai."
+					successReply := "✅ Payment Verified! Aapka order confirm ho gaya hai."
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, successReply, v.Info.ID, v.Info.Sender, v.Message)
+					}
+					PushToLiveChat(username, senderPhone, successReply, "outgoing_ai")
+					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", successReply)
+
+					// 3. Clear the active_carts
+					_ = ClearActiveCart(username, senderPhone)
+					if DB != nil {
+						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					}
+
+					// Trigger confirmed lead alert to merchant & database
+					TriggerConfirmedPaymentLead(username, senderPhone, orderID, amountStr, txnID)
+
+					log.Printf("🎉 [Paytm Direct Verification SUCCESS]: Order %s for +%s confirmed and active_carts cleared.", orderID, senderPhone)
+					return // DO NOT CALL AI!
+				}
+
+				// SCENARIO B: Transaction Pending / Failure
+				// Send WhatsApp reply: "⚠️ Humari system me payment abhi tak verify nahi hua hai. Agar aapne payment kar diya hai aur koi samasya aa rahi hai, toh kripya payment ka **Screenshot** yahan bhejein."
+				failReply := "⚠️ Humari system me payment abhi tak verify nahi hua hai. Agar aapne payment kar diya hai aur koi samasya aa rahi hai, toh kripya payment ka **Screenshot** yahan bhejein."
+				if activeClient != nil && activeClient.IsLoggedIn() {
+					_ = SendReplyMessage(activeClient, senderPhone, failReply, v.Info.ID, v.Info.Sender, v.Message)
+				}
+				PushToLiveChat(username, senderPhone, failReply, "outgoing_ai")
+				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", failReply)
+				log.Printf("⏳ [Payment Not Yet Verified] Replied to customer +%s with screenshot instruction.", senderPhone)
+				return // DO NOT CALL AI!
 			}
 
 			if strings.EqualFold(custState, "ORDER_CONFIRMED") {
@@ -1843,6 +1923,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING & payment_status to PENDING
 					_ = SetCustomerState(username, senderPhone, "PAYMENT_PENDING")
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
+					if DB != nil {
+						_, _ = DB.Exec(`UPDATE active_carts SET payment_status = 'PENDING', updated_at = NOW() WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PENDING', current_state = 'PAYMENT_PENDING', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+					}
 
 					workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "hq67khm3")
 					if qrErr != nil || workerQRURL == "" {
@@ -1861,22 +1945,21 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						_ = SendReplyMessage(activeClient, senderPhone, fmt.Sprintf("💳 Click or scan to pay ₹%s: %s", amountStr, workerQRURL), v.Info.ID, v.Info.Sender, v.Message)
 					}
 
-					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment
+					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment as background fallback
 					fmt.Printf("🔍 [Payment Verification Dispatch] Account: @%s | Real Business MID: '%s' | VPA: '%s' | Order: %s\n", username, mid, vpa, orderIDStr)
 
 					liveWebhookURL := payment.GetAppWebhookURL()
-					fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", liveWebhookURL, "for Order:", orderIDStr)
-					go func(m, ord, wh string) {
-						errPoll := payment.StartWorkerPaymentCheck(m, ord, wh)
-						if errPoll != nil {
-							log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
-						}
-					}(mid, orderIDStr, liveWebhookURL)
-					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
+					if liveWebhookURL != "" {
+						go func(m, ord, wh string) {
+							errPoll := payment.StartWorkerPaymentCheck(m, ord, wh)
+							if errPoll != nil {
+								log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
+							}
+						}(mid, orderIDStr, liveWebhookURL)
+					}
 
-
-					// 5. Send follow-up text: "Aapka bill ₹[TotalAmount] ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment successful hone ke baad, kripya yahan payment ka screenshot (photo) bhejein.**"
-					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment successful hone ke baad, kripya yahan payment ka screenshot (photo) bhejein.**\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr)
+					// 5. Send follow-up instruction message: "Aapka bill ₹[TotalAmount] ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment pura karne ke baad yahan type karein 'Payment Ho Gaya'.**"
+					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment pura karne ke baad yahan type karein 'Payment Ho Gaya'.**\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr)
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendMessage(activeClient, senderPhone, followUpText)
 					}
@@ -2383,6 +2466,74 @@ func SendImageFromURL(client *whatsmeow.Client, phone, imageURL, caption string)
 	mimeType := http.DetectContentType(imgBytes)
 
 	// Check exact sender JID
+	lidCacheLock.RLock()
+	targetJID, hasTargetJID := phoneToJID[cleanPhone]
+	if !hasTargetJID {
+		targetJID, hasTargetJID = phoneToJID[phone]
+	}
+	lidCacheLock.RUnlock()
+
+	primaryServer := types.DefaultUserServer
+	if !hasTargetJID {
+		if strings.HasPrefix(cleanPhone, "117") || strings.HasPrefix(cleanPhone, "223") || strings.HasPrefix(cleanPhone, "100") {
+			primaryServer = "lid"
+		}
+		targetJID = types.NewJID(cleanPhone, primaryServer)
+	}
+
+	msg := &waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{
+			Caption:       proto.String(caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(imgBytes))),
+			JPEGThumbnail: UniversalThumbnail,
+		},
+	}
+
+	_, err = client.SendMessage(context.Background(), targetJID, msg)
+	if err != nil && (strings.Contains(err.Error(), "no LID found") || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "invalid recipient")) {
+		altServer := "lid"
+		if primaryServer == "lid" {
+			altServer = types.DefaultUserServer
+		}
+		targetJID = types.NewJID(cleanPhone, altServer)
+		_, err = client.SendMessage(context.Background(), targetJID, msg)
+	}
+	return err
+}
+
+// SendImageFromBytes uploads raw image bytes to WhatsApp and delivers to phone with caption
+func SendImageFromBytes(client *whatsmeow.Client, phone string, imgBytes []byte, caption string) error {
+	if client == nil || !client.IsLoggedIn() {
+		return fmt.Errorf("whatsapp connected nahi hai")
+	}
+	cleanPhone := FormatPhone(phone)
+	if len(cleanPhone) < 8 {
+		return fmt.Errorf("invalid phone number: %s", phone)
+	}
+	if len(imgBytes) == 0 {
+		return fmt.Errorf("empty image payload")
+	}
+
+	if err := EnsureConnected(client); err != nil {
+		return err
+	}
+
+	uploaded, err := client.Upload(context.Background(), imgBytes, whatsmeow.MediaImage)
+	if err != nil {
+		return fmt.Errorf("whatsapp media upload failed: %v", err)
+	}
+
+	mimeType := http.DetectContentType(imgBytes)
+	if !strings.HasPrefix(mimeType, "image/") {
+		mimeType = "image/jpeg"
+	}
+
 	lidCacheLock.RLock()
 	targetJID, hasTargetJID := phoneToJID[cleanPhone]
 	if !hasTargetJID {

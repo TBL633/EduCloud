@@ -42,6 +42,25 @@ type PaytmStatusResponse struct {
 	BankTxnID   string `json:"BANKTXNID"`
 	TxnDate     string `json:"TXNDATE"`
 	PaymentMode string `json:"PAYMENTMODE"`
+	// Support lowercase / nested response variations
+	StatusLower string `json:"status"`
+	ResultInfo  *struct {
+		ResultStatus string `json:"resultStatus"`
+		ResultCode   string `json:"resultCode"`
+		ResultMsg    string `json:"resultMsg"`
+	} `json:"resultInfo"`
+	Body *struct {
+		ResultInfo *struct {
+			ResultStatus string `json:"resultStatus"`
+			ResultCode   string `json:"resultCode"`
+			ResultMsg    string `json:"resultMsg"`
+		} `json:"resultInfo"`
+		TxnID     string `json:"txnId"`
+		BankTxnID string `json:"bankTxnId"`
+		TxnAmount string `json:"txnAmount"`
+		OrderID   string `json:"orderId"`
+		MID       string `json:"mid"`
+	} `json:"body"`
 }
 
 // In-Memory thread-safe payment config cache for 512MB RAM performance (0ms lookup)
@@ -170,8 +189,7 @@ func GenerateQRCodeBytes(upiString string) ([]byte, error) {
 	return pngBytes, nil
 }
 
-// VerifyPaytmPayment makes a single lazy-triggered HTTP GET request to Paytm Soundbox status API
-// Do NOT use background goroutine polling. This is lazy-triggered by chat input or button click.
+// VerifyPaytmPayment makes a direct GET/POST request to Paytm Order Status API (https://securegw.paytm.in/order/status)
 func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error) {
 	cleanMID := strings.TrimSpace(mid)
 	cleanOrderID := strings.TrimSpace(orderId)
@@ -180,8 +198,8 @@ func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error
 		return nil, fmt.Errorf("paytm MID and OrderID are required for status verification")
 	}
 
-	// Payload expected by Paytm Soundbox Status Endpoint:
-	// {"MID":"<mid>","ORDERID":"<orderId>"}
+	log.Printf("🔍 [Paytm Order Status API] Direct Verification -> MID: %s | OrderID: %s", cleanMID, cleanOrderID)
+
 	payloadMap := map[string]string{
 		"MID":     cleanMID,
 		"ORDERID": cleanOrderID,
@@ -192,34 +210,78 @@ func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error
 		return nil, fmt.Errorf("failed to encode Paytm verification payload: %w", err)
 	}
 
-	// URL encode the JsonData parameter
+	client := &http.Client{Timeout: 10 * time.Second}
+	var bodyBytes []byte
+
+	// 1. Direct GET request with JsonData URL-encoded query parameter
 	statusURL := fmt.Sprintf("https://securegw.paytm.in/order/status?JsonData=%s", url.QueryEscape(string(jsonBytes)))
-
-	// Single lightweight HTTP GET request with 8-second timeout
-	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequestWithContext(context.Background(), "GET", statusURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build Paytm verification request: %w", err)
+	getReq, getErr := http.NewRequestWithContext(context.Background(), "GET", statusURL, nil)
+	if getErr == nil {
+		getReq.Header.Set("Content-Type", "application/json")
+		getReq.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
+		if getResp, errDo := client.Do(getReq); errDo == nil {
+			defer getResp.Body.Close()
+			bodyBytes, _ = io.ReadAll(io.LimitReader(getResp.Body, 1024*64))
+		}
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("paytm status HTTP request failed: %w", err)
+	// 2. Direct POST request fallback to https://securegw.paytm.in/order/status
+	if len(bodyBytes) == 0 || !bytes.Contains(bodyBytes, []byte("{")) {
+		postBody, _ := json.Marshal(map[string]interface{}{
+			"body": map[string]string{
+				"mid":     cleanMID,
+				"orderId": cleanOrderID,
+			},
+			"head": map[string]string{
+				"signature": "",
+			},
+		})
+		postReq, postErr := http.NewRequestWithContext(context.Background(), "POST", "https://securegw.paytm.in/order/status", bytes.NewBuffer(postBody))
+		if postErr == nil {
+			postReq.Header.Set("Content-Type", "application/json")
+			postReq.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
+			if postResp, errDo := client.Do(postReq); errDo == nil {
+				defer postResp.Body.Close()
+				bodyBytes, _ = io.ReadAll(io.LimitReader(postResp.Body, 1024*64))
+			}
+		}
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1024*64)) // 64KB max reader limit for RAM safety
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Paytm status response body: %w", err)
+	if len(bodyBytes) == 0 {
+		return nil, fmt.Errorf("empty response received from Paytm order status API")
 	}
+
+	log.Printf("📡 [Paytm API Direct Response]: %s", string(bodyBytes))
 
 	var statusResp PaytmStatusResponse
 	if err := json.Unmarshal(bodyBytes, &statusResp); err != nil {
 		return nil, fmt.Errorf("failed to parse Paytm response JSON (%s): %w", string(bodyBytes), err)
 	}
+
+	// Normalize status to upper case
+	if statusResp.Status == "" {
+		if statusResp.StatusLower != "" {
+			statusResp.Status = statusResp.StatusLower
+		} else if statusResp.ResultInfo != nil && statusResp.ResultInfo.ResultStatus != "" {
+			statusResp.Status = statusResp.ResultInfo.ResultStatus
+		} else if statusResp.Body != nil {
+			if statusResp.Body.ResultInfo != nil && statusResp.Body.ResultInfo.ResultStatus != "" {
+				statusResp.Status = statusResp.Body.ResultInfo.ResultStatus
+			}
+			if statusResp.TxnAmount == "" && statusResp.Body.TxnAmount != "" {
+				statusResp.TxnAmount = statusResp.Body.TxnAmount
+			}
+			if statusResp.TxnID == "" && statusResp.Body.TxnID != "" {
+				statusResp.TxnID = statusResp.Body.TxnID
+			}
+			if statusResp.OrderID == "" && statusResp.Body.OrderID != "" {
+				statusResp.OrderID = statusResp.Body.OrderID
+			}
+		}
+	}
+
+	statusResp.Status = strings.ToUpper(strings.TrimSpace(statusResp.Status))
+	log.Printf("📊 [Paytm Parsed Verification] Order: %s | Status: %s | Amount: %s | TxnID: %s", cleanOrderID, statusResp.Status, statusResp.TxnAmount, statusResp.TxnID)
 
 	return &statusResp, nil
 }
