@@ -828,7 +828,7 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 				case int:
 					totAmt = float64(v)
 				}
-				ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+				ordID := fmt.Sprintf("ORD%d", time.Now().UnixNano())
 
 				_, _ = DB.Exec(`INSERT INTO customer_order_states 
 					(username, customer_phone, delivery_phone, customer_name, delivery_address, items, total_amount, payment_mode, payment_status, order_status, order_id, raw_json, updated_at)

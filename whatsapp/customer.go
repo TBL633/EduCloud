@@ -843,7 +843,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	res.PaytmVpa = strings.TrimSpace(pVpa)
 	res.PayeeName = strings.TrimSpace(bName)
 
-	ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+	ordID := fmt.Sprintf("ORD%d", time.Now().UnixNano())
 	res.OrderID = ordID
 
 	log.Printf("🧮 [MATH ENGINE CALCULATION SUCCESS]:")

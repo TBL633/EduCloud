@@ -189,7 +189,8 @@ func GenerateQRCodeBytes(upiString string) ([]byte, error) {
 	return pngBytes, nil
 }
 
-// VerifyPaytmPayment makes a direct GET/POST request to Paytm Order Status API (https://securegw.paytm.in/order/status)
+// VerifyPaytmPayment makes a direct POST request to Paytm Order Status API (https://securegw.paytm.in/order/status)
+// formatted as application/x-www-form-urlencoded with JsonData payload
 func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error) {
 	cleanMID := strings.TrimSpace(mid)
 	cleanOrderID := strings.TrimSpace(orderId)
@@ -200,55 +201,28 @@ func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error
 
 	log.Printf("🔍 [Paytm Order Status API] Direct Verification -> MID: %s | OrderID: %s", cleanMID, cleanOrderID)
 
-	payloadMap := map[string]string{
-		"MID":     cleanMID,
-		"ORDERID": cleanOrderID,
+	payloadJSON := fmt.Sprintf(`{"MID":"%s","ORDERID":"%s"}`, cleanMID, cleanOrderID)
+	formData := url.Values{}
+	formData.Set("JsonData", payloadJSON)
+
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://securegw.paytm.in/order/status", strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build Paytm verification request: %w", err)
 	}
 
-	jsonBytes, err := json.Marshal(payloadMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Paytm verification payload: %w", err)
-	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	var bodyBytes []byte
-
-	// 1. Direct GET request with JsonData URL-encoded query parameter
-	statusURL := fmt.Sprintf("https://securegw.paytm.in/order/status?JsonData=%s", url.QueryEscape(string(jsonBytes)))
-	getReq, getErr := http.NewRequestWithContext(context.Background(), "GET", statusURL, nil)
-	if getErr == nil {
-		getReq.Header.Set("Content-Type", "application/json")
-		getReq.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
-		if getResp, errDo := client.Do(getReq); errDo == nil {
-			defer getResp.Body.Close()
-			bodyBytes, _ = io.ReadAll(io.LimitReader(getResp.Body, 1024*64))
-		}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Paytm order status API request failed: %w", err)
 	}
+	defer resp.Body.Close()
 
-	// 2. Direct POST request fallback to https://securegw.paytm.in/order/status
-	if len(bodyBytes) == 0 || !bytes.Contains(bodyBytes, []byte("{")) {
-		postBody, _ := json.Marshal(map[string]interface{}{
-			"body": map[string]string{
-				"mid":     cleanMID,
-				"orderId": cleanOrderID,
-			},
-			"head": map[string]string{
-				"signature": "",
-			},
-		})
-		postReq, postErr := http.NewRequestWithContext(context.Background(), "POST", "https://securegw.paytm.in/order/status", bytes.NewBuffer(postBody))
-		if postErr == nil {
-			postReq.Header.Set("Content-Type", "application/json")
-			postReq.Header.Set("User-Agent", "WaMart-PaytmVerifier/1.0")
-			if postResp, errDo := client.Do(postReq); errDo == nil {
-				defer postResp.Body.Close()
-				bodyBytes, _ = io.ReadAll(io.LimitReader(postResp.Body, 1024*64))
-			}
-		}
-	}
-
-	if len(bodyBytes) == 0 {
-		return nil, fmt.Errorf("empty response received from Paytm order status API")
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1024*64))
+	if err != nil || len(bodyBytes) == 0 {
+		return nil, fmt.Errorf("empty or unreadable response received from Paytm order status API")
 	}
 
 	log.Printf("📡 [Paytm API Direct Response]: %s", string(bodyBytes))
@@ -281,7 +255,7 @@ func VerifyPaytmPayment(mid string, orderId string) (*PaytmStatusResponse, error
 	}
 
 	statusResp.Status = strings.ToUpper(strings.TrimSpace(statusResp.Status))
-	log.Printf("📊 [Paytm Parsed Verification] Order: %s | Status: %s | Amount: %s | TxnID: %s", cleanOrderID, statusResp.Status, statusResp.TxnAmount, statusResp.TxnID)
+	log.Printf("📊 [Paytm Parsed Verification] Order: %s | Status: %s | RespCode: %s | Amount: %s | TxnID: %s", cleanOrderID, statusResp.Status, statusResp.RespCode, statusResp.TxnAmount, statusResp.TxnID)
 
 	return &statusResp, nil
 }
@@ -606,7 +580,7 @@ func GenerateWorkerDynamicQR(vpa, name, orderID, amount, cloudName string) (stri
 		return "", nil, fmt.Errorf("failed to encode worker qr request: %w", err)
 	}
 
-	upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", cleanVPA, cleanName, cleanAmount, cleanOrderID, cleanOrderID)
+	upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order%s&cu=INR", cleanVPA, cleanName, cleanAmount, cleanOrderID, cleanOrderID)
 
 	// Pre-construct exact Cloudinary dynamic QR URL as per specification:
 	// https://res.cloudinary.com/hq67khm3/image/upload/l_fetch:{base64QrUrl}/w_450,h_450,y_-120/fl_layer_apply/v1793634745/WaMart.jpg

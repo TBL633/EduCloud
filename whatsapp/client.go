@@ -1623,7 +1623,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount, 0) FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &totalAmt)
 					}
 					if orderID == "" {
-						orderID = fmt.Sprintf("ORD_%s_%d", senderPhone[max(0, len(senderPhone)-4):], time.Now().Unix()%10000)
+						orderID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
 					}
 
 					custProfile, _ := GetCustomerProfile(username, senderPhone)
@@ -1744,8 +1744,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					statusResp, errVerify := payment.VerifyPaytmPayment(mid, orderID)
 					if errVerify == nil && statusResp != nil {
 						st := strings.ToUpper(strings.TrimSpace(statusResp.Status))
-						log.Printf("📡 [Paytm Verification Result for %s]: STATUS=%s | Amount=%s | TxnID=%s", orderID, st, statusResp.TxnAmount, statusResp.TxnID)
-						if st == "TXN_SUCCESS" || st == "SUCCESS" {
+						rc := strings.TrimSpace(statusResp.RespCode)
+						log.Printf("📡 [Paytm Verification Result for %s]: STATUS=%s | RESPCODE=%s | Amount=%s | TxnID=%s", orderID, st, rc, statusResp.TxnAmount, statusResp.TxnID)
+						if st == "TXN_SUCCESS" || st == "SUCCESS" || rc == "01" {
 							isTxnSuccess = true
 							txnID = statusResp.TxnID
 							if statusResp.TxnAmount != "" {
@@ -1792,7 +1793,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 
 				// SCENARIO B: Transaction Pending / Failure
-				failReply := "⚠️ Payment abhi tak system me reflect nahi hua hai. Agar aapne payment kar diya hai, toh kripya payment ka screenshot share kar dijiye taaki hum check kar sakein. (Agar order cancel ya change karna ho toh wo bhi bata sakte hain)."
+				failReply := "Payment abhi verify nahi hua hai. Agar aapne pay kar diya hai, toh kripya Screenshot bhejein."
 				if activeClient != nil && activeClient.IsLoggedIn() {
 					_ = SendReplyMessage(activeClient, senderPhone, failReply, v.Info.ID, v.Info.Sender, v.Message)
 				}
@@ -1959,7 +1960,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 					workerQRURL, _, qrErr := payment.GenerateWorkerDynamicQR(vpa, pName, orderIDStr, amountStr, "hq67khm3")
 					if qrErr != nil || workerQRURL == "" {
-						upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order_%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
+						upiURI := fmt.Sprintf("upi://pay?pa=%s&pn=%s&am=%s&tr=%s&tn=Order%s&cu=INR", vpa, pName, amountStr, orderIDStr, orderIDStr)
 						workerQRURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
 						log.Printf("ℹ️ [Dynamic QR Fallback] Using standard QR for Order %s: %v", orderIDStr, qrErr)
 					} else {
@@ -2003,7 +2004,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						orderIDStr = calcRes.OrderID
 					}
 					if orderIDStr == "" {
-						orderIDStr = fmt.Sprintf("ORD_COD_%s_%d", senderPhone[max(0, len(senderPhone)-4):], time.Now().Unix()%10000)
+						orderIDStr = fmt.Sprintf("ORDCOD%d", time.Now().UnixNano())
 					}
 					if amountStr == "" || amountStr == "0" || amountStr == "0.00" {
 						amountStr, _ = ResolveOrderAmountAndID(username, senderPhone, cleanReply, msgText)
