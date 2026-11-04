@@ -856,6 +856,42 @@ func isIncomingImageOrDocument(msg *waE2E.Message) bool {
 	return false
 }
 
+// isCancellationOrModificationIntent detects natural language expressions of order cancellation, refusal, or item change
+func isCancellationOrModificationIntent(text string) bool {
+	norm := strings.ToLower(strings.TrimSpace(text))
+	if norm == "" {
+		return false
+	}
+
+	keywords := []string{
+		"cancel", "cancellation", "radd", "rad", "badal", "badlo", "badalna",
+		"change", "modify", "modification", "remove", "delete", "stop", "abort",
+		"nevermind", "dusra", "doosra", "dusre", "dusri", "dobara", "galat",
+		"rehnedo", "chhodo", "wapas",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(norm, kw) {
+			return true
+		}
+	}
+
+	phrases := []string{
+		"nahi chahiye", "nh chahiye", "nhi chahiye", "nahi lena", "nhi lena",
+		"mat bhejo", "mat bhejna", "bhejna mat", "rehne do", "chhod do",
+		"nahi mangwana", "phir kabhi", "baad me", "baad mein", "ab nahi",
+		"kuch aur", "galti se", "dont want", "don't want", "not interested",
+		"no thanks", "stop order", "order cancel", "order radd", "order change",
+		"item change", "item badlo", "dusra item",
+	}
+	for _, p := range phrases {
+		if strings.Contains(norm, p) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // findCatalogProductMatch looks up product in Neon DB by name to fetch price, description, and whatsapp_catalog_link
 func findCatalogProductMatch(username, title string) (string, string, string) {
 	if DB == nil || strings.TrimSpace(title) == "" {
@@ -1542,14 +1578,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			payStatus := GetCustomerPaymentStatus(username, senderPhone)
 			custState := GetCustomerState(username, senderPhone)
 			if strings.EqualFold(payStatus, "PENDING") || strings.EqualFold(custState, "PAYMENT_PENDING") {
-				normMsg := strings.ToLower(strings.TrimSpace(msgText))
-				isEscape := normMsg == "cancel" || strings.Contains(normMsg, "cancel") ||
-					normMsg == "change" || strings.Contains(normMsg, "change") ||
-					normMsg == "modify" || strings.Contains(normMsg, "modify") ||
-					strings.Contains(normMsg, "badal") || strings.Contains(normMsg, "radd")
-
-				if isEscape {
-					// User requested cancellation / order modification via Escape Hatch
+				if isCancellationOrModificationIntent(msgText) {
+					// User requested cancellation / order modification via natural language
 					_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
 					_ = SetCustomerState(username, senderPhone, "chatting")
 					_ = ClearActiveCart(username, senderPhone)
@@ -1557,7 +1587,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
 					}
 
-					cancelReply := "Your previous payment request has been cancelled. What would you like to order now?"
+					cancelReply := "Aapka payment request cancel kar diya gaya hai aur cart clear kar diya gaya hai. Aap ab kya order karna chahenge?"
 					activeClient := client
 					if activeClient == nil || !activeClient.IsLoggedIn() {
 						activeClient = GetOrCreateClient(username)
@@ -1567,7 +1597,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 					PushToLiveChat(username, senderPhone, cancelReply, "outgoing_ai")
 					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", cancelReply)
-					log.Printf("🚫 [Payment Cancelled via Escape Hatch] @%s (+%s): payment_status set to BROWSING and cart strictly cleared from DB.", username, senderPhone)
+					log.Printf("🚫 [Payment Cancelled via AI Intent] @%s (+%s): payment_status set to BROWSING and cart strictly cleared from DB.", username, senderPhone)
 					return // Dropped this cancel event; NEXT incoming message will hit AI normally!
 				}
 
@@ -1636,7 +1666,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						// Follow immediately by forwarding the actual ImageMessage bytes sent by the customer
 						if incomingImg != nil {
 							go func(c *whatsmeow.Client, target string, img *waE2E.ImageMessage, ord string) {
-								imgBytes, errDown := c.Download(img)
+								imgBytes, errDown := c.Download(context.Background(), img)
 								if errDown == nil && len(imgBytes) > 0 {
 									_ = SendImageFromBytes(c, target, imgBytes, fmt.Sprintf("📸 Attached Screenshot from %s (Order #%s)", custName, ord))
 									log.Printf("✅ [Screenshot Forwarded] Delivered customer screenshot bytes to business owner +%s", target)
@@ -1657,8 +1687,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'disputed_screenshot', updated_at = NOW() WHERE customer_phone=$1 AND payment_status != 'paid'`, senderPhone)
 					}
 
-					// Reply to the Customer: "🙏 Aapka screenshot prapt hua. Humare business owner ise manually verify karke aapko update karenge."
-					custReply := "🙏 Aapka screenshot prapt hua. Humare business owner ise manually verify karke aapko update karenge."
+					// Reply to the Customer
+					custReply := "🙏 Screenshot mil gaya hai! Humare business owner ise verify karke turant aapka order update kar denge."
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendReplyMessage(activeClient, senderPhone, custReply, v.Info.ID, v.Info.Sender, v.Message)
 					}
@@ -1762,8 +1792,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 
 				// SCENARIO B: Transaction Pending / Failure
-				// Send WhatsApp reply: "⚠️ Humari system me payment abhi tak verify nahi hua hai. Agar aapne payment kar diya hai aur koi samasya aa rahi hai, toh kripya payment ka **Screenshot** yahan bhejein."
-				failReply := "⚠️ Humari system me payment abhi tak verify nahi hua hai. Agar aapne payment kar diya hai aur koi samasya aa rahi hai, toh kripya payment ka **Screenshot** yahan bhejein."
+				failReply := "⚠️ Payment abhi tak system me reflect nahi hua hai. Agar aapne payment kar diya hai, toh kripya payment ka screenshot share kar dijiye taaki hum check kar sakein. (Agar order cancel ya change karna ho toh wo bhi bata sakte hain)."
 				if activeClient != nil && activeClient.IsLoggedIn() {
 					_ = SendReplyMessage(activeClient, senderPhone, failReply, v.Info.ID, v.Info.Sender, v.Message)
 				}
@@ -1938,7 +1967,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 
 					// 3. Send the QR via whatsmeow (using the universal static JPEGThumbnail)
-					caption := fmt.Sprintf("💳 *Pay ₹%s for Order #%s*\nScan the QR code above via any UPI App (GPay/PhonePe/Paytm)\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr, orderIDStr)
+					caption := fmt.Sprintf("💳 *Pay ₹%s for Order #%s*\nScan the QR code above via any UPI App (GPay/PhonePe/Paytm)", amountStr, orderIDStr)
 					sendQRErr := SendImageReplyFromURL(activeClient, senderPhone, workerQRURL, caption, v.Info.ID, v.Info.Sender, v.Message)
 					if sendQRErr != nil {
 						log.Printf("⚠️ Error sending dynamic QR image to +%s: %v. Sending text fallback.", senderPhone, sendQRErr)
@@ -1958,8 +1987,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						}(mid, orderIDStr, liveWebhookURL)
 					}
 
-					// 5. Send follow-up instruction message: "Aapka bill ₹[TotalAmount] ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment pura karne ke baad yahan type karein 'Payment Ho Gaya'.**"
-					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment pura karne ke baad yahan type karein 'Payment Ho Gaya'.**\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr)
+					// 5. Send follow-up message in natural tone
+					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya QR code scan karke payment complete karein. Payment hone ke baad bataiye ya photo/screenshot bhejein, hum verify kar denge.", amountStr)
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendMessage(activeClient, senderPhone, followUpText)
 					}
