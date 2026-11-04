@@ -28,6 +28,7 @@ type CustomerProfile struct {
 	LastOrderDetails string    `json:"last_order_details"`
 	CurrentState     string    `json:"current_state"`  // "chatting", "PAYMENT_PENDING", "ORDER_CONFIRMED"
 	PaymentStatus    string    `json:"payment_status"` // "UNPAID", "PENDING", "PAID", "CANCELLED"
+	CurrentOrderID   string    `json:"current_order_id"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
@@ -68,14 +69,14 @@ func GetCustomerProfile(username, waNumber string) (*CustomerProfile, error) {
 	query := `SELECT id, username, wa_number, COALESCE(full_name, ''), COALESCE(delivery_address, ''), 
 		COALESCE(contact_phone, ''), COALESCE(latitude, 0), COALESCE(longitude, 0), 
 		COALESCE(last_order_details, ''), COALESCE(NULLIF(current_state, ''), 'chatting'), 
-		COALESCE(NULLIF(payment_status, ''), 'UNPAID'), created_at, updated_at 
+		COALESCE(NULLIF(payment_status, ''), 'UNPAID'), COALESCE(NULLIF(current_order_id, ''), ''), created_at, updated_at 
 		FROM customers 
 		WHERE LOWER(username)=LOWER($1) AND wa_number=$2 LIMIT 1`
 
 	err := DB.QueryRow(query, cleanUsr, cleanPhone).Scan(
 		&cp.ID, &cp.Username, &cp.WANumber, &cp.FullName, &cp.DeliveryAddress,
 		&cp.ContactPhone, &cp.Latitude, &cp.Longitude,
-		&cp.LastOrderDetails, &cp.CurrentState, &cp.PaymentStatus, &cp.CreatedAt, &cp.UpdatedAt,
+		&cp.LastOrderDetails, &cp.CurrentState, &cp.PaymentStatus, &cp.CurrentOrderID, &cp.CreatedAt, &cp.UpdatedAt,
 	)
 
 	if err != nil {
@@ -83,13 +84,13 @@ func GetCustomerProfile(username, waNumber string) (*CustomerProfile, error) {
 		fallbackQuery := `SELECT id, username, wa_number, COALESCE(full_name, ''), COALESCE(delivery_address, ''), 
 			COALESCE(contact_phone, ''), COALESCE(latitude, 0), COALESCE(longitude, 0), 
 			COALESCE(last_order_details, ''), COALESCE(NULLIF(current_state, ''), 'chatting'), 
-			COALESCE(NULLIF(payment_status, ''), 'UNPAID'), created_at, updated_at 
+			COALESCE(NULLIF(payment_status, ''), 'UNPAID'), COALESCE(NULLIF(current_order_id, ''), ''), created_at, updated_at 
 			FROM customers 
 			WHERE wa_number=$1 ORDER BY updated_at DESC LIMIT 1`
 		errFallback := DB.QueryRow(fallbackQuery, cleanPhone).Scan(
 			&cp.ID, &cp.Username, &cp.WANumber, &cp.FullName, &cp.DeliveryAddress,
 			&cp.ContactPhone, &cp.Latitude, &cp.Longitude,
-			&cp.LastOrderDetails, &cp.CurrentState, &cp.PaymentStatus, &cp.CreatedAt, &cp.UpdatedAt,
+			&cp.LastOrderDetails, &cp.CurrentState, &cp.PaymentStatus, &cp.CurrentOrderID, &cp.CreatedAt, &cp.UpdatedAt,
 		)
 		if errFallback != nil {
 			return nil, nil
@@ -268,20 +269,120 @@ func SetCustomerPaymentStatus(username, customerPhone, status string) error {
 	return nil
 }
 
-// ClearActiveCart removes active cart items for a customer
+// GetCustomerCurrentOrderID retrieves the saved Order ID for the current pending order (or empty string)
+func GetCustomerCurrentOrderID(username, customerPhone string) string {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	if cleanPhone == "" {
+		return ""
+	}
+	cacheKey := cleanUsr + "_" + cleanPhone
+	customerCacheLock.RLock()
+	cached, found := customerCache[cacheKey]
+	customerCacheLock.RUnlock()
+	if found && cached != nil && cached.CurrentOrderID != "" {
+		return cached.CurrentOrderID
+	}
+
+	if DB == nil {
+		return ""
+	}
+
+	var ordID string
+	err := DB.QueryRow(`SELECT COALESCE(NULLIF(current_order_id, ''), '') FROM customers WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($1)||'@gmail.com') AND wa_number=$2 LIMIT 1`, cleanUsr, cleanPhone).Scan(&ordID)
+	if err != nil || ordID == "" {
+		// Fallback query across all customers by phone
+		_ = DB.QueryRow(`SELECT COALESCE(NULLIF(current_order_id, ''), '') FROM customers WHERE wa_number=$1 AND current_order_id != '' ORDER BY updated_at DESC LIMIT 1`, cleanPhone).Scan(&ordID)
+	}
+	if ordID == "" {
+		_ = DB.QueryRow(`SELECT COALESCE(NULLIF(current_order_id, ''), '') FROM active_carts WHERE customer_phone=$1 AND current_order_id != '' LIMIT 1`, cleanPhone).Scan(&ordID)
+	}
+	if ordID == "" {
+		_ = DB.QueryRow(`SELECT COALESCE(NULLIF(order_id, ''), '') FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, cleanPhone).Scan(&ordID)
+	}
+
+	if ordID != "" {
+		customerCacheLock.Lock()
+		if cached != nil {
+			cached.CurrentOrderID = ordID
+		}
+		customerCacheLock.Unlock()
+	}
+
+	return ordID
+}
+
+// SetCustomerCurrentOrderID updates customer's current_order_id in RAM cache, customers, active_carts, and customer_order_states
+func SetCustomerCurrentOrderID(username, customerPhone, orderID string) error {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+	if cleanPhone == "" {
+		return fmt.Errorf("empty customer phone")
+	}
+
+	cacheKey := cleanUsr + "_" + cleanPhone
+	customerCacheLock.Lock()
+	if cached, found := customerCache[cacheKey]; found && cached != nil {
+		cached.CurrentOrderID = orderID
+	} else {
+		customerCache[cacheKey] = &CustomerProfile{
+			Username:       cleanUsr,
+			WANumber:       cleanPhone,
+			CurrentState:   "chatting",
+			CurrentOrderID: orderID,
+			UpdatedAt:      time.Now(),
+		}
+	}
+	customerCacheLock.Unlock()
+
+	if DB == nil {
+		return nil
+	}
+
+	// Update customers table
+	_, _ = DB.Exec(`INSERT INTO customers (username, wa_number, current_order_id, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (username, wa_number) DO UPDATE SET
+			current_order_id = EXCLUDED.current_order_id,
+			updated_at = NOW()`, cleanUsr, cleanPhone, orderID)
+
+	// Update active_carts table
+	_, _ = DB.Exec(`UPDATE active_carts SET current_order_id = $1 WHERE customer_phone = $2 OR customer_phone LIKE '%' || $2`, orderID, cleanPhone)
+
+	// Update customer_order_states table
+	if orderID != "" {
+		_, _ = DB.Exec(`UPDATE customer_order_states SET order_id = $1, updated_at = NOW() WHERE customer_phone = $2 OR customer_phone LIKE '%' || $2`, orderID, cleanPhone)
+	}
+
+	log.Printf("📌 [Saved Customer Order ID]: @%s (+%s) -> '%s'", cleanUsr, cleanPhone, orderID)
+	return nil
+}
+
+// ClearActiveCart removes active cart items for a customer and resets current_order_id
 func ClearActiveCart(username, customerPhone string) error {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	cleanPhone := FormatPhone(customerPhone)
-	if cleanPhone == "" || DB == nil {
+	if cleanPhone == "" {
 		return nil
 	}
-	// Strictly delete active_carts by customer_phone across all tenant sessions
-	_, err := DB.Exec("DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1 OR (LOWER(username)=LOWER($2) AND customer_phone=$1)", cleanPhone, cleanUsr)
-	if err != nil {
-		log.Printf("⚠️ ClearActiveCart error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
-		return err
+
+	cacheKey := cleanUsr + "_" + cleanPhone
+	customerCacheLock.Lock()
+	if cached, found := customerCache[cacheKey]; found && cached != nil {
+		cached.CurrentOrderID = ""
 	}
-	log.Printf("🛒 [Active Cart Strictly Cleared]: Customer +%s (@%s)", cleanPhone, cleanUsr)
+	customerCacheLock.Unlock()
+
+	if DB != nil {
+		// Strictly delete active_carts by customer_phone across all tenant sessions
+		_, err := DB.Exec("DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1 OR (LOWER(username)=LOWER($2) AND customer_phone=$1)", cleanPhone, cleanUsr)
+		if err != nil {
+			log.Printf("⚠️ ClearActiveCart error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
+		}
+		// Clear current_order_id in customers table
+		_, _ = DB.Exec("UPDATE customers SET current_order_id = '', updated_at = NOW() WHERE wa_number=$1 OR wa_number LIKE '%' || $1", cleanPhone)
+	}
+	log.Printf("🛒 [Active Cart & Order ID Strictly Cleared]: Customer +%s (@%s)", cleanPhone, cleanUsr)
 	return nil
 }
 
@@ -843,7 +944,12 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	res.PaytmVpa = strings.TrimSpace(pVpa)
 	res.PayeeName = strings.TrimSpace(bName)
 
-	ordID := fmt.Sprintf("ORD%d", time.Now().UnixNano())
+	// Reuse existing saved current_order_id if present, otherwise generate a new one EXACTLY ONCE
+	ordID := GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
+	if ordID == "" {
+		ordID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+		_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, ordID)
+	}
 	res.OrderID = ordID
 
 	log.Printf("🧮 [MATH ENGINE CALCULATION SUCCESS]:")
@@ -875,13 +981,19 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	cleanPhone := FormatPhone(senderPhone)
 
+	savedOrdID := GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
+
 	// 1. Math Engine calculation strictly from active_carts
 	calcRes, err := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
 	if err == nil && calcRes != nil && calcRes.TotalAmount > 0 {
 		amountStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
 		orderIDStr := calcRes.OrderID
 		if orderIDStr == "" {
-			orderIDStr = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+			orderIDStr = savedOrdID
+		}
+		if orderIDStr == "" {
+			orderIDStr = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+			_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, orderIDStr)
 		}
 		log.Printf("🧮 [ResolveOrderAmountAndID Math Engine Success]: Real Total ₹%s for Order %s (@%s, +%s)", amountStr, orderIDStr, cleanUsr, cleanPhone)
 		return amountStr, orderIDStr
@@ -894,15 +1006,21 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 		_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($1)||'@gmail.com') AND customer_phone=$2 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
 		if dbAmt > 0 {
 			if dbOrd == "" {
-				dbOrd = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+				dbOrd = savedOrdID
+			}
+			if dbOrd == "" {
+				dbOrd = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+				_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, dbOrd)
 			}
 			return fmt.Sprintf("%.2f", dbAmt), dbOrd
 		}
 	}
 
-	// Strictly NO hardcoded 1.00 fallback
-	orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
-	return "0.00", orderIDStr
+	if savedOrdID == "" {
+		savedOrdID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+		_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, savedOrdID)
+	}
+	return "0.00", savedOrdID
 }
 
 // DispatchCloudflareWorkerQR triggers Cloudflare Worker /generate, delivers QR image via whatsmeow, and calls /start-check
@@ -925,16 +1043,21 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 		return "", fmt.Errorf("real merchant Paytm MID and VPA must be configured in database")
 	}
 
-	// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING and payment_status to PENDING in DB & Cache immediately!
-	_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
-	_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
-
-	amtStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
 	ordID := calcRes.OrderID
 	if ordID == "" {
-		ordID = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+		ordID = GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
+	}
+	if ordID == "" {
+		ordID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
 		calcRes.OrderID = ordID
 	}
+
+	// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING, payment_status to PENDING, and current_order_id in DB & Cache immediately!
+	_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
+	_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
+	_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, ordID)
+
+	amtStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
 	payee := strings.TrimSpace(calcRes.PayeeName)
 	if payee == "" {
 		payee = "WaMart Store"

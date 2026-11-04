@@ -268,6 +268,8 @@ func migrateSchema() {
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_name VARCHAR(255) DEFAULT '';`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS current_state VARCHAR(50) DEFAULT 'chatting';`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'UNPAID';`,
+		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS current_order_id VARCHAR(100) DEFAULT '';`,
+		`ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS current_order_id VARCHAR(100) DEFAULT '';`,
 		`CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;`,

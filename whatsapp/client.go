@@ -1582,9 +1582,11 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					// User requested cancellation / order modification via natural language
 					_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
 					_ = SetCustomerState(username, senderPhone, "chatting")
+					_ = SetCustomerCurrentOrderID(username, senderPhone, "")
 					_ = ClearActiveCart(username, senderPhone)
 					if DB != nil {
 						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customers SET current_order_id = '', payment_status = 'BROWSING', current_state = 'chatting', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
 					}
 
 					cancelReply := "Aapka payment request cancel kar diya gaya hai aur cart clear kar diya gaya hai. Aap ab kya order karna chahenge?"
@@ -1597,7 +1599,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 					PushToLiveChat(username, senderPhone, cancelReply, "outgoing_ai")
 					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", cancelReply)
-					log.Printf("🚫 [Payment Cancelled via AI Intent] @%s (+%s): payment_status set to BROWSING and cart strictly cleared from DB.", username, senderPhone)
+					log.Printf("🚫 [Payment Cancelled via AI Intent] @%s (+%s): payment_status set to BROWSING, current_order_id cleared and cart strictly cleared from DB.", username, senderPhone)
 					return // Dropped this cancel event; NEXT incoming message will hit AI normally!
 				}
 
@@ -1611,19 +1613,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					// DO NOT auto-confirm the order in the system.
 					log.Printf("📸 [Payment Screenshot Received - Fallback Dispute Flow] Customer +%s sent screenshot during PENDING state. Forwarding to business owner for manual verification.", senderPhone)
 
-					// Extract user's cart details (Items, Total), Delivery Address, Customer Phone Number
-					calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
-					var orderID string
+					orderID := GetCustomerCurrentOrderID(username, senderPhone)
 					var totalAmt float64
-					if calcRes != nil {
-						orderID = calcRes.OrderID
-						totalAmt = calcRes.TotalAmount
-					}
-					if orderID == "" && DB != nil {
-						_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount, 0) FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &totalAmt)
+					if DB != nil {
+						_ = DB.QueryRow(`SELECT COALESCE(total_amount, 0) FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&totalAmt)
 					}
 					if orderID == "" {
 						orderID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+						_ = SetCustomerCurrentOrderID(username, senderPhone, orderID)
 					}
 
 					custProfile, _ := GetCustomerProfile(username, senderPhone)
@@ -1701,21 +1698,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				// =====================================================================
 				// 3. DIRECT GOLANG PAYTM API VERIFICATION (THE CORE CHECK)
 				// =====================================================================
-				// When user's state is 'PENDING' and they type any text (e.g. "Payment Ho Gaya", "Done"):
-				// Do NOT trigger the AI.
+				// CRITICAL: DO NOT generate a new Order ID. DO NOT recalculate the cart.
+				// Fetch the EXACT saved current_order_id from DB/RAM for this user!
 				log.Printf("⚡ [Direct Golang Payment Check Triggered] Inbound text from +%s during PENDING state: '%s'", senderPhone, msgText)
 
-				calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
-				mid := ""
-				if calcRes != nil && calcRes.PaytmMid != "" {
-					mid = calcRes.PaytmMid
-				}
-				if mid == "" {
-					realMid, _, _, errCred := FetchRealBusinessPaymentCredentials(username, senderPhone)
-					if errCred == nil && realMid != "" {
-						mid = realMid
-					}
-				}
+				orderID := GetCustomerCurrentOrderID(username, senderPhone)
+				var amountStr string
+
+				mid, _, _, errCred := FetchRealBusinessPaymentCredentials(username, senderPhone)
 				if mid == "" {
 					cfgTmp := GetUserConfigRAM(username)
 					if cfgTmp != nil {
@@ -1723,14 +1713,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 				}
 
-				var orderID string
-				var amountStr string
-				if calcRes != nil && calcRes.OrderID != "" {
-					orderID = calcRes.OrderID
-					amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
-				}
-				if orderID == "" && DB != nil {
-					_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount::text, '0.00') FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &amountStr)
+				if DB != nil {
+					_ = DB.QueryRow(`SELECT COALESCE(total_amount::text, '0.00') FROM customer_order_states WHERE customer_phone=$1 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&amountStr)
 				}
 
 				activeClient := client
@@ -1762,13 +1746,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				if isTxnSuccess {
 					// SCENARIO A: Transaction Success
-					// 1. Update payment_status to 'PAID'
+					// 1. Update payment_status to 'PAID', current_state to 'ORDER_CONFIRMED', and clear current_order_id
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PAID")
 					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
+					_ = SetCustomerCurrentOrderID(username, senderPhone, "")
 					if DB != nil {
-						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', current_order_id = '', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
 						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND payment_status != 'paid'`, senderPhone)
-						_, _ = DB.Exec(`UPDATE active_carts SET payment_status = 'PAID', updated_at = NOW() WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE active_carts SET payment_status = 'PAID', current_order_id = '', updated_at = NOW() WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
 					}
 
 					// 2. Send WhatsApp reply: "✅ Payment Verified! Aapka order confirm ho gaya hai."
@@ -1781,14 +1766,11 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 					// 3. Clear the active_carts
 					_ = ClearActiveCart(username, senderPhone)
-					if DB != nil {
-						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
-					}
 
 					// Trigger confirmed lead alert to merchant & database
 					TriggerConfirmedPaymentLead(username, senderPhone, orderID, amountStr, txnID)
 
-					log.Printf("🎉 [Paytm Direct Verification SUCCESS]: Order %s for +%s confirmed and active_carts cleared.", orderID, senderPhone)
+					log.Printf("🎉 [Paytm Direct Verification SUCCESS]: Order %s for +%s confirmed, current_order_id and active_carts cleared.", orderID, senderPhone)
 					return // DO NOT CALL AI!
 				}
 
@@ -1799,7 +1781,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 				PushToLiveChat(username, senderPhone, failReply, "outgoing_ai")
 				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", failReply)
-				log.Printf("⏳ [Payment Not Yet Verified] Replied to customer +%s with screenshot instruction.", senderPhone)
+				log.Printf("⏳ [Payment Not Yet Verified] Order %s for customer +%s not yet paid.", orderID, senderPhone)
 				return // DO NOT CALL AI!
 			}
 
