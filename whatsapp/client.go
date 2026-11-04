@@ -1081,6 +1081,11 @@ func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone 
 	}
 
 	if !isCOD {
+		// Strictly wait for Webhook SUCCESS! Do not trigger fake confirmation if payment is PENDING
+		payStatus := GetCustomerPaymentStatus(cleanUsr, senderPhone)
+		if strings.EqualFold(payStatus, "PENDING") {
+			return
+		}
 		for _, kw := range paidKeywords {
 			if strings.Contains(lower, kw) {
 				isPrepaid = true
@@ -1197,13 +1202,20 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 
 	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
 
+	// Update customer state to ORDER_CONFIRMED, payment_status to PAID, and clear active cart in DB & RAM
+	if cleanPhone != "" {
+		_ = SetCustomerState(cleanUsr, cleanPhone, "ORDER_CONFIRMED")
+		_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PAID")
+		_ = ClearActiveCart(cleanUsr, cleanPhone)
+	}
+
 	// Send instant WhatsApp receipt/confirmation to the customer
 	if cleanPhone != "" && len(cleanPhone) >= 10 {
-		customerConfirmMsg := fmt.Sprintf("🎉 *Payment Successful & Order Confirmed!* 🎉\n\n"+
-			"Aapka ₹%s ka payment (Order ID: %s) safaltapoorvak prapt ho gaya hai.\n"+
-			"Transaction Reference: %s\n"+
-			"Aapka order confirm ho chuka hai aur hamari team ise jald hi dispatch karegi. ✅\n\n"+
-			"Dhanyawad!", amount, orderID, txnID)
+		customerConfirmMsg := fmt.Sprintf("🎉 *Aapka Order safaltapurvak prapt hua! Hum jald hi delivery karenge.* 🙏\n\n"+
+			"• *Order ID*: %s\n"+
+			"• *Amount*: ₹%s\n"+
+			"• *Status*: Confirmed & Payment Verified ✅\n\n"+
+			"Dhanyawad!", orderID, amount)
 
 		client := GetOrCreateClient(cleanUsr)
 		if client != nil && client.IsLoggedIn() {
@@ -1213,6 +1225,7 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 			} else {
 				log.Printf("⚡ [Whatsmeow Payment Confirmation Delivered] +%s (@%s) -> Order: %s", cleanPhone, cleanUsr, orderID)
 				PushToLiveChat(cleanUsr, cleanPhone, customerConfirmMsg, "outgoing_ai")
+				go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", customerConfirmMsg)
 			}
 		}
 	}
@@ -1419,6 +1432,53 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				return
 			}
 
+			// =========================================================================
+			// STRICT STATE MACHINE LOCK (MUTE AI DURING PAYMENT PENDING)
+			// =========================================================================
+			payStatus := GetCustomerPaymentStatus(username, senderPhone)
+			custState := GetCustomerState(username, senderPhone)
+			if strings.EqualFold(payStatus, "PENDING") || strings.EqualFold(custState, "PAYMENT_PENDING") {
+				normMsg := strings.ToLower(strings.TrimSpace(msgText))
+				if normMsg == "cancel" || normMsg == "cancel order" || normMsg == "radd karein" || normMsg == "radd" {
+					// User cancelled payment
+					_ = SetCustomerPaymentStatus(username, senderPhone, "CANCELLED")
+					_ = SetCustomerState(username, senderPhone, "chatting")
+					_ = ClearActiveCart(username, senderPhone)
+
+					cancelReply := "❌ Aapka order cancel kar diya gaya hai aur cart clear ho gaya hai. Naya order shuru karne ke liye aap menu ya product ka naam type kar sakte hain."
+					activeClient := client
+					if activeClient == nil || !activeClient.IsLoggedIn() {
+						activeClient = GetOrCreateClient(username)
+					}
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, cancelReply, v.Info.ID, v.Info.Sender, v.Message)
+					}
+					PushToLiveChat(username, senderPhone, cancelReply, "outgoing_ai")
+					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", cancelReply)
+					log.Printf("🚫 [Payment Cancelled by Customer] @%s (+%s): State reset to 'chatting' and cart cleared.", username, senderPhone)
+					return // DO NOT CALL AI!
+				}
+
+				// Any other message while payment is pending (e.g. "Done", "Ho gya", "Payment done", "Hello"):
+				pendingReply := "Please complete the payment by scanning the QR code above. If you have already paid, please wait a moment while we verify."
+				activeClient := client
+				if activeClient == nil || !activeClient.IsLoggedIn() {
+					activeClient = GetOrCreateClient(username)
+				}
+				if activeClient != nil && activeClient.IsLoggedIn() {
+					_ = SendReplyMessage(activeClient, senderPhone, pendingReply, v.Info.ID, v.Info.Sender, v.Message)
+				}
+				PushToLiveChat(username, senderPhone, pendingReply, "outgoing_ai")
+				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", pendingReply)
+				log.Printf("⏳ [State Lock Active] @%s (+%s): Customer payment is PENDING. AI Muted. Automated reminder sent.", username, senderPhone)
+				return // DO NOT CALL AI! Drop the event.
+			}
+
+			if strings.EqualFold(custState, "ORDER_CONFIRMED") {
+				// Prior order was confirmed; reset to chatting for new inquiry
+				_ = SetCustomerState(username, senderPhone, "chatting")
+			}
+
 			cfg := GetUserConfigRAM(username)
 
 			if cfg != nil && cfg.AutoReply {
@@ -1485,8 +1545,24 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						}
 					}
 
-					// 2. Instantly trigger the Cloudflare Worker /generate API to get the Cloudinary QR image
+					// 2. Resolve real backend calculated amount
 					amountStr, orderIDStr := ResolveOrderAmountAndID(username, senderPhone, replyText, msgText)
+					if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
+						log.Printf("⚠️ [Payment QR Aborted] Cart total is ₹0 for @%s (+%s). Cannot generate QR without valid cart.", username, senderPhone)
+						_ = SetCustomerState(username, senderPhone, "chatting")
+						noCartMsg := "⚠️ Aapke cart me koi item nahi mila ya price calculate nahi ho saka. Kripya pehle dukan ke menu se item chunein."
+						if activeClient != nil && activeClient.IsLoggedIn() {
+							_ = SendReplyMessage(activeClient, senderPhone, noCartMsg, v.Info.ID, v.Info.Sender, v.Message)
+						}
+						PushToLiveChat(username, senderPhone, noCartMsg, "outgoing_ai")
+						go SaveCustomerChatAndPrune(username, senderPhone, "assistant", noCartMsg)
+						return
+					}
+
+					// STRICT STATE LOCK: Lock customer state to PAYMENT_PENDING & payment_status to PENDING
+					_ = SetCustomerState(username, senderPhone, "PAYMENT_PENDING")
+					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
+
 					vpa := cfg.MerchantVpa
 					if vpa == "" {
 						vpa = "paytm.s1f6syj@pty"
@@ -1505,11 +1581,11 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						workerQRURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=%s", url.QueryEscape(upiURI))
 						log.Printf("ℹ️ [Dynamic QR Fallback] Using standard QR for Order %s: %v", orderIDStr, qrErr)
 					} else {
-						log.Printf("⚡ [Cloudflare Worker Dynamic QR] Intercepted for Order: %s | URL: %s", orderIDStr, workerQRURL)
+						log.Printf("⚡ [Cloudflare Worker Dynamic QR] Intercepted for Order: %s | Real Amount: ₹%s | URL: %s", orderIDStr, amountStr, workerQRURL)
 					}
 
 					// 3. Send the QR via whatsmeow (using the universal static JPEGThumbnail)
-					caption := fmt.Sprintf("💳 *Pay ₹%s for Order #%s*\nScan the QR code above via any UPI App (GPay/PhonePe/Paytm)", amountStr, orderIDStr)
+					caption := fmt.Sprintf("💳 *Pay ₹%s for Order #%s*\nScan the QR code above via any UPI App (GPay/PhonePe/Paytm)\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr, orderIDStr)
 					sendQRErr := SendImageReplyFromURL(activeClient, senderPhone, workerQRURL, caption, v.Info.ID, v.Info.Sender, v.Message)
 					if sendQRErr != nil {
 						log.Printf("⚠️ Error sending dynamic QR image to +%s: %v. Sending text fallback.", senderPhone, sendQRErr)
@@ -1526,9 +1602,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 							}
 						}(mid, orderIDStr)
 					}
+					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
 
 					// 5. Send follow-up text: "Please scan the QR above. We will automatically notify you here once the payment is successful."
-					followUpText := "Please scan the QR above. We will automatically notify you here once the payment is successful."
+					followUpText := "Please scan the QR above. We will automatically notify you here once the payment is successful.\n(Agar aap order cancel karna chahte hain toh 'Cancel' type karein)"
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendMessage(activeClient, senderPhone, followUpText)
 					}

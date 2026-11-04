@@ -266,6 +266,8 @@ func migrateSchema() {
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_order_details TEXT DEFAULT '';`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_address TEXT DEFAULT '';`,
 		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS saved_name VARCHAR(255) DEFAULT '';`,
+		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS current_state VARCHAR(50) DEFAULT 'chatting';`,
+		`ALTER TABLE customers ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'UNPAID';`,
 		`CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;`,
@@ -297,6 +299,7 @@ func migrateSchema() {
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
 		);`,
+		`ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'UNPAID';`,
 		`CREATE INDEX IF NOT EXISTS idx_active_carts_usr_phone ON active_carts(username, customer_phone);`,
 	}
 

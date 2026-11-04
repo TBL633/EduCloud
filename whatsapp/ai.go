@@ -88,7 +88,8 @@ ACTIONS (Choose exactly one):
 CRITICAL RULES:
 1. CATALOG ONLY: Never invent products or prices. Only sell items listed in the provided Product Catalog.
 2. HUMAN & POLITE: Make reply_to_customer polite, helpful, with WhatsApp formatting (*bold*, _italic_, emojis).
-3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When the customer confirms checkout, simply return action 'generate_qr'.`
+3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When the customer confirms checkout, simply return action 'generate_qr'.
+4. STRICT PAYMENT SEPARATION: Never hallucinate order confirmation or say "Order confirmed" or "Payment received". Order confirmation is only done via automated payment webhook. When checking out, return action 'generate_qr'.`
 
 // BuildUniversalSystemPrompt builds the final token-optimized JSON system prompt dynamically
 func BuildUniversalSystemPrompt(businessName, businessType, language, storePolicies, catalogContext string) string {
@@ -755,9 +756,12 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 				go AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
 			}
 			if action == "generate_qr" {
+				// Lock customer state to PAYMENT_PENDING in DB & RAM Cache
+				_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
+
 				go func() {
 					calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
-					if errCalc == nil && calcRes != nil {
+					if errCalc == nil && calcRes != nil && calcRes.TotalAmount > 0 {
 						_, _ = DispatchCloudflareWorkerQR(cleanUsr, cleanPhone, calcRes)
 					}
 				}()

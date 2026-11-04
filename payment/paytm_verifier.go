@@ -726,7 +726,7 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		`, orderID).Scan(&username, &customerPhone, &totalAmount)
 
 		if isSuccess {
-			// 2. Mark order as paid & confirmed
+			// 2. Mark order as paid & confirmed in customer_order_states
 			_, err = globalDB.Exec(`
 				UPDATE customer_order_states 
 				SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() 
@@ -736,7 +736,28 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("⚠️ Error updating customer_order_states for %s: %v", orderID, err)
 			}
 
-			// 3. Insert into leads table
+			// 3. Unlock State: Set customer state to ORDER_CONFIRMED, payment_status to PAID, and clear active cart in Neon DB
+			if username != "" && customerPhone != "" {
+				_, _ = globalDB.Exec(`
+					UPDATE customers 
+					SET current_state = 'ORDER_CONFIRMED', payment_status = 'PAID', updated_at = NOW() 
+					WHERE LOWER(username) = LOWER($1) AND wa_number = $2
+				`, username, customerPhone)
+
+				_, _ = globalDB.Exec(`
+					UPDATE active_carts 
+					SET payment_status = 'PAID' 
+					WHERE LOWER(username) = LOWER($1) AND customer_phone = $2
+				`, username, customerPhone)
+
+				_, _ = globalDB.Exec(`
+					DELETE FROM active_carts 
+					WHERE LOWER(username) = LOWER($1) AND customer_phone = $2
+				`, username, customerPhone)
+				log.Printf("🔓 [State Unlocked on Webhook SUCCESS]: @%s (+%s) -> ORDER_CONFIRMED & payment_status = PAID", username, customerPhone)
+			}
+
+			// 4. Insert into leads table
 			if username != "" {
 				leadInquiry := fmt.Sprintf("Order %s | Amount: ₹%s | Cloudflare Worker Async Verified", orderID, amount)
 				_, _ = globalDB.Exec(`
