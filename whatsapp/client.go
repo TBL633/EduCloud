@@ -1705,7 +1705,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				orderID := GetCustomerCurrentOrderID(username, senderPhone)
 				var amountStr string
 
-				mid, _, _, errCred := FetchRealBusinessPaymentCredentials(username, senderPhone)
+				mid, _, _, _ := FetchRealBusinessPaymentCredentials(username, senderPhone)
 				if mid == "" {
 					cfgTmp := GetUserConfigRAM(username)
 					if cfgTmp != nil {
