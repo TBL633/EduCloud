@@ -1,16 +1,79 @@
 package main
 
 import (
+	"embed"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"runtime/debug"
+	"strings"
 
 	"wa-server/api"
 	"wa-server/database"
 	"wa-server/payment"
 	"wa-server/whatsapp"
 )
+
+//go:embed public
+var embeddedFS embed.FS
+
+func serveStaticFile(w http.ResponseWriter, r *http.Request, fileName string) {
+	cleanName := strings.TrimPrefix(fileName, "/")
+	if cleanName == "" {
+		cleanName = "index.html"
+	}
+
+	// 1. Try disk file first (for active local development)
+	diskPath := path.Join("public", cleanName)
+	if fi, err := os.Stat(diskPath); err == nil && !fi.IsDir() {
+		http.ServeFile(w, r, diskPath)
+		return
+	}
+
+	// 2. Try embedded filesystem (compiled directly into the binary for 100% reliable Render deployment)
+	embedPath := "public/" + cleanName
+	data, err := embeddedFS.ReadFile(embedPath)
+	if err == nil {
+		contentType := "text/html; charset=utf-8"
+		ext := strings.ToLower(path.Ext(cleanName))
+		switch ext {
+		case ".css":
+			contentType = "text/css; charset=utf-8"
+		case ".js":
+			contentType = "application/javascript; charset=utf-8"
+		case ".json":
+			contentType = "application/json; charset=utf-8"
+		case ".png":
+			contentType = "image/png"
+		case ".jpg", ".jpeg":
+			contentType = "image/jpeg"
+		case ".svg":
+			contentType = "image/svg+xml"
+		case ".ico":
+			contentType = "image/x-icon"
+		case ".webp":
+			contentType = "image/webp"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+		return
+	}
+
+	// 3. Fallback to embedded index.html
+	indexData, err := embeddedFS.ReadFile("public/index.html")
+	if err == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(http.StatusOK)
+		w.Write(indexData)
+		return
+	}
+
+	http.NotFound(w, r)
+}
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -46,22 +109,33 @@ func main() {
 	whatsapp.AutoConnectAllSessions()
 	whatsapp.StartKeepAliveMonitor()
 
-	// 3. Frontend UI Routes (Multi-file Architecture)
-	http.HandleFunc("/admin-portal.html", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "public/admin-portal.html")
+	// 3. Frontend UI Routes (Multi-file Architecture & Clean URLs)
+	adminHandler := func(w http.ResponseWriter, r *http.Request) {
+		serveStaticFile(w, r, "admin-portal.html")
+	}
+	http.HandleFunc("/admin", adminHandler)
+	http.HandleFunc("/admin-portal", adminHandler)
+	http.HandleFunc("/admin-portal.html", adminHandler)
+
+	businessHandler := func(w http.ResponseWriter, r *http.Request) {
+		serveStaticFile(w, r, "business-portal.html")
+	}
+	http.HandleFunc("/business", businessHandler)
+	http.HandleFunc("/business-portal", businessHandler)
+	http.HandleFunc("/business-portal.html", businessHandler)
+	http.HandleFunc("/dashboard", businessHandler)
+
+	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		serveStaticFile(w, r, "index.html")
 	})
-	http.HandleFunc("/business-portal.html", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "public/business-portal.html")
-	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		filePath := "public" + r.URL.Path
-		if r.URL.Path != "/" {
-			if _, err := os.Stat(filePath); err == nil {
-				http.ServeFile(w, r, filePath)
-				return
-			}
+		reqPath := strings.TrimPrefix(r.URL.Path, "/")
+		if reqPath == "" || reqPath == "index.html" {
+			serveStaticFile(w, r, "index.html")
+			return
 		}
-		http.ServeFile(w, r, "public/index.html")
+		serveStaticFile(w, r, reqPath)
 	})
 
 	// 4. API Routes

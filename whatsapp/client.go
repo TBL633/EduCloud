@@ -445,6 +445,17 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 	return client
 }
 
+// GetAnyLoggedInClient returns any active logged-in client across sessions
+func GetAnyLoggedInClient() *whatsmeow.Client {
+	ClientsLock.Lock()
+	defer ClientsLock.Unlock()
+	for _, c := range ActiveClients {
+		if c != nil && c.IsLoggedIn() {
+			return c
+		}
+	}
+	return nil
+}
 
 // DisconnectAndUnlinkClient cleanly logs out, disconnects, erases device session from sqlstore, and clears memory
 func DisconnectAndUnlinkClient(username string) {
@@ -1165,13 +1176,32 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 		var dbPhone, dbUsr string
 		_ = DB.QueryRow(`
 			SELECT customer_phone, username 
-			FROM customer_order_states WHERE order_id = $1 LIMIT 1
+			FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
 		`, orderID).Scan(&dbPhone, &dbUsr)
 		if dbPhone != "" && cleanPhone == "" {
 			cleanPhone = FormatPhone(dbPhone)
 		}
 		if dbUsr != "" && (cleanUsr == "" || cleanUsr == "admin") {
 			cleanUsr = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(dbUsr), "@"))
+		}
+	}
+
+	if cleanPhone == "" && strings.HasPrefix(orderID, "ORD_") {
+		parts := strings.Split(orderID, "_")
+		if len(parts) >= 2 {
+			phoneSuffix := parts[1]
+			var dbPhone, dbUsr string
+			_ = DB.QueryRow(`
+				SELECT wa_number, username FROM customers 
+				WHERE wa_number LIKE '%' || $1 
+				ORDER BY updated_at DESC LIMIT 1
+			`, phoneSuffix).Scan(&dbPhone, &dbUsr)
+			if dbPhone != "" {
+				cleanPhone = FormatPhone(dbPhone)
+			}
+			if dbUsr != "" && (cleanUsr == "" || cleanUsr == "admin") {
+				cleanUsr = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(dbUsr), "@"))
+			}
 		}
 	}
 
@@ -1218,6 +1248,9 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 			"Dhanyawad!", orderID, amount)
 
 		client := GetOrCreateClient(cleanUsr)
+		if client == nil || !client.IsLoggedIn() {
+			client = GetAnyLoggedInClient()
+		}
 		if client != nil && client.IsLoggedIn() {
 			sendErr := SendMessage(client, cleanPhone, customerConfirmMsg)
 			if sendErr != nil {
@@ -1545,8 +1578,17 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						}
 					}
 
-					// 2. Resolve real backend calculated amount
-					amountStr, orderIDStr := ResolveOrderAmountAndID(username, senderPhone, replyText, msgText)
+					// 2. Resolve real backend calculated amount strictly from active_carts
+					calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
+					var amountStr, orderIDStr string
+					if calcRes != nil && calcRes.TotalAmount > 0 {
+						amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
+						orderIDStr = calcRes.OrderID
+					}
+					if orderIDStr == "" || amountStr == "" || amountStr == "0" || amountStr == "0.00" {
+						amountStr, orderIDStr = ResolveOrderAmountAndID(username, senderPhone, replyText, msgText)
+					}
+
 					if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
 						log.Printf("⚠️ [Payment QR Aborted] Cart total is ₹0 for @%s (+%s). Cannot generate QR without valid cart.", username, senderPhone)
 						_ = SetCustomerState(username, senderPhone, "chatting")
@@ -1563,11 +1605,24 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					_ = SetCustomerState(username, senderPhone, "PAYMENT_PENDING")
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
 
-					vpa := cfg.MerchantVpa
+					vpa := ""
+					if calcRes != nil && calcRes.PaytmVpa != "" {
+						vpa = calcRes.PaytmVpa
+					}
+					if vpa == "" {
+						vpa = cfg.MerchantVpa
+					}
 					if vpa == "" {
 						vpa = "paytm.s1f6syj@pty"
 					}
-					pName := cfg.PayeeName
+
+					pName := ""
+					if calcRes != nil && calcRes.PayeeName != "" {
+						pName = calcRes.PayeeName
+					}
+					if pName == "" {
+						pName = cfg.PayeeName
+					}
 					if pName == "" {
 						pName = cfg.BusinessName
 					}
@@ -1593,15 +1648,30 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 
 					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment
-					mid := cfg.PaytmMid
-					if mid != "" {
-						go func(m, ord string) {
-							errPoll := payment.StartWorkerPaymentCheck(m, ord, "")
-							if errPoll != nil {
-								log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
-							}
-						}(mid, orderIDStr)
+					mid := ""
+					if calcRes != nil && calcRes.PaytmMid != "" {
+						mid = calcRes.PaytmMid
 					}
+					if mid == "" {
+						mid = cfg.PaytmMid
+					}
+					if mid == "" {
+						mid = "WaMartMerchantMID"
+					}
+
+					fmt.Printf("🔍 [Payment Verification Dispatch] Account: @%s | Real Business MID: '%s' | VPA: '%s' | Order: %s\n", username, mid, vpa, orderIDStr)
+					if mid == "WaMartMerchantMID" || vpa == "paytm.s1f6syj@pty" {
+						log.Printf("⚠️ [WARNING] Merchant MID or VPA is missing in DB! Using placeholder fallback. Please save real Paytm MID/VPA in Settings.")
+					}
+
+					liveWebhookURL := payment.GetAppWebhookURL()
+					fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", liveWebhookURL, "for Order:", orderIDStr)
+					go func(m, ord, wh string) {
+						errPoll := payment.StartWorkerPaymentCheck(m, ord, wh)
+						if errPoll != nil {
+							log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
+						}
+					}(mid, orderIDStr, liveWebhookURL)
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
 
 					// 5. Send follow-up text: "Please scan the QR above. We will automatically notify you here once the payment is successful."

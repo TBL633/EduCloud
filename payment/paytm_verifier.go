@@ -470,15 +470,15 @@ func GenerateQRHandler(w http.ResponseWriter, r *http.Request) {
 // GetAppWebhookURL determines the full public URL for receiving payment webhooks
 func GetAppWebhookURL() string {
 	renderURL := strings.TrimSpace(os.Getenv("RENDER_EXTERNAL_URL"))
-	if renderURL != "" {
+	if renderURL != "" && !strings.Contains(renderURL, "localhost") && !strings.Contains(renderURL, "127.0.0.1") {
 		return strings.TrimSuffix(renderURL, "/") + "/webhook/payment"
 	}
 	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
-	if appURL != "" {
+	if appURL != "" && !strings.Contains(appURL, "localhost") && !strings.Contains(appURL, "127.0.0.1") {
 		return strings.TrimSuffix(appURL, "/") + "/webhook/payment"
 	}
 	baseURL := strings.TrimSpace(os.Getenv("BASE_URL"))
-	if baseURL != "" {
+	if baseURL != "" && !strings.Contains(baseURL, "localhost") && !strings.Contains(baseURL, "127.0.0.1") {
 		return strings.TrimSuffix(baseURL, "/") + "/webhook/payment"
 	}
 	return "https://wamart.onrender.com/webhook/payment"
@@ -623,7 +623,7 @@ func StartWorkerPaymentCheck(mid, orderID, webhookURL string) error {
 	cleanMID := strings.TrimSpace(mid)
 	cleanOrderID := strings.TrimSpace(orderID)
 	cleanWebhook := strings.TrimSpace(webhookURL)
-	if cleanWebhook == "" {
+	if cleanWebhook == "" || strings.Contains(cleanWebhook, "localhost") || strings.Contains(cleanWebhook, "127.0.0.1") {
 		cleanWebhook = GetAppWebhookURL()
 	}
 
@@ -641,6 +641,9 @@ func StartWorkerPaymentCheck(mid, orderID, webhookURL string) error {
 	if err != nil {
 		return fmt.Errorf("failed to encode start-check request: %w", err)
 	}
+
+	fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", cleanWebhook, "for Order:", cleanOrderID)
+	fmt.Println("📡 Dispatching StartWorkerPaymentCheck payload to Worker:", string(jsonBytes))
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://wamart.rkmtech633.workers.dev/start-check", bytes.NewReader(jsonBytes))
@@ -684,77 +687,113 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var rawMap map[string]interface{}
+	_ = json.Unmarshal(bodyBytes, &rawMap)
+
 	var payload PaymentWebhookPayload
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		var altPayload struct {
-			OrderID string `json:"order_id"`
-			Status  string `json:"status"`
-			Amount  string `json:"amount"`
-		}
-		if err2 := json.Unmarshal(bodyBytes, &altPayload); err2 == nil {
-			payload.OrderID = altPayload.OrderID
-			payload.Status = altPayload.Status
-			payload.Amount = altPayload.Amount
-		} else {
-			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-			return
-		}
-	}
+	_ = json.Unmarshal(bodyBytes, &payload)
 
 	orderID := strings.TrimSpace(payload.OrderID)
 	status := strings.ToUpper(strings.TrimSpace(payload.Status))
 	amount := strings.TrimSpace(payload.Amount)
 
-	log.Printf("🔔 [Payment Webhook Received] OrderID: %s, Status: %s, Amount: %s", orderID, status, amount)
+	// Robust case-insensitive fallback parsing
+	for k, v := range rawMap {
+		kLower := strings.ToLower(k)
+		strVal := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if (kLower == "orderid" || kLower == "order_id" || kLower == "ord_id" || kLower == "order") && orderID == "" {
+			orderID = strVal
+		}
+		if (kLower == "status" || kLower == "payment_status" || kLower == "result" || kLower == "txn_status") && status == "" {
+			status = strings.ToUpper(strVal)
+		}
+		if (kLower == "amount" || kLower == "txnamount" || kLower == "total_amount" || kLower == "total") && amount == "" {
+			amount = strVal
+		}
+	}
+
+	fmt.Printf("🔔 [Payment Webhook Received] OrderID: %s | Status: %s | Amount: %s\n", orderID, status, amount)
+	log.Printf("🔔 [Payment Webhook Received Raw Payload]: %s", string(bodyBytes))
 
 	if orderID == "" {
 		http.Error(w, `{"error":"orderId is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	isSuccess := status == "SUCCESS" || status == "TXN_SUCCESS" || status == "PAID"
+	isSuccess := status == "SUCCESS" || status == "TXN_SUCCESS" || status == "PAID" || status == "COMPLETED" || status == "CONFIRMED"
 
 	var username, customerPhone string
 	var totalAmount float64
 
 	// Update Neon DB
 	if globalDB != nil {
-		// 1. Fetch current order info
+		// 1. Fetch current order info by order_id (case-insensitive)
 		_ = globalDB.QueryRow(`
 			SELECT username, customer_phone, total_amount 
-			FROM customer_order_states WHERE order_id = $1 LIMIT 1
+			FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
 		`, orderID).Scan(&username, &customerPhone, &totalAmount)
+
+		// Fallback resolution if exact order_id row wasn't found
+		if (username == "" || customerPhone == "") && strings.HasPrefix(orderID, "ORD_") {
+			parts := strings.Split(orderID, "_")
+			if len(parts) >= 2 {
+				phoneSuffix := parts[1]
+				_ = globalDB.QueryRow(`
+					SELECT username, wa_number 
+					FROM customers 
+					WHERE wa_number LIKE '%' || $1 AND payment_status = 'PENDING' 
+					ORDER BY updated_at DESC LIMIT 1
+				`, phoneSuffix).Scan(&username, &customerPhone)
+			}
+		}
 
 		if isSuccess {
 			// 2. Mark order as paid & confirmed in customer_order_states
 			_, err = globalDB.Exec(`
 				UPDATE customer_order_states 
 				SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() 
-				WHERE order_id = $1
+				WHERE LOWER(order_id) = LOWER($1)
 			`, orderID)
 			if err != nil {
 				log.Printf("⚠️ Error updating customer_order_states for %s: %v", orderID, err)
 			}
 
-			// 3. Unlock State: Set customer state to ORDER_CONFIRMED, payment_status to PAID, and clear active cart in Neon DB
+			// 3. Unlock State: Set customer state to ORDER_CONFIRMED, payment_status to PAID in customers & active_carts
 			if username != "" && customerPhone != "" {
 				_, _ = globalDB.Exec(`
 					UPDATE customers 
 					SET current_state = 'ORDER_CONFIRMED', payment_status = 'PAID', updated_at = NOW() 
-					WHERE LOWER(username) = LOWER($1) AND wa_number = $2
+					WHERE (LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com') AND wa_number = $2
 				`, username, customerPhone)
 
 				_, _ = globalDB.Exec(`
 					UPDATE active_carts 
 					SET payment_status = 'PAID' 
-					WHERE LOWER(username) = LOWER($1) AND customer_phone = $2
+					WHERE (LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com') AND customer_phone = $2
 				`, username, customerPhone)
 
 				_, _ = globalDB.Exec(`
 					DELETE FROM active_carts 
-					WHERE LOWER(username) = LOWER($1) AND customer_phone = $2
+					WHERE (LOWER(username) = LOWER($1) OR LOWER(username) = LOWER($1) || '@gmail.com') AND customer_phone = $2
 				`, username, customerPhone)
 				log.Printf("🔓 [State Unlocked on Webhook SUCCESS]: @%s (+%s) -> ORDER_CONFIRMED & payment_status = PAID", username, customerPhone)
+			}
+
+			if customerPhone != "" && username == "" {
+				_, _ = globalDB.Exec(`
+					UPDATE customers 
+					SET current_state = 'ORDER_CONFIRMED', payment_status = 'PAID', updated_at = NOW() 
+					WHERE wa_number = $1
+				`, customerPhone)
+				_, _ = globalDB.Exec(`
+					UPDATE active_carts 
+					SET payment_status = 'PAID' 
+					WHERE customer_phone = $1
+				`, customerPhone)
+				_, _ = globalDB.Exec(`
+					DELETE FROM active_carts 
+					WHERE customer_phone = $1
+				`, customerPhone)
 			}
 
 			// 4. Insert into leads table

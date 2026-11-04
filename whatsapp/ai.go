@@ -87,7 +87,7 @@ ACTIONS (Choose exactly one):
 
 CRITICAL RULES:
 1. CATALOG ONLY: Never invent products or prices. Only sell items listed in the provided Product Catalog.
-2. HUMAN & POLITE: Make reply_to_customer polite, helpful, with WhatsApp formatting (*bold*, _italic_, emojis).
+2. BEAUTIFUL FORMATTING & EMOJIS: You MUST format your reply_to_customer beautifully using WhatsApp markdown (*bold* for highlights, _italic_, and bullet points) and liberally use appropriate, warm emojis (e.g., 🙏, 📦, 😊, 🛒) in every single reply.
 3. NO PRICE CALCULATIONS: You do NOT calculate total prices or generate bills. When the customer confirms checkout, simply return action 'generate_qr'.
 4. STRICT PAYMENT SEPARATION: Never hallucinate order confirmation or say "Order confirmed" or "Payment received". Order confirmation is only done via automated payment webhook. When checking out, return action 'generate_qr'.`
 
@@ -167,6 +167,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 
 	if DB != nil {
 		var p, k, s, m, bName, bType, lang, pol string
+		var pMidUser, pVpaUser string
 		var t float64
 		var ar, ic bool
 		err := DB.QueryRow(`SELECT 
@@ -180,8 +181,10 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(business_name, account_name, ''),
 			COALESCE(business_type, 'Kirana / General Store'),
 			COALESCE(response_language, 'Hinglish'),
-			COALESCE(store_policies, '')
-			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol)
+			COALESCE(store_policies, ''),
+			COALESCE(paytm_mid, ''),
+			COALESCE(paytm_vpa, '')
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol, &pMidUser, &pVpaUser)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -203,18 +206,51 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			if lang != "" {
 				cfg.Language = lang
 			}
+			if pMidUser != "" {
+				cfg.PaytmMid = strings.TrimSpace(pMidUser)
+				cfg.HasOnlinePayment = true
+			}
+			if pVpaUser != "" {
+				cfg.MerchantVpa = strings.TrimSpace(pVpaUser)
+				cfg.HasOnlinePayment = true
+			}
 		}
 
-		// Check if tenant has payment configured
+		// Check if tenant has payment configured in tenant_payment_configs as secondary/override
 		var payEnabled bool
 		var pMid, mVpa, pName string
 		errPay := DB.QueryRow(`SELECT enabled, COALESCE(paytm_mid, ''), COALESCE(merchant_vpa, ''), COALESCE(payee_name, '') 
 			FROM tenant_payment_configs WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&payEnabled, &pMid, &mVpa, &pName)
-		if errPay == nil && payEnabled && (pMid != "" || mVpa != "") {
-			cfg.HasOnlinePayment = true
-			cfg.PaytmMid = pMid
-			cfg.MerchantVpa = mVpa
-			cfg.PayeeName = pName
+		if errPay == nil {
+			if pMid != "" {
+				cfg.PaytmMid = strings.TrimSpace(pMid)
+				cfg.HasOnlinePayment = true
+			}
+			if mVpa != "" {
+				cfg.MerchantVpa = strings.TrimSpace(mVpa)
+				cfg.HasOnlinePayment = true
+			}
+			if pName != "" {
+				cfg.PayeeName = strings.TrimSpace(pName)
+			}
+		}
+
+		// Fallback: If still empty, check if any registered user has configured Paytm MID/VPA
+		if cfg.PaytmMid == "" || cfg.MerchantVpa == "" {
+			var anyMid, anyVpa, anyName string
+			_ = DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, '') 
+				FROM users WHERE paytm_mid != '' OR paytm_vpa != '' ORDER BY id DESC LIMIT 1`).Scan(&anyMid, &anyVpa, &anyName)
+			if cfg.PaytmMid == "" && anyMid != "" {
+				cfg.PaytmMid = strings.TrimSpace(anyMid)
+				cfg.HasOnlinePayment = true
+			}
+			if cfg.MerchantVpa == "" && anyVpa != "" {
+				cfg.MerchantVpa = strings.TrimSpace(anyVpa)
+				cfg.HasOnlinePayment = true
+			}
+			if cfg.PayeeName == "" && anyName != "" {
+				cfg.PayeeName = strings.TrimSpace(anyName)
+			}
 		}
 	}
 
@@ -651,16 +687,12 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		if parsedState.ProfileData != nil || action == "update_profile" {
 			go UpdateCustomerProfileFromData(cleanUsr, cleanPhone, parsedState.ProfileData)
 		}
-		if action == "add_to_cart" && len(parsedState.CartItems) > 0 {
-			go AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
+		if len(parsedState.CartItems) > 0 {
+			_ = AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
 		}
 		if action == "generate_qr" {
-			go func() {
-				calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
-				if errCalc == nil && calcRes != nil {
-					_, _ = DispatchCloudflareWorkerQR(cleanUsr, cleanPhone, calcRes)
-				}
-			}()
+			_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
+			_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
 		}
 	}
 	return strings.TrimSpace(replyText), ""
@@ -752,19 +784,13 @@ func GenerateAIReplyRAM(username, customerPhone, incomingText string, cfg *UserC
 			if parsedState.ProfileData != nil || action == "update_profile" {
 				go UpdateCustomerProfileFromData(cleanUsr, cleanPhone, parsedState.ProfileData)
 			}
-			if action == "add_to_cart" && len(parsedState.CartItems) > 0 {
-				go AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
+			if len(parsedState.CartItems) > 0 {
+				_ = AddItemsToActiveCart(cleanUsr, cleanPhone, parsedState.CartItems)
 			}
 			if action == "generate_qr" {
 				// Lock customer state to PAYMENT_PENDING in DB & RAM Cache
 				_ = SetCustomerState(cleanUsr, cleanPhone, "PAYMENT_PENDING")
-
-				go func() {
-					calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
-					if errCalc == nil && calcRes != nil && calcRes.TotalAmount > 0 {
-						_, _ = DispatchCloudflareWorkerQR(cleanUsr, cleanPhone, calcRes)
-					}
-				}()
+				_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
 			}
 			aiResponse = replyText
 		}

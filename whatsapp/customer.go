@@ -524,6 +524,7 @@ type CartCalculationResult struct {
 	PaytmMid      string           `json:"paytm_mid"`
 	PaytmVpa      string           `json:"paytm_vpa"`
 	PayeeName     string           `json:"payee_name"`
+	OrderID       string           `json:"order_id"`
 	Items         []CartItemDetail `json:"items"`
 	ItemCount     int              `json:"item_count"`
 }
@@ -642,8 +643,14 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 			OR LOWER(TRIM(p.name)) = LOWER(TRIM(c.product_id))
 			OR LOWER(TRIM(p.name)) LIKE '%' || LOWER(TRIM(c.product_id)) || '%'
 			OR LOWER(TRIM(c.product_id)) LIKE '%' || LOWER(TRIM(p.name)) || '%'
-		) AND LOWER(p.username) = LOWER(c.username)
-		WHERE LOWER(c.username) = LOWER($1) AND c.customer_phone = $2`
+		) AND (
+			LOWER(p.username) = LOWER(c.username) 
+			OR LOWER(p.username) = LOWER(c.username) || '@gmail.com'
+			OR LOWER(c.username) = LOWER(p.username) || '@gmail.com'
+			OR LOWER(p.username) = 'admin'
+		)
+		WHERE (LOWER(c.username) = LOWER($1) OR LOWER(c.username) = LOWER($1) || '@gmail.com' OR LOWER($1) = LOWER(c.username) || '@gmail.com') 
+		  AND c.customer_phone = $2`
 
 	rows, err := DB.Query(query, cleanUsr, cleanPhone)
 	if err != nil {
@@ -687,7 +694,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	if calculatedTotal <= 0 {
 		var prevTotal float64
 		_ = DB.QueryRow(`SELECT COALESCE(total_amount, 0) FROM customer_order_states 
-			WHERE LOWER(username)=LOWER($1) AND customer_phone=$2 AND payment_status != 'paid' 
+			WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($1)||'@gmail.com') AND customer_phone=$2 AND payment_status != 'paid' 
 			ORDER BY updated_at DESC LIMIT 1`, cleanUsr, cleanPhone).Scan(&prevTotal)
 		if prevTotal > 0 {
 			calculatedTotal = prevTotal
@@ -717,12 +724,36 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 		}
 	}
 
-	res.PaytmMid = pMid
-	res.PaytmVpa = pVpa
-	res.PayeeName = bName
+	// Fallback check if user MID/VPA is saved under any account in users or tenant_payment_configs
+	if pMid == "" || pVpa == "" {
+		var anyMid, anyVpa, anyName string
+		_ = DB.QueryRow(`SELECT COALESCE(paytm_mid, ''), COALESCE(paytm_vpa, ''), COALESCE(business_name, account_name, '') 
+			FROM users WHERE paytm_mid != '' OR paytm_vpa != '' ORDER BY id DESC LIMIT 1`).Scan(&anyMid, &anyVpa, &anyName)
+		if pMid == "" {
+			pMid = anyMid
+		}
+		if pVpa == "" {
+			pVpa = anyVpa
+		}
+		if bName == "" {
+			bName = anyName
+		}
+	}
+
+	res.PaytmMid = strings.TrimSpace(pMid)
+	res.PaytmVpa = strings.TrimSpace(pVpa)
+	res.PayeeName = strings.TrimSpace(bName)
+
+	ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+	res.OrderID = ordID
+
+	log.Printf("💳 [Paytm Credentials Resolved for @%s]: MID = '%s' | VPA = '%s' | Payee = '%s'", cleanUsr, res.PaytmMid, res.PaytmVpa, res.PayeeName)
+	if res.PaytmMid == "" || res.PaytmVpa == "" {
+		log.Printf("⚠️ [WARNING] Paytm MID or VPA is missing in database for @%s! Please configure in Business Portal -> Settings -> AI Settings.", cleanUsr)
+	}
 
 	log.Printf("🧮 [MATH ENGINE CALCULATION SUCCESS]:")
-	log.Printf("   • Account: @%s | Customer: +%s", cleanUsr, cleanPhone)
+	log.Printf("   • Account: @%s | Customer: +%s | Order: %s", cleanUsr, cleanPhone, res.OrderID)
 	log.Printf("   • Real Total Amount: ₹%.2f (%d items)", res.TotalAmount, res.ItemCount)
 	log.Printf("   • Items Breakdown: %+v", res.Items)
 	log.Printf("   • Payment Credentials: Paytm MID = '%s' | Paytm VPA = '%s' | Payee Name = '%s'", res.PaytmMid, res.PaytmVpa, res.PayeeName)
@@ -730,7 +761,6 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	// Save calculated state to customer_order_states
 	if len(res.Items) > 0 && res.TotalAmount > 0 {
 		itemsJSON, _ := json.Marshal(res.Items)
-		ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
 		_, _ = DB.Exec(`INSERT INTO customer_order_states 
 			(username, customer_phone, items, total_amount, payment_mode, payment_status, order_status, order_id, updated_at)
 			VALUES ($1, $2, $3::jsonb, $4, 'online', 'unpaid', 'in_progress', $5, NOW())
@@ -746,47 +776,39 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	return res, nil
 }
 
-// ResolveOrderAmountAndID resolves the order total amount and order ID for dynamic payment QR generation
+// ResolveOrderAmountAndID resolves the exact order total amount and order ID for dynamic payment QR generation
 func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText string) (string, string) {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	cleanPhone := FormatPhone(senderPhone)
 
-	amountStr := "0"
-	orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
-
 	// 1. Math Engine calculation strictly from active_carts
 	calcRes, err := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
 	if err == nil && calcRes != nil && calcRes.TotalAmount > 0 {
-		amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
-		log.Printf("🧮 [ResolveOrderAmountAndID Math Engine Success]: Real Total ₹%s for @%s (+%s)", amountStr, cleanUsr, cleanPhone)
+		amountStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
+		orderIDStr := calcRes.OrderID
+		if orderIDStr == "" {
+			orderIDStr = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+		}
+		log.Printf("🧮 [ResolveOrderAmountAndID Math Engine Success]: Real Total ₹%s for Order %s (@%s, +%s)", amountStr, orderIDStr, cleanUsr, cleanPhone)
 		return amountStr, orderIDStr
 	}
 
 	// 2. Check customer_order_states second if cart was cleared or pre-calculated
-	if (amountStr == "0" || amountStr == "0.00" || amountStr == "") && DB != nil {
+	if DB != nil {
 		var dbOrd string
 		var dbAmt float64
-		_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE username=$1 AND customer_phone=$2 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
-		if dbOrd != "" {
-			orderIDStr = dbOrd
-		}
+		_ = DB.QueryRow("SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0) FROM customer_order_states WHERE (LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($1)||'@gmail.com') AND customer_phone=$2 AND payment_status != 'paid' ORDER BY updated_at DESC LIMIT 1", cleanUsr, cleanPhone).Scan(&dbOrd, &dbAmt)
 		if dbAmt > 0 {
-			amountStr = fmt.Sprintf("%.2f", dbAmt)
-			return amountStr, orderIDStr
+			if dbOrd == "" {
+				dbOrd = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+			}
+			return fmt.Sprintf("%.2f", dbAmt), dbOrd
 		}
 	}
 
-	// 3. Fallback regex on replyText or incomingText
-	if amountStr == "0" || amountStr == "0.00" || amountStr == "" {
-		priceRegex := regexp.MustCompile(`(?i)(?:rs\.?|inr|₹)\s*([0-9]+(?:\.[0-9]+)?)`)
-		if pMatches := priceRegex.FindAllStringSubmatch(replyText, -1); len(pMatches) > 0 {
-			amountStr = pMatches[len(pMatches)-1][1]
-		} else if pMatches := priceRegex.FindAllStringSubmatch(incomingText, -1); len(pMatches) > 0 {
-			amountStr = pMatches[len(pMatches)-1][1]
-		}
-	}
-
-	return amountStr, orderIDStr
+	// Strictly NO hardcoded 1.00 fallback
+	orderIDStr := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+	return "0.00", orderIDStr
 }
 
 // DispatchCloudflareWorkerQR triggers Cloudflare Worker /generate, delivers QR image via whatsmeow, and calls /start-check
@@ -807,7 +829,11 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 	_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PENDING")
 
 	amtStr := fmt.Sprintf("%.2f", calcRes.TotalAmount)
-	ordID := fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+	ordID := calcRes.OrderID
+	if ordID == "" {
+		ordID = fmt.Sprintf("ORD_%s_%d", cleanPhone[max(0, len(cleanPhone)-4):], time.Now().Unix()%10000)
+		calcRes.OrderID = ordID
+	}
 	vpa := strings.TrimSpace(calcRes.PaytmVpa)
 	if vpa == "" {
 		vpa = "paytmqr2810050501111585i1a141s9@paytm"
@@ -848,6 +874,7 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 
 	// 3. Immediately trigger Worker's /start-check endpoint for background polling
 	webhookURL := payment.GetAppWebhookURL()
+	fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", webhookURL, "for Order:", ordID)
 	go func() {
 		errCheck := payment.StartWorkerPaymentCheck(pMid, ordID, webhookURL)
 		if errCheck != nil {

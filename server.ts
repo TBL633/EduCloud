@@ -3520,7 +3520,23 @@ app.post('/api/ai/test', async (req: Request, res: Response) => {
 });
 
 // --- SERVE PUBLIC ---
-const publicDir = path.join(__dirname, 'public');
+const publicDir = fs.existsSync(path.join(__dirname, 'public'))
+  ? path.join(__dirname, 'public')
+  : path.resolve(process.cwd(), 'public');
+
+// Clean portal routes (with and without .html extension)
+app.get(['/admin', '/admin-portal', '/admin-portal.html'], (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, 'admin-portal.html'));
+});
+
+app.get(['/business', '/business-portal', '/business-portal.html', '/dashboard'], (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, 'business-portal.html'));
+});
+
+app.get(['/', '/index.html', '/login'], (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
 app.use(express.static(publicDir));
 
 // Fallback to public/index.html
