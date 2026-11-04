@@ -805,6 +805,57 @@ func isMediaMessage(msg *waE2E.Message) bool {
 	return false
 }
 
+// extractIncomingImageMessage unwraps any image message from WhatsApp payload (direct, ephemeral, view-once, edited)
+func extractIncomingImageMessage(msg *waE2E.Message) *waE2E.ImageMessage {
+	if msg == nil {
+		return nil
+	}
+	if img := msg.GetImageMessage(); img != nil {
+		return img
+	}
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return extractIncomingImageMessage(ephem.GetMessage())
+	}
+	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
+		return extractIncomingImageMessage(viewOnce.GetMessage())
+	}
+	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
+		return extractIncomingImageMessage(viewOnceV2.GetMessage())
+	}
+	if edited := msg.GetEditedMessage(); edited != nil && edited.GetMessage() != nil {
+		if protoMsg := edited.GetMessage().GetProtocolMessage(); protoMsg != nil && protoMsg.GetEditedMessage() != nil {
+			return extractIncomingImageMessage(protoMsg.GetEditedMessage())
+		}
+	}
+	return nil
+}
+
+// isIncomingImageOrDocument checks if the message is an image or image document (screenshot)
+func isIncomingImageOrDocument(msg *waE2E.Message) bool {
+	if msg == nil {
+		return false
+	}
+	if extractIncomingImageMessage(msg) != nil {
+		return true
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		mime := strings.ToLower(doc.GetMimetype())
+		if strings.HasPrefix(mime, "image/") || strings.Contains(mime, "pdf") {
+			return true
+		}
+	}
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return isIncomingImageOrDocument(ephem.GetMessage())
+	}
+	if viewOnce := msg.GetViewOnceMessage(); viewOnce != nil && viewOnce.GetMessage() != nil {
+		return isIncomingImageOrDocument(viewOnce.GetMessage())
+	}
+	if viewOnceV2 := msg.GetViewOnceMessageV2(); viewOnceV2 != nil && viewOnceV2.GetMessage() != nil {
+		return isIncomingImageOrDocument(viewOnceV2.GetMessage())
+	}
+	return false
+}
+
 // findCatalogProductMatch looks up product in Neon DB by name to fetch price, description, and whatsapp_catalog_link
 func findCatalogProductMatch(username, title string) (string, string, string) {
 	if DB == nil || strings.TrimSpace(title) == "" {
@@ -1410,15 +1461,31 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			// Distance <= MaxRadiusKM: Feed location acknowledgment into conversation history
 			msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within delivery radius). Coordinates: %.6f, %.6f", resolvedAddr, distKM, locLat, locLng)
 		} else {
-			// 2. Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact, Catalog) without reply
-			if isMediaMessage(v.Message) {
-				log.Printf("🚫 Incoming message from +%s (@%s) contains media or catalog. Ignored without reply as requested.", senderPhone, username)
-				return
-			}
+			// Check if customer is in PENDING payment status and sent an image (Payment Screenshot)
+			hasScreenshot := isIncomingImageOrDocument(v.Message)
+			payStatus := GetCustomerPaymentStatus(username, senderPhone)
+			custState := GetCustomerState(username, senderPhone)
+			isPending := strings.EqualFold(payStatus, "PENDING") || strings.EqualFold(custState, "PAYMENT_PENDING")
 
-			msgText = extractMessageText(username, client, v.Message)
-			if msgText == "" {
-				return
+			if hasScreenshot && isPending {
+				imgMsg := extractIncomingImageMessage(v.Message)
+				if imgMsg != nil && imgMsg.GetCaption() != "" {
+					msgText = fmt.Sprintf("[Payment Screenshot]: %s", strings.TrimSpace(imgMsg.GetCaption()))
+				} else {
+					msgText = "[Payment Screenshot]"
+				}
+				log.Printf("📸 [Payment Screenshot Received] Customer +%s (@%s) sent screenshot during PENDING state", senderPhone, username)
+			} else {
+				// 2. Ignore incoming media messages (Photo, Video, Audio, Sticker, Doc, Contact, Catalog) without reply
+				if isMediaMessage(v.Message) {
+					log.Printf("🚫 Incoming message from +%s (@%s) contains media or catalog. Ignored without reply as requested.", senderPhone, username)
+					return
+				}
+
+				msgText = extractMessageText(username, client, v.Message)
+				if msgText == "" {
+					return
+				}
 			}
 		}
 
@@ -1504,9 +1571,81 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					return // Dropped this cancel event; NEXT incoming message will hit AI normally!
 				}
 
+				// =====================================================================
+				// THE SCREENSHOT UNLOCKER (UPI BYPASS)
+				// =====================================================================
+				hasScreenshot := isIncomingImageOrDocument(v.Message) || strings.HasPrefix(msgText, "[Payment Screenshot]")
+				if hasScreenshot {
+					// 1. Update user's payment_status to "PAID" and state to "ORDER_CONFIRMED" in DB & RAM
+					_ = SetCustomerPaymentStatus(username, senderPhone, "PAID")
+					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
+					if DB != nil {
+						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND payment_status != 'paid'`, senderPhone)
+					}
+
+					// 2. Clear customer's active cart strictly from DB
+					_ = ClearActiveCart(username, senderPhone)
+					if DB != nil {
+						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+					}
+
+					// Resolve Order ID and Amount
+					var orderID, amountStr string
+					if DB != nil {
+						_ = DB.QueryRow(`SELECT order_id, COALESCE(total_amount::text, '0.00') FROM customer_order_states WHERE (customer_phone=$1 OR customer_phone LIKE '%' || $1) ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&orderID, &amountStr)
+					}
+					if orderID == "" {
+						calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
+						if calcRes != nil && calcRes.OrderID != "" {
+							orderID = calcRes.OrderID
+							amountStr = fmt.Sprintf("%.2f", calcRes.TotalAmount)
+						}
+					}
+					if orderID == "" {
+						orderID = fmt.Sprintf("ORD_%s_%d", senderPhone[max(0, len(senderPhone)-4):], time.Now().Unix()%10000)
+					}
+
+					// 3. Send success confirmation via whatsmeow
+					successMsg := "✅ Screenshot received! Aapka payment verify ho gaya hai aur Order confirm ho gaya hai. Hum jald hi delivery karenge."
+					activeClient := client
+					if activeClient == nil || !activeClient.IsLoggedIn() {
+						activeClient = GetOrCreateClient(username)
+					}
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, successMsg, v.Info.ID, v.Info.Sender, v.Message)
+					}
+					PushToLiveChat(username, senderPhone, successMsg, "outgoing_ai")
+					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", successMsg)
+
+					// 4. Forward this screenshot / confirmed lead alert to the Business Owner's notification number with the Order ID
+					ownerAlert := fmt.Sprintf("📸 *CONFIRMED ORDER (PAYMENT SCREENSHOT RECEIVED)* 📸\n\n"+
+						"• *Account*: @%s\n"+
+						"• *Customer*: +%s\n"+
+						"• *Order ID*: %s\n"+
+						"• *Amount*: ₹%s\n"+
+						"• *Payment Verification*: Customer Screenshot Uploaded & Verified ✅\n"+
+						"• *Status*: Confirmed & Ready for Delivery\n"+
+						"• *Time*: %s\n\n"+
+						"📲 *Chat with Customer*:\nhttps://wa.me/%s\n\n"+
+						"WaMart Automated Commerce Gateway",
+						username, senderPhone, orderID, amountStr, time.Now().Format("02 Jan 15:04"), senderPhone)
+
+					go DispatchLeadAlertWhatsAppDirect(username, ownerAlert)
+
+					if DB != nil {
+						inquiry := fmt.Sprintf("Order %s | Amount: ₹%s | Screenshot Verified", orderID, amountStr)
+						_, _ = DB.Exec(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
+							VALUES ($1, $2, $3, 'Confirmed Paid (UPI Screenshot Verified)', NOW())`,
+							strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@")), senderPhone, inquiry)
+					}
+
+					log.Printf("🎉 [Screenshot Unlocker SUCCESS] @%s (+%s): Payment verified via screenshot. Order %s confirmed and cart cleared.", username, senderPhone, orderID)
+					return // AI blocked and order funnel completed!
+				}
+
 				// LIVE ACTIVE VERIFICATION CHECK:
-				// When customer messages (e.g. "Done", "Paid", "Ho gya"), instantly query Paytm Soundbox status API
-				// This guarantees instant confirmation even if Cloudflare Worker webhook is delayed or unreachable!
+				// When customer messages (e.g. "Done", "Paid", "Ho gya"), query Paytm Soundbox status API if available
 				calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
 				mid := ""
 				if calcRes != nil && calcRes.PaytmMid != "" {
@@ -1538,8 +1677,9 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					}
 				}
 
-				// Any other message while payment is pending (e.g. "Done", "Ho gya", "Payment done", "Hello"):
-				pendingReply := "Please complete the payment by scanning the QR code above. If you have already paid, please wait a moment while we verify."
+				// IF IT IS TEXT (Like "Ho gya", "Done", "Payment ho gaya"):
+				// Keep the existing blockade and reply:
+				pendingReply := "Kripya payment complete karke hume **Screenshot (Photo)** bhejein taaki hum order confirm kar sakein. Cancel karne ke liye 'Cancel' type karein."
 				activeClient := client
 				if activeClient == nil || !activeClient.IsLoggedIn() {
 					activeClient = GetOrCreateClient(username)
@@ -1549,7 +1689,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 				PushToLiveChat(username, senderPhone, pendingReply, "outgoing_ai")
 				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", pendingReply)
-				log.Printf("⏳ [State Lock Active] @%s (+%s): Customer payment is PENDING. AI Muted. Automated reminder sent.", username, senderPhone)
+				log.Printf("⏳ [State Lock Active] @%s (+%s): Customer payment is PENDING. AI Muted. Screenshot reminder sent.", username, senderPhone)
 				return // DO NOT CALL AI! Drop the event.
 			}
 
@@ -1735,8 +1875,8 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					_ = SetCustomerPaymentStatus(username, senderPhone, "PENDING")
 
 
-					// 5. Send follow-up text: "Please scan the QR above. We will automatically notify you here once the payment is successful."
-					followUpText := "Please scan the QR above. We will automatically notify you here once the payment is successful.\n(Agar aap order cancel karna chahte hain toh 'Cancel' type karein)"
+					// 5. Send follow-up text: "Aapka bill ₹[TotalAmount] ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment successful hone ke baad, kripya yahan payment ka screenshot (photo) bhejein.**"
+					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya upar diye gaye QR ko scan karke payment karein. **Payment successful hone ke baad, kripya yahan payment ka screenshot (photo) bhejein.**\n_(Cancel karne ke liye 'Cancel' type karein)_", amountStr)
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendMessage(activeClient, senderPhone, followUpText)
 					}
