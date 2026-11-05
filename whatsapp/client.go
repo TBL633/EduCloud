@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1723,7 +1725,11 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 
 				var isTxnSuccess bool
+				var isAmountMismatch bool
 				var txnID string
+				var txnAmt float64
+				var expectedAmt float64
+
 				if mid != "" && orderID != "" {
 					statusResp, errVerify := payment.VerifyPaytmPayment(mid, orderID)
 					if errVerify == nil && statusResp != nil {
@@ -1731,10 +1737,27 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						rc := strings.TrimSpace(statusResp.RespCode)
 						log.Printf("📡 [Paytm Verification Result for %s]: STATUS=%s | RESPCODE=%s | Amount=%s | TxnID=%s", orderID, st, rc, statusResp.TxnAmount, statusResp.TxnID)
 						if st == "TXN_SUCCESS" || st == "SUCCESS" || rc == "01" {
-							isTxnSuccess = true
-							txnID = statusResp.TxnID
 							if statusResp.TxnAmount != "" {
-								amountStr = statusResp.TxnAmount
+								_, _ = fmt.Sscanf(strings.TrimSpace(statusResp.TxnAmount), "%f", &txnAmt)
+							}
+
+							if DB != nil {
+								_ = DB.QueryRow(`SELECT COALESCE(total_amount, 0) FROM customer_order_states WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND (order_id = $2 OR LOWER(order_id) = LOWER($2)) ORDER BY updated_at DESC LIMIT 1`, senderPhone, orderID).Scan(&expectedAmt)
+							}
+							if expectedAmt <= 0 && amountStr != "" {
+								_, _ = fmt.Sscanf(strings.TrimSpace(amountStr), "%f", &expectedAmt)
+							}
+
+							// STRICT AMOUNT VALIDATION (Security Layer)
+							if expectedAmt > 0 && txnAmt > 0 && math.Abs(txnAmt - expectedAmt) > 0.01 {
+								log.Printf("⚠️ [Payment Security Alert]: Amount mismatch for Order %s! Received ₹%.2f, Expected ₹%.2f", orderID, txnAmt, expectedAmt)
+								isAmountMismatch = true
+							} else {
+								isTxnSuccess = true
+								txnID = statusResp.TxnID
+								if statusResp.TxnAmount != "" {
+									amountStr = statusResp.TxnAmount
+								}
 							}
 						}
 					} else {
@@ -1744,16 +1767,27 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					log.Printf("⚠️ [Paytm Verification Skipped]: Missing MID ('%s') or OrderID ('%s')", mid, orderID)
 				}
 
+				if isAmountMismatch {
+					mismatchReply := "⚠️ Payment amount mismatch detected. Please contact support."
+					if activeClient != nil && activeClient.IsLoggedIn() {
+						_ = SendReplyMessage(activeClient, senderPhone, mismatchReply, v.Info.ID, v.Info.Sender, v.Message)
+					}
+					PushToLiveChat(username, senderPhone, mismatchReply, "outgoing_ai")
+					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", mismatchReply)
+					log.Printf("⚠️ [Amount Mismatch Blocked] Order %s for +%s rejected due to amount mismatch.", orderID, senderPhone)
+					return // DO NOT CONFIRM!
+				}
+
 				if isTxnSuccess {
 					// SCENARIO A: Transaction Success
-					// 1. Update payment_status to 'PAID', current_state to 'ORDER_CONFIRMED', and clear current_order_id
-					_ = SetCustomerPaymentStatus(username, senderPhone, "PAID")
-					_ = SetCustomerState(username, senderPhone, "ORDER_CONFIRMED")
+					// 1. Update payment_status to 'BROWSING', current_state to 'chatting', and clear current_order_id & active_carts
+					_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
+					_ = SetCustomerState(username, senderPhone, "chatting")
 					_ = SetCustomerCurrentOrderID(username, senderPhone, "")
 					if DB != nil {
-						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'PAID', current_state = 'ORDER_CONFIRMED', current_order_id = '', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`UPDATE customers SET payment_status = 'BROWSING', current_state = 'chatting', current_order_id = '', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
 						_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE (customer_phone = $1 OR customer_phone LIKE '%' || $1) AND payment_status != 'paid'`, senderPhone)
-						_, _ = DB.Exec(`UPDATE active_carts SET payment_status = 'PAID', current_order_id = '', updated_at = NOW() WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
+						_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, senderPhone)
 					}
 
 					// 2. Send WhatsApp reply: "✅ Payment Verified! Aapka order confirm ho gaya hai."
@@ -1764,13 +1798,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					PushToLiveChat(username, senderPhone, successReply, "outgoing_ai")
 					go SaveCustomerChatAndPrune(username, senderPhone, "assistant", successReply)
 
-					// 3. Clear the active_carts
+					// 3. Clear active_carts completely
 					_ = ClearActiveCart(username, senderPhone)
 
 					// Trigger confirmed lead alert to merchant & database
 					TriggerConfirmedPaymentLead(username, senderPhone, orderID, amountStr, txnID)
 
-					log.Printf("🎉 [Paytm Direct Verification SUCCESS]: Order %s for +%s confirmed, current_order_id and active_carts cleared.", orderID, senderPhone)
+					log.Printf("🎉 [Paytm Direct Verification SUCCESS]: Order %s for +%s confirmed, state reset to BROWSING, current_order_id and active_carts cleared.", orderID, senderPhone)
 					return // DO NOT CALL AI!
 				}
 
@@ -1957,26 +1991,20 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						_ = SendReplyMessage(activeClient, senderPhone, fmt.Sprintf("💳 Click or scan to pay ₹%s: %s", amountStr, workerQRURL), v.Info.ID, v.Info.Sender, v.Message)
 					}
 
-					// 4. Immediately trigger the Cloudflare Worker /start-check API to monitor payment as background fallback
-					fmt.Printf("🔍 [Payment Verification Dispatch] Account: @%s | Real Business MID: '%s' | VPA: '%s' | Order: %s\n", username, mid, vpa, orderIDStr)
-
-					liveWebhookURL := payment.GetAppWebhookURL()
-					if liveWebhookURL != "" {
-						go func(m, ord, wh string) {
-							errPoll := payment.StartWorkerPaymentCheck(m, ord, wh)
-							if errPoll != nil {
-								log.Printf("⚠️ [Worker Start-Check Notice] Order %s: %v", ord, errPoll)
-							}
-						}(mid, orderIDStr, liveWebhookURL)
-					}
-
-					// 5. Send follow-up message in natural tone
-					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya QR code scan karke payment complete karein. Payment hone ke baad bataiye ya photo/screenshot bhejein, hum verify kar denge.", amountStr)
+					// 4. Send follow-up message in natural tone
+					followUpText := fmt.Sprintf("Aapka bill ₹%s ka hai. Kripya QR code scan karke payment complete karein. Payment hone ke baad yahan bataiye ('Payment ho gaya') ya photo/screenshot bhejein, hum verify kar denge.", amountStr)
 					if activeClient != nil && activeClient.IsLoggedIn() {
 						_ = SendMessage(activeClient, senderPhone, followUpText)
 					}
 
 					deliveredReply = remainingText + "\n[QR Code Sent]\n" + followUpText
+					PushToLiveChat(username, senderPhone, deliveredReply, "outgoing_ai")
+					go func() {
+						SaveCustomerChatAndPrune(username, senderPhone, "assistant", deliveredReply)
+					}()
+					stopTypingFunc()
+					log.Printf("🔒 [QR Code Sent & Lock Active] Order %s (₹%s) for +%s locked in PENDING state. Awaiting new customer input 'Payment ho gaya' or screenshot.", orderIDStr, amountStr, senderPhone)
+					return // STOP EXECUTION FALL-THROUGH IMMEDIATELY! NO AUTO-VERIFY!
 				} else if strings.Contains(replyText, "[CONFIRM_COD_ORDER]") {
 					cleanReply := strings.TrimSpace(strings.ReplaceAll(replyText, "[CONFIRM_COD_ORDER]", ""))
 					calcRes, _ := CalculateCartTotalAndFetchCredentials(username, senderPhone)
