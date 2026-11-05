@@ -302,6 +302,9 @@ func migrateSchema() {
 			CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
 		);`,
 		`ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'UNPAID';`,
+		`ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS order_id VARCHAR(100) DEFAULT '';`,
+		`ALTER TABLE customer_order_states ADD COLUMN IF NOT EXISTS order_id VARCHAR(100) DEFAULT '';`,
+		`CREATE INDEX IF NOT EXISTS idx_order_states_order_id ON customer_order_states(order_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_active_carts_usr_phone ON active_carts(username, customer_phone);`,
 	}
 

@@ -632,7 +632,7 @@ type CartCalculationResult struct {
 	ItemCount     int              `json:"item_count"`
 }
 
-// UpdateCustomerProfileFromData updates customer profile with saved_name and saved_address
+// UpdateCustomerProfileFromData updates customer profile with saved_name, saved_address, and contact_phone
 func UpdateCustomerProfileFromData(username, customerPhone string, profile *AIProfileData) error {
 	if profile == nil {
 		return nil
@@ -645,7 +645,8 @@ func UpdateCustomerProfileFromData(username, customerPhone string, profile *AIPr
 
 	name := strings.TrimSpace(profile.Name)
 	addr := strings.TrimSpace(profile.Address)
-	if name == "" && addr == "" {
+	contactNum := strings.TrimSpace(profile.ContactNumber)
+	if name == "" && addr == "" && contactNum == "" {
 		return nil
 	}
 
@@ -662,27 +663,31 @@ func UpdateCustomerProfileFromData(username, customerPhone string, profile *AIPr
 	if addr != "" {
 		cp.DeliveryAddress = addr
 	}
+	if contactNum != "" {
+		cp.ContactPhone = contactNum
+	}
 	_ = UpsertCustomerProfile(cleanUsr, cp)
 
 	if DB == nil {
 		return nil
 	}
 
-	query := `INSERT INTO customers (username, wa_number, full_name, saved_name, delivery_address, saved_address, updated_at)
-		VALUES ($1, $2, $3, $3, $4, $4, NOW())
+	query := `INSERT INTO customers (username, wa_number, full_name, saved_name, delivery_address, saved_address, contact_phone, updated_at)
+		VALUES ($1, $2, $3, $3, $4, $4, $5, NOW())
 		ON CONFLICT (username, wa_number) DO UPDATE SET
 			full_name = CASE WHEN EXCLUDED.full_name != '' THEN EXCLUDED.full_name ELSE customers.full_name END,
 			saved_name = CASE WHEN EXCLUDED.saved_name != '' THEN EXCLUDED.saved_name ELSE customers.saved_name END,
 			delivery_address = CASE WHEN EXCLUDED.delivery_address != '' THEN EXCLUDED.delivery_address ELSE customers.delivery_address END,
 			saved_address = CASE WHEN EXCLUDED.saved_address != '' THEN EXCLUDED.saved_address ELSE customers.saved_address END,
+			contact_phone = CASE WHEN EXCLUDED.contact_phone != '' THEN EXCLUDED.contact_phone ELSE customers.contact_phone END,
 			updated_at = NOW()`
-	_, err := DB.Exec(query, cleanUsr, cleanPhone, name, addr)
+	_, err := DB.Exec(query, cleanUsr, cleanPhone, name, addr, contactNum)
 	if err != nil {
 		log.Printf("⚠️ UpdateCustomerProfileFromData error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
 		return err
 	}
 
-	log.Printf("👤 [Customer Profile Updated]: @%s (+%s) | Name: %s | Address: %s", cleanUsr, cleanPhone, name, addr)
+	log.Printf("👤 [Customer Profile Updated]: @%s (+%s) | Name: %s | Address: %s | Contact: %s", cleanUsr, cleanPhone, name, addr, contactNum)
 	return nil
 }
 
