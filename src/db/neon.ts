@@ -115,9 +115,9 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) UNIQUE NOT NULL,
+        username VARCHAR(100),
         email VARCHAR(150),
-        password VARCHAR(255) NOT NULL,
+        password VARCHAR(255) DEFAULT '',
         role VARCHAR(20) DEFAULT 'user',
         user_type VARCHAR(50) DEFAULT 'business_user',
         account_name VARCHAR(255) DEFAULT '',
@@ -136,11 +136,28 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         qr TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(150);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR(255) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'business_user';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name VARCHAR(255) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50) DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_jid VARCHAR(100) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'gemini';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS automation_access BOOLEAN DEFAULT true;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'QR_Ready';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS qr TEXT DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+      UPDATE users SET username = LOWER(SPLIT_PART(email, '@', 1)) WHERE (username IS NULL OR username = '') AND email IS NOT NULL AND email != '';
+      UPDATE users SET username = 'user_' || id WHERE username IS NULL OR username = '';
       CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username));
       CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
     `);
@@ -148,7 +165,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         name VARCHAR(255) NOT NULL,
         price VARCHAR(100) NOT NULL,
         description TEXT DEFAULT '',
@@ -156,7 +173,8 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         item_type VARCHAR(50) DEFAULT 'product',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE INDEX IF NOT EXISTS idx_leads_username_lower ON leads(LOWER(username));
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_products_username_lower ON products(LOWER(username));
     `);
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`); } catch (e) {}
@@ -168,31 +186,33 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`); } catch (e) {}
-    try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_username_lower ON products(LOWER(username));`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS neon_media_objects CASCADE;`); } catch (e) {}
     try { await pool.query(`DROP TABLE IF EXISTS user_media CASCADE;`); } catch (e) {}
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS leads (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         customer_phone VARCHAR(50) NOT NULL,
         inquiry_text TEXT DEFAULT '',
         status VARCHAR(50) DEFAULT 'Captured',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_leads_username_lower ON leads(LOWER(username));
     `);
 
     // Customer WhatsApp Chat Memory (Strict 10 messages per customer phone)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS customer_chats (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         customer_phone VARCHAR(50) NOT NULL,
         role VARCHAR(20) NOT NULL,
         message_text TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
       CREATE INDEX IF NOT EXISTS idx_chats_user_phone ON customer_chats(username, customer_phone, id DESC);
     `);
 
@@ -200,7 +220,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tenant_payment_configs (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) UNIQUE NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         enabled BOOLEAN DEFAULT false,
         merchant_phone VARCHAR(50) DEFAULT '',
         merchant_vpa VARCHAR(100) DEFAULT '',
@@ -209,6 +229,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE tenant_payment_configs ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
     `);
 
     
@@ -216,7 +237,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS customer_order_states (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         customer_phone VARCHAR(50) NOT NULL,
         delivery_phone VARCHAR(50) DEFAULT '',
         customer_name VARCHAR(150) DEFAULT '',
@@ -232,6 +253,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(username, customer_phone)
       );
+      ALTER TABLE customer_order_states ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
       CREATE INDEX IF NOT EXISTS idx_order_states_user_phone ON customer_order_states(LOWER(username), customer_phone);
     `);
 
@@ -251,6 +273,7 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unq_cust_usr_wa UNIQUE (username, wa_number)
       );
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
       CREATE INDEX IF NOT EXISTS idx_customers_usr_wa ON customers(username, wa_number);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;
@@ -261,12 +284,13 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     await pool.query(`
       CREATE TABLE IF NOT EXISTS campaign_logs (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(100) NOT NULL,
+        username VARCHAR(100) NOT NULL DEFAULT '',
         recipients_count INT DEFAULT 0,
         message_text TEXT DEFAULT '',
         status VARCHAR(50) DEFAULT 'Sent',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE campaign_logs ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
       CREATE INDEX IF NOT EXISTS idx_campaigns_user ON campaign_logs(LOWER(username));
     `);
 
@@ -287,14 +311,14 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     `);
 
     // Ensure default master admin exists
-    const adminCheck = await pool.query('SELECT id FROM users WHERE LOWER(username) = $1 LIMIT 1', ['admin']);
+    const adminCheck = await pool.query('SELECT id FROM users WHERE LOWER(COALESCE(username, \'\')) = $1 LIMIT 1', ['admin']);
     if (adminCheck.rows.length === 0) {
       const hashedAdminPass = 'admin123';
       await pool.query(
         `INSERT INTO users (username, email, password, role, user_type, account_name, automation_access)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         ['admin', 'admin@wamart.ai', hashedAdminPass, 'admin', 'admin', 'Master Admin Account', true]
-      );
+      ).catch(() => {});
       console.log('👑 [Neon DB] Master Admin user seeded in Neon database.');
     }
 
@@ -303,14 +327,15 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     // Sync from Neon DB into memoryUsers
     const allUsers = await pool.query('SELECT * FROM users ORDER BY id ASC');
     for (const row of allUsers.rows) {
-      memoryUsers.set(row.username.toLowerCase(), {
+      const uname = (row.username || (row.email ? row.email.split('@')[0] : '') || `user_${row.id}`).toLowerCase();
+      memoryUsers.set(uname, {
         id: row.id,
-        username: row.username,
+        username: row.username || uname,
         email: row.email || '',
-        password: row.password,
-        role: row.role as 'admin' | 'user',
-        user_type: row.user_type as 'library_owner' | 'business_user' | 'admin',
-        account_name: row.account_name || `${row.username} Account`,
+        password: row.password || '',
+        role: (row.role as 'admin' | 'user') || 'user',
+        user_type: (row.user_type as 'library_owner' | 'business_user' | 'admin') || 'business_user',
+        account_name: row.account_name || `${row.username || uname} Account`,
         phone: row.phone || '',
         wa_jid: row.wa_jid || '',
         ai_provider: row.ai_provider || 'gemini',

@@ -136,10 +136,18 @@ type OctopusAIResponse struct {
 	ProfileData     *AIProfileData   `json:"profile_data,omitempty"`
 }
 
+// SafeAIFallbackReply is the safe polite message sent to WhatsApp users when AI parsing fails
+const SafeAIFallbackReply = "मुझे माफ़ करें, मैं अभी समझ नहीं पा रहा हूँ। क्या आप दोबारा बता सकते हैं?"
+
+// jsonExtractorRegex matches everything between the outermost curly braces { ... }
+var jsonExtractorRegex = regexp.MustCompile(`(?s)\{.*\}`)
+
 // Master Octopus Agentic System Prompt Template (STRICT MULTI-ACTION JSON ENFORCEMENT)
 const octopusSystemPromptJSON = `You are the brain of the automated store sales & support agent for "%s" (a %s).
 Store Policy: %s
 Your output language MUST BE strictly: %s.
+
+CRITICAL INSTRUCTION: You MUST output ONLY a valid, raw JSON object. Do NOT wrap the JSON in markdown code blocks (like ` + "```json" + `), asterisks, or any explanatory text. NEVER write asterisks around key names (NEVER write *ai_reply_text*: or *actions*:). Your response MUST strictly start with '{' and end with '}'.
 
 You are the brain. You must understand the user's intent, write a polite human-like reply, and command the backend to execute one or more physical actions using this strict JSON schema:
 
@@ -149,7 +157,7 @@ You are the brain. You must understand the user's intent, write a polite human-l
     {
       "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, cancel_order, escalate_to_human)",
       "payload": {
-        "category": "String (Optional category name)",
+        "category": "String (Optional category name, e.g. 'all' or 'burgers')",
         "cart_items": [{"id": "String", "qty": 1}],
         "profile": {"name": "", "address": "", "contact": ""}
       }
@@ -157,36 +165,41 @@ You are the brain. You must understand the user's intent, write a polite human-l
   ]
 }
 
-AVAILABLE HAND ACTIONS (You can return MULTIPLE actions in the "actions" array executed sequentially, or empty [] for pure chat):
-1. "send_catalog_images": Customer asks to see photos/images of products or a category (e.g. "photos dikhao", "burger ki photo bhejo"). Specify "category" in payload.
-2. "update_cart": Customer wants to add, select, modify, or remove items from cart. Put items with their product "id" and "qty" in payload.cart_items.
-3. "extract_profile": Customer provides their name, delivery address, or 10-digit contact phone. Extract them in payload.profile.
-4. "generate_payment_qr": ONLY when customer finalized cart items, address is known, and customer explicitly confirms they want to pay Online / UPI.
-5. "verify_payment": Customer states or indicates they completed payment (e.g. "Payment ho gaya", "paid", "check payment", "verify karo").
-6. "cancel_order": Customer wants to cancel order, clear cart, or start over (e.g. "cancel", "radd karo", "nahi chahiye", "cart khali karo").
-7. "escalate_to_human": Customer explicitly asks for a human / agent / call (e.g. "insan se baat karao", "human agent", "talk to human", "owner se baat karni hai", "call me") OR you cannot understand their intent after multiple attempts.
+MASTER WORKFLOW - 6-PHASE AGENTIC CUSTOMER JOURNEY:
 
-MULTI-ACTION EXAMPLES:
-- If customer says "Cancel my order and show me burgers":
-  actions: [
-    {"hand": "cancel_order"},
-    {"hand": "send_catalog_images", "payload": {"category": "burgers"}}
-  ]
-- If customer provides their delivery address and asks to pay online:
-  actions: [
-    {"hand": "extract_profile", "payload": {"profile": {"address": "123 Main St", "contact": "9876543210"}}},
-    {"hand": "generate_payment_qr"}
-  ]
-- If customer only greets or asks general questions without changing state:
-  actions: []
+PHASE 1: GREETING & BROWSING (The Welcome)
+- When user says "Hi", "Hello", "Menu dikhao", or wants to browse, and cart is empty (state is BROWSING):
+  {"ai_reply_text": "Namaste! 🙏 Swagat hai. Upar humara menu hai. Aap kya order karna chahenge?", "actions": [{"hand": "send_catalog_images", "payload": {"category": "all"}}]}
+
+PHASE 2: ADDING TO CART (The Selection)
+- When user wants to add/select items (e.g. "Ek paneer pizza aur 2 burger add kar do"):
+  Match items with the RAG catalog below to find exact product IDs and quantities.
+  {"ai_reply_text": "Done! Aapki cart me items jod diye gaye hain. Aapka total ₹[Total] hua. Kya main checkout karu?", "actions": [{"hand": "update_cart", "payload": {"cart_items": [{"id": "pizza_1", "qty": 1}, {"id": "burger_2", "qty": 2}]}}]}
+
+PHASE 3: PROFILE EXTRACTION (The Checkout Prep)
+- When user confirms checkout and provides delivery details (e.g. "Haan checkout kar do. Address hai Ward no 1, Kanpur. Number 9876543210"):
+  {"ai_reply_text": "Aapka address save ho gaya hai. Aap payment *Online (UPI)* karenge ya *Cash on Delivery (COD)*?", "actions": [{"hand": "extract_profile", "payload": {"profile": {"address": "Ward no 1, Kanpur", "contact": "9876543210"}}}]}
+
+PHASE 4: PAYMENT LOCK & QR (The Handoff)
+- When user chooses "Online" / "UPI" payment:
+  {"ai_reply_text": "Perfect! Kripya upar diye gaye QR code ko scan karke payment karein. Payment hone ke baad yahan type karein 'Ho gaya'.", "actions": [{"hand": "generate_payment_qr"}]}
+
+PHASE 5: DIRECT VERIFICATION (The Moment of Truth)
+- When state is PAYMENT_PENDING or user says "Ho gaya", "Payment done", or "paid":
+  {"ai_reply_text": "Bina delay ke check kar raha hu, kripya 2 second rukie... ⏳", "actions": [{"hand": "verify_payment"}]}
+
+PHASE 6: HUMAN ESCALATION (The Fallback)
+- When user asks for human/agent/owner (e.g. "insan se baat karao", "talk to human", "owner se baat karni hai", "call me"):
+  {"ai_reply_text": "Maine hamare store owner ko notify kar diya hai. Wah jald hi aapse yahan ya phone par sampark karenge! 🙏", "actions": [{"hand": "escalate_to_human"}]}
 
 STRICT RULES:
 1. Always write natural, polite, human-like replies in "ai_reply_text" with WhatsApp markdown (*bold*, _italic_) and warm emojis (🙏, 📦, 😊, 🛒).
 2. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
 3. If current_state is PAYMENT_PENDING:
-   - If customer says they paid, include "verify_payment".
-   - If customer says "cancel" or expresses cancellation intent, include "cancel_order".
-4. NEVER make up fake products, fake prices, or fake payment success.`
+   - If customer says they paid ("ho gaya", "done", "paid"), return "verify_payment".
+   - If customer says "cancel", return "cancel_order".
+4. NEVER make up fake products, fake prices, or fake payment success.
+5. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
 
 // Master E-Commerce Sales Agent System Prompt Template (STRICT JSON ENFORCEMENT)
 const universalSystemPromptJSON = octopusSystemPromptJSON
@@ -658,6 +671,85 @@ func Clean10DigitPhone(raw string) string {
 	return digits
 }
 
+// GetLiveInventoryRAG queries the products table for in_stock items and formats them into a clear string:
+// e.g. "Category: Pizza | Name: Paneer Pizza | Price: ₹50 | ID: 1"
+func GetLiveInventoryRAG(username string) string {
+	if DB == nil {
+		return "Currently, all items are being updated in the inventory."
+	}
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+
+	// 1. Try querying products for this user
+	q := `SELECT id, COALESCE(category, 'General'), name, price, COALESCE(sale_price, 0)
+		FROM products 
+		WHERE (LOWER(username)=$1 OR LOWER(username)=$2 OR LOWER(username) LIKE $1 || '%') 
+		  AND (in_stock IS TRUE OR in_stock IS NULL)
+		ORDER BY id ASC`
+	rows, err := DB.Query(q, cleanUsr, cleanUsr+"@gmail.com")
+
+	var items []string
+	if err == nil && rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var cat, name, priceStr string
+			var salePrice float64
+			if errScan := rows.Scan(&id, &cat, &name, &priceStr, &salePrice); errScan == nil {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				cat = strings.TrimSpace(cat)
+				if cat == "" {
+					cat = "General"
+				}
+				pVal := strings.TrimSpace(priceStr)
+				if salePrice > 0 {
+					pVal = fmt.Sprintf("%.2f", salePrice)
+				}
+				items = append(items, fmt.Sprintf("Category: %s | Name: %s | Price: ₹%s | ID: %d", cat, name, pVal, id))
+			}
+		}
+	}
+
+	// 2. Fallback: If 0 products found for this specific username filter, query all in-stock products
+	if len(items) == 0 {
+		fbRows, fbErr := DB.Query(`SELECT id, COALESCE(category, 'General'), name, price, COALESCE(sale_price, 0)
+			FROM products 
+			WHERE (in_stock IS TRUE OR in_stock IS NULL)
+			ORDER BY id ASC LIMIT 50`)
+		if fbErr == nil && fbRows != nil {
+			defer fbRows.Close()
+			for fbRows.Next() {
+				var id int64
+				var cat, name, priceStr string
+				var salePrice float64
+				if errScan := fbRows.Scan(&id, &cat, &name, &priceStr, &salePrice); errScan == nil {
+					name = strings.TrimSpace(name)
+					if name == "" {
+						continue
+					}
+					cat = strings.TrimSpace(cat)
+					if cat == "" {
+						cat = "General"
+					}
+					pVal := strings.TrimSpace(priceStr)
+					if salePrice > 0 {
+						pVal = fmt.Sprintf("%.2f", salePrice)
+					}
+					items = append(items, fmt.Sprintf("Category: %s | Name: %s | Price: ₹%s | ID: %d", cat, name, pVal, id))
+				}
+			}
+		}
+	}
+
+	if len(items) == 0 {
+		return "Currently, all items are being updated in the inventory."
+	}
+
+	return strings.Join(items, "\n")
+}
+
 // GetRAGCatalogResults searches in-stock products matching user message keywords or returns catalog highlights
 func GetRAGCatalogResults(username, userMsg string) string {
 	if DB == nil {
@@ -797,42 +889,240 @@ func BuildOctopusContext(username, customerPhone, userMsg string) string {
 %s`, currentState, cartStr, cName, cleanPhone, cAddr, cPhone, savedOrdID, ragStr)
 }
 
+// ExtractJSONSubstring uses regex (?s)\{.*\} to find and extract the outermost JSON object
+func ExtractJSONSubstring(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	match := jsonExtractorRegex.FindString(trimmed)
+	return strings.TrimSpace(match)
+}
+
+// SanitizeAIReplyText ensures only clean conversational text reaches the user, completely stripping
+// any actions arrays, pseudo-keys or raw JSON debris from the message
+func SanitizeAIReplyText(s string) string {
+	res := strings.TrimSpace(s)
+	if res == "" {
+		return ""
+	}
+
+	// 1. If string contains *actions*: or actions: delimiter, strip everything from that delimiter onwards
+	delims := []string{"*actions*:", "**actions**:", "\"actions\":", "actions:", "[actions]"}
+	for _, delim := range delims {
+		if idx := strings.Index(strings.ToLower(res), delim); idx != -1 {
+			res = strings.TrimSpace(res[:idx])
+		}
+	}
+
+	// 2. Remove any *ai_reply_text*: prefixes (handling whitespace, quotes, asterisks, colons)
+	for {
+		trimmed := strings.TrimSpace(res)
+		lower := strings.ToLower(trimmed)
+		prefixMatched := false
+
+		prefixes := []string{
+			"*ai_reply_text*:",
+			"**ai_reply_text**:",
+			"ai_reply_text:",
+			"\"ai_reply_text\":",
+			"*reply_to_customer*:",
+			"reply_to_customer:",
+			"\"reply_to_customer\":",
+		}
+
+		for _, p := range prefixes {
+			if strings.HasPrefix(lower, p) {
+				res = strings.TrimSpace(trimmed[len(p):])
+				prefixMatched = true
+				break
+			}
+		}
+
+		if !prefixMatched {
+			break
+		}
+	}
+
+	// 3. Strip trailing punctuation/JSON/markdown debris
+	res = strings.Trim(res, " ,\"'}{][\n\r*`")
+
+	// 4. If the result is empty or still raw JSON
+	if res == "" || strings.HasPrefix(res, "{") || strings.HasPrefix(res, "[") {
+		return ""
+	}
+	return res
+}
+
+// tryExtractPseudoAIReply attempts to safely extract message text if AI returned pseudo-formatted text like *ai_reply_text*: ...
+func tryExtractPseudoAIReply(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var replyLines []string
+	collecting := false
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmedLine)
+
+		// Stop if an actions block or JSON structure begins
+		if strings.HasPrefix(lower, "*actions*:") || strings.HasPrefix(lower, "actions:") || strings.HasPrefix(lower, "- actions:") || strings.HasPrefix(lower, "\"actions\":") {
+			collecting = false
+			break
+		}
+
+		if strings.Contains(lower, "ai_reply_text") || strings.Contains(lower, "reply_to_customer") {
+			idx := strings.Index(trimmedLine, ":")
+			if idx != -1 {
+				val := strings.TrimSpace(trimmedLine[idx+1:])
+				val = strings.Trim(val, "\"* ")
+				if val != "" {
+					replyLines = append(replyLines, val)
+				}
+				collecting = true
+				continue
+			}
+		}
+
+		if collecting {
+			// Stop if line looks like code, json or actions
+			if strings.HasPrefix(trimmedLine, "{") || strings.HasPrefix(trimmedLine, "}") || strings.HasPrefix(trimmedLine, "[") || strings.HasPrefix(trimmedLine, "`") {
+				collecting = false
+				break
+			}
+			replyLines = append(replyLines, trimmedLine)
+		}
+	}
+
+	res := strings.TrimSpace(strings.Join(replyLines, "\n"))
+	return SanitizeAIReplyText(res)
+}
+
+// parsePseudoMarkdownOutput robustly handles AI outputs that mimic pseudo-YAML or markdown
+// format instead of valid JSON, extracting BOTH the clean conversational text and all actions
+func parsePseudoMarkdownOutput(raw string) *OctopusAIResponse {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+
+	lower := strings.ToLower(trimmed)
+	hasReplyKey := strings.Contains(lower, "ai_reply_text") || strings.Contains(lower, "reply_to_customer")
+	hasActionsKey := strings.Contains(lower, "actions:") || strings.Contains(lower, "*actions*:") || strings.Contains(lower, "\"actions\":")
+	if !hasReplyKey && !hasActionsKey {
+		return nil
+	}
+
+	// Identify actions delimiter: "*actions*:", "**actions**:", "actions:", `"actions":`
+	actionsIdx := -1
+	delimiters := []string{"*actions*:", "**actions**:", "\"actions\":", "actions:"}
+	for _, delim := range delimiters {
+		if idx := strings.Index(lower, delim); idx != -1 {
+			if actionsIdx == -1 || idx < actionsIdx {
+				actionsIdx = idx
+			}
+		}
+	}
+
+	replyPart := ""
+	actionsPart := ""
+
+	if actionsIdx != -1 {
+		replyPart = strings.TrimSpace(trimmed[:actionsIdx])
+		actionsPart = strings.TrimSpace(trimmed[actionsIdx:])
+	} else {
+		replyPart = trimmed
+	}
+
+	// 1. Clean reply part to get pure human-like text
+	cleanReply := SanitizeAIReplyText(replyPart)
+	if cleanReply == "" {
+		cleanReply = tryExtractPseudoAIReply(replyPart)
+	}
+
+	// 2. Extract actions array or items from actionsPart
+	var parsedActions []AIActionItem
+	if actionsPart != "" {
+		// Look for JSON array '[' ... ']' in actionsPart
+		startArr := strings.Index(actionsPart, "[")
+		endArr := strings.LastIndex(actionsPart, "]")
+		if startArr != -1 && endArr != -1 && endArr > startArr {
+			arrayChunk := actionsPart[startArr : endArr+1]
+			_ = json.Unmarshal([]byte(arrayChunk), &parsedActions)
+		}
+
+		// If no array or array was empty, look for a single JSON object '{' ... '}' in actionsPart
+		if len(parsedActions) == 0 {
+			startObj := strings.Index(actionsPart, "{")
+			endObj := strings.LastIndex(actionsPart, "}")
+			if startObj != -1 && endObj != -1 && endObj > startObj {
+				singleObjChunk := actionsPart[startObj : endObj+1]
+				var singleAct AIActionItem
+				if errSingle := json.Unmarshal([]byte(singleObjChunk), &singleAct); errSingle == nil && singleAct.Hand != "" {
+					parsedActions = append(parsedActions, singleAct)
+				}
+			}
+		}
+	}
+
+	if cleanReply == "" && len(parsedActions) == 0 {
+		return nil
+	}
+
+	if cleanReply == "" {
+		cleanReply = SafeAIFallbackReply
+	}
+
+	return &OctopusAIResponse{
+		AIReplyText: cleanReply,
+		Actions:     parsedActions,
+		ExecuteHand: "chat_only",
+	}
+}
+
 // ParseOctopusAIResponse parses the agentic Octopus JSON response schema (supporting multi-action routing)
 func ParseOctopusAIResponse(rawResponse string) (*OctopusAIResponse, error) {
 	trimmed := strings.TrimSpace(rawResponse)
-	if strings.HasPrefix(trimmed, "```") {
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		if strings.HasPrefix(strings.ToLower(trimmed), "json") {
-			trimmed = strings.TrimSpace(trimmed[4:])
-		}
-		if idx := strings.LastIndex(trimmed, "```"); idx != -1 {
-			trimmed = strings.TrimSpace(trimmed[:idx])
-		}
-	}
-
-	firstBrace := strings.Index(trimmed, "{")
-	lastBrace := strings.LastIndex(trimmed, "}")
-	if firstBrace != -1 && lastBrace > firstBrace {
-		trimmed = trimmed[firstBrace : lastBrace+1]
+	if trimmed == "" {
+		return &OctopusAIResponse{
+			AIReplyText: SafeAIFallbackReply,
+			Actions:     []AIActionItem{},
+			ExecuteHand: "chat_only",
+		}, fmt.Errorf("empty raw response")
 	}
 
 	var state OctopusAIResponse
-	err := json.Unmarshal([]byte(trimmed), &state)
-	if err != nil {
-		log.Printf("⚠️ [Octopus AI JSON Parsing Failed]: %v | Raw text output: %s", err, rawResponse)
+	parsedStandard := false
+
+	// Attempt standard JSON parsing first if extracted JSON contains "ai_reply_text" or "reply_to_customer"
+	extracted := ExtractJSONSubstring(trimmed)
+	if extracted != "" && (strings.Contains(extracted, `"ai_reply_text"`) || strings.Contains(extracted, `"reply_to_customer"`)) {
+		if err := json.Unmarshal([]byte(extracted), &state); err == nil {
+			parsedStandard = true
+		}
+	}
+
+	// If standard JSON parsing didn't work (e.g. AI output pseudo-markdown like *ai_reply_text*: ... *actions*: [...]),
+	// use parsePseudoMarkdownOutput to reliably extract BOTH clean AIReplyText and the Actions array!
+	if !parsedStandard {
+		if pseudoState := parsePseudoMarkdownOutput(trimmed); pseudoState != nil {
+			state = *pseudoState
+			parsedStandard = true
+		}
+	}
+
+	if !parsedStandard {
+		log.Printf("⚠️ [Octopus AI JSON Extraction Failed]: No JSON or pseudo-markdown found in raw output: %s", rawResponse)
 		return &OctopusAIResponse{
-			AIReplyText: rawResponse,
+			AIReplyText: SafeAIFallbackReply,
 			Actions:     []AIActionItem{},
 			ExecuteHand: "chat_only",
-		}, nil
+		}, fmt.Errorf("no json found")
 	}
 
 	// Normalize AIReplyText
 	if strings.TrimSpace(state.AIReplyText) == "" && strings.TrimSpace(state.ReplyToCustomer) != "" {
 		state.AIReplyText = state.ReplyToCustomer
 	}
+	state.AIReplyText = SanitizeAIReplyText(state.AIReplyText)
 	if strings.TrimSpace(state.AIReplyText) == "" {
-		state.AIReplyText = rawResponse
+		state.AIReplyText = SafeAIFallbackReply
 	}
 
 	// Legacy single-action fallback normalization if actions array is empty
@@ -1009,10 +1299,13 @@ Return ONLY your apologetic message for the customer.`, bizName, failedAction, e
 func ParseAIResponseJSON(rawResponse string) (*AIResponseStateJSON, string, error) {
 	oct, err := ParseOctopusAIResponse(rawResponse)
 	if err != nil {
-		return nil, rawResponse, err
+		return nil, SafeAIFallbackReply, err
 	}
 
 	replyText := oct.AIReplyText
+	if strings.TrimSpace(replyText) == "" {
+		replyText = SafeAIFallbackReply
+	}
 	action := oct.ExecuteHand
 	switch oct.ExecuteHand {
 	case "chat_only":
@@ -1094,13 +1387,13 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		return "", ""
 	}
 
-	model := "openai/gpt-oss-20b"
+	model := "llama-3.3-70b-versatile"
 	temp := 0.7
 	importCatalog := false
 	if DB != nil {
-		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'openai/gpt-oss-20b'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, false) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
-		if model == "llama-3.1-8b-instant" || model == "llama-3.3-70b-versatile" || model == "" {
-			model = "openai/gpt-oss-20b"
+		_ = DB.QueryRow("SELECT COALESCE(ai_model, 'llama-3.3-70b-versatile'), COALESCE(ai_temperature, 0.7), COALESCE(import_catalog_details, false) FROM users WHERE LOWER(username)=LOWER($1)", cleanUsr).Scan(&model, &temp, &importCatalog)
+		if model == "openai/gpt-oss-20b" || model == "openai/gpt-oss-120b" || model == "" {
+			model = "llama-3.3-70b-versatile"
 		}
 	}
 
@@ -1191,16 +1484,19 @@ func GenerateOctopusAIReply(username, customerPhone, incomingText string, cfg *U
 	}
 	if selectedApiKey == "" && DB != nil {
 		var fallbackKey, fallbackProv, fallbackModel string
-		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'openai/gpt-oss-20b') 
+		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'llama-3.3-70b-versatile') 
 			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv, &fallbackModel)
 		if fallbackKey != "" {
 			selectedApiKey = fallbackKey
+			if fallbackModel == "openai/gpt-oss-20b" || fallbackModel == "openai/gpt-oss-120b" || fallbackModel == "" {
+				fallbackModel = "llama-3.3-70b-versatile"
+			}
 			if cfg.APIKey == "" {
 				cfg.APIKey = fallbackKey
 				cfg.Provider = fallbackProv
 				cfg.Model = fallbackModel
 			}
-			log.Printf("ℹ️ [API Key Fallback] Using active DB key (%s) for @%s", fallbackProv, cleanUsr)
+			log.Printf("ℹ️ [API Key Fallback] Using active DB key (%s/%s) for @%s", fallbackProv, fallbackModel, cleanUsr)
 		}
 	}
 	if selectedApiKey == "" {
@@ -1227,22 +1523,32 @@ func GenerateOctopusAIReply(username, customerPhone, incomingText string, cfg *U
 		lang = "Hinglish"
 	}
 
-	// 1. THE CONTEXT INJECTOR (GOLANG TO AI)
+	// 1. FETCH LIVE INVENTORY (RAG CATALOG INJECTION FIX)
+	liveInventory := GetLiveInventoryRAG(cleanUsr)
+	inventoryPromptBlock := fmt.Sprintf("Here is the LIVE inventory you MUST use to answer the customer:\n%s\nIf the user asks what is available, list these exact items.", liveInventory)
+
+	// 2. THE CONTEXT INJECTOR (GOLANG TO AI)
 	contextStr := BuildOctopusContext(cleanUsr, cleanPhone, incomingText)
 
-	// 2. THE MASTER OCTOPUS BRAIN SYSTEM PROMPT
-	masterPrompt := fmt.Sprintf(octopusSystemPromptJSON, bName, bType, cfg.StorePolicies, lang, lang) + "\n\n" + contextStr
+	// 3. THE MASTER OCTOPUS BRAIN SYSTEM PROMPT
+	masterPrompt := fmt.Sprintf(octopusSystemPromptJSON, bName, bType, cfg.StorePolicies, lang, lang) + "\n\n" + inventoryPromptBlock + "\n\n" + contextStr
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, masterPrompt, history)
 	if err != nil || aiResponse == "" {
 		log.Printf("⚠️ GenerateOctopusAIReply error for @%s (+%s): %v", cleanUsr, cleanPhone, err)
-		return nil, err
+		return &OctopusAIResponse{
+			AIReplyText: SafeAIFallbackReply,
+			Actions:     []AIActionItem{},
+			ExecuteHand: "chat_only",
+		}, err
 	}
 
 	parsedResponse, errParse := ParseOctopusAIResponse(aiResponse)
 	if errParse != nil || parsedResponse == nil {
+		log.Printf("⚠️ GenerateOctopusAIReply parsing failure for @%s (+%s): %v. Using safe fallback.", cleanUsr, cleanPhone, errParse)
 		return &OctopusAIResponse{
-			AIReplyText: aiResponse,
+			AIReplyText: SafeAIFallbackReply,
+			Actions:     []AIActionItem{},
 			ExecuteHand: "chat_only",
 		}, nil
 	}
@@ -1357,7 +1663,7 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 		candidateModels = []string{"meta-llama/llama-3.1-8b-instruct:free"}
 	default: // groq
 		url = "https://api.groq.com/openai/v1/chat/completions"
-		candidateModels = []string{"openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"}
+		candidateModels = []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3.8-27b"}
 	}
 
 	if reqModel != "" && !isNumericOrPhone(reqModel) {
@@ -1386,6 +1692,11 @@ func callOpenAIFormatWithHistory(provider, model string, temperature float64, ap
 			"model":       m,
 			"messages":    messages,
 			"temperature": temperature,
+		}
+		if provider == "groq" || provider == "openai" || provider == "deepseek" {
+			payload["response_format"] = map[string]string{
+				"type": "json_object",
+			}
 		}
 		body, _ := json.Marshal(payload)
 
@@ -1481,7 +1792,8 @@ func callGeminiAPIWithHistory(apiKey, model string, temperature float64, sysProm
 			},
 			"contents": contents,
 			"generationConfig": map[string]interface{}{
-				"temperature": temperature,
+				"temperature":        temperature,
+				"response_mime_type": "application/json",
 			},
 		}
 		body, _ := json.Marshal(payload)

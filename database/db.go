@@ -122,6 +122,14 @@ func migrateSchema() {
 			qr TEXT DEFAULT '',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100);`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR(255) DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(30) DEFAULT 'user';`,
+		`UPDATE users SET username = LOWER(SPLIT_PART(email, '@', 1)) WHERE (username IS NULL OR username = '') AND email IS NOT NULL AND email != '';`,
+		`UPDATE users SET username = 'user_' || id WHERE username IS NULL OR username = '';`,
+		`CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username));`,
+		`CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'business_user';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name VARCHAR(255) DEFAULT '';`,
@@ -176,6 +184,7 @@ func migrateSchema() {
 			whatsapp_catalog_link TEXT DEFAULT '',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS ai_tag VARCHAR(50) DEFAULT '';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS item_type VARCHAR(50) DEFAULT 'product';`,
 		`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`,
@@ -209,6 +218,7 @@ func migrateSchema() {
 			outgoing_msg TEXT DEFAULT '',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';`,
 		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS sender_type VARCHAR(20) DEFAULT 'incoming';`,
 		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS incoming_msg TEXT DEFAULT '';`,
 		`ALTER TABLE customer_chats ADD COLUMN IF NOT EXISTS outgoing_msg TEXT DEFAULT '';`,
@@ -221,6 +231,7 @@ func migrateSchema() {
 			status VARCHAR(50) DEFAULT 'Captured',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`ALTER TABLE leads ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';`,
 		`CREATE TABLE IF NOT EXISTS campaigns (
 			id VARCHAR(100) PRIMARY KEY,
 			username VARCHAR(100) NOT NULL,
