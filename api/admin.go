@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"wa-server/whatsapp"
@@ -297,6 +298,7 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ADMIN GET SUBSCRIBED NEWSLETTERS / CHANNELS API
+// Strictly returns JSON array: [{"jid": "12036...@newsletter", "name": "Aaj Tak News", "role": "ADMIN"}, ...]
 func GetNewslettersHandler(w http.ResponseWriter, r *http.Request) {
 	username := cleanUsername(r.URL.Query().Get("username"))
 	if username == "" {
@@ -305,21 +307,120 @@ func GetNewslettersHandler(w http.ResponseWriter, r *http.Request) {
 
 	newsletters, err := whatsapp.FetchSubscribedNewsletters(username)
 	if err != nil {
-		respondJSON(w, 400, map[string]interface{}{
-			"status":      "error",
-			"message":     err.Error(),
-			"newsletters": []whatsapp.NewsletterItem{},
-		})
+		respondJSON(w, 200, []whatsapp.NewsletterItem{})
 		return
 	}
 
+	if newsletters == nil {
+		newsletters = []whatsapp.NewsletterItem{}
+	}
+
+	respondJSON(w, 200, newsletters)
+}
+
+// ADMIN CHANNEL RULES HANDLER (GET, POST, DELETE)
+// Enables One-to-One, One-to-Many, Many-to-One, and Many-to-Many channel routing
+func ChannelRulesHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		rules := whatsapp.SyncChannelRulesCache()
+		if rules == nil {
+			rules = []whatsapp.ChannelForwardingRule{}
+		}
+		respondJSON(w, 200, map[string]interface{}{
+			"status": "success",
+			"rules":  rules,
+		})
+	case "POST":
+		var req struct {
+			AdminAccountID string `json:"admin_account_id"`
+			SourceJID      string `json:"source_jid"`
+			SourceName     string `json:"source_name"`
+			TargetJID      string `json:"target_jid"`
+			TargetName     string `json:"target_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Invalid JSON payload"})
+			return
+		}
+		if req.SourceJID == "" || req.TargetJID == "" {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Source and Target channels are required"})
+			return
+		}
+		rule, err := whatsapp.AddChannelForwardingRule(req.AdminAccountID, req.SourceJID, req.SourceName, req.TargetJID, req.TargetName)
+		if err != nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": err.Error()})
+			return
+		}
+		respondJSON(w, 200, map[string]interface{}{
+			"status":  "success",
+			"message": "Channel forwarding rule added successfully!",
+			"rule":    rule,
+		})
+	case "DELETE":
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			var body struct {
+				ID int `json:"id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.ID > 0 {
+				idStr = strconv.Itoa(body.ID)
+			}
+		}
+		id, err := strconv.Atoi(idStr)
+		if err != nil || id <= 0 {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Valid rule ID is required"})
+			return
+		}
+		if err := whatsapp.DeleteChannelForwardingRule(id); err != nil {
+			respondJSON(w, 500, map[string]string{"status": "error", "message": err.Error()})
+			return
+		}
+		respondJSON(w, 200, map[string]interface{}{
+			"status":  "success",
+			"message": fmt.Sprintf("Forwarding rule #%d deleted successfully!", id),
+		})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// TOGGLE CHANNEL RULE HANDLER
+func ToggleChannelRuleHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		var body struct {
+			ID int `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.ID > 0 {
+			idStr = strconv.Itoa(body.ID)
+		}
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Valid rule ID is required"})
+		return
+	}
+	newState, err := whatsapp.ToggleChannelForwardingRule(id)
+	if err != nil {
+		respondJSON(w, 500, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
 	respondJSON(w, 200, map[string]interface{}{
-		"status":      "success",
-		"newsletters": newsletters,
+		"status":    "success",
+		"id":        id,
+		"is_active": newState,
+		"message":   fmt.Sprintf("Rule #%d status updated!", id),
 	})
 }
 
-// ADMIN CHANNEL FORWARDER CONFIG HANDLER (GET & POST)
+// ADMIN CHANNEL FORWARDER CONFIG HANDLER (GET & POST) - Backward compatibility
 func AdminChannelForwarderHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		cfg := whatsapp.LoadAdminChannelConfigFromDB()

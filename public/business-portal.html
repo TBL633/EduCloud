@@ -490,15 +490,15 @@
                         </div>
                     </div>
 
-                    <!-- AUTOMATED CHANNEL FORWARDING ENGINE (ADMIN-ONLY ZERO-LOAD ENGINE) -->
-                    <div id="channel-forwarder-card" class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-5">
+                    <!-- AUTOMATED CHANNEL FORWARDING ENGINE (ADMIN-ONLY ZERO-LOAD ROUTING ENGINE) -->
+                    <div id="channel-forwarder-card" class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-6">
                         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
                             <div>
                                 <h3 class="text-sm font-bold text-white flex items-center gap-2">
                                     <i class="fa-solid fa-bullhorn text-amber-400"></i> Automated Channel Forwarding Engine
                                 </h3>
                                 <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-                                    Auto-forward real-time channel posts directly from a Source WhatsApp Channel to a Target WhatsApp Channel with zero media-download RAM load on the server.
+                                    Real-time Many-to-Many WhatsApp Channel auto-forwarder. Incoming posts from source channels are duplicated to target channels with zero media-download RAM load on the server.
                                 </p>
                             </div>
                             <div class="flex items-center gap-2">
@@ -511,46 +511,72 @@
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <!-- Source Channel Dropdown -->
-                            <div>
-                                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                                    <i class="fa-solid fa-right-from-bracket text-cyan-400 mr-1"></i> Source Channel (Copy From)
-                                </label>
-                                <select id="channel-source-select" class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 font-semibold cursor-pointer">
-                                    <option value="">-- Select Source Channel --</option>
-                                </select>
-                                <p class="text-[11px] text-slate-500 mt-1">Channel where incoming posts will be monitored.</p>
-                            </div>
-
-                            <!-- Target Channel Dropdown -->
-                            <div>
-                                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                                    <i class="fa-solid fa-right-to-bracket text-emerald-400 mr-1"></i> Target Channel (Publish To)
-                                </label>
-                                <select id="channel-target-select" class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 font-semibold cursor-pointer">
-                                    <option value="">-- Select Target Channel (Requires ADMIN/OWNER Role) --</option>
-                                </select>
-                                <p class="text-[11px] text-slate-500 mt-1">Target channel where copied posts will be published instantly.</p>
-                            </div>
-                        </div>
-
-                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-3 border-t border-slate-800/80">
-                            <div class="flex items-center gap-3">
-                                <label class="relative inline-flex items-center cursor-pointer select-none">
-                                    <input type="checkbox" id="channel-forwarder-active-toggle" class="sr-only peer">
-                                    <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                                </label>
+                        <!-- RULE BUILDER FORM -->
+                        <div class="bg-slate-900/60 p-4 sm:p-5 rounded-2xl border border-slate-800/80 space-y-4">
+                            <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                                <i class="fa-solid fa-plus-circle text-amber-400"></i> Add New Forwarding Rule
+                            </h4>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <!-- Source Channel Dropdown -->
                                 <div>
-                                    <span class="text-xs font-bold text-white block">Enable Real-Time Auto-Forwarding</span>
-                                    <span class="text-[10px] text-slate-400 font-mono">Status: <span id="channel-forwarder-status-badge" class="text-slate-400">Inactive</span></span>
+                                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                                        <i class="fa-solid fa-right-from-bracket text-cyan-400 mr-1"></i> Source Channel (Copy From)
+                                    </label>
+                                    <select id="channel-source-select" class="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 font-semibold cursor-pointer">
+                                        <option value="">-- Select Source Channel --</option>
+                                    </select>
+                                    <p class="text-[11px] text-slate-500 mt-1">Select channel to monitor for incoming posts.</p>
+                                </div>
+
+                                <!-- Target Channel Dropdown -->
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                                        <i class="fa-solid fa-right-to-bracket text-emerald-400 mr-1"></i> Target Channel (Publish To)
+                                    </label>
+                                    <select id="channel-target-select" class="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 font-semibold cursor-pointer">
+                                        <option value="">-- Select Target Channel (Admin / Owner Only) --</option>
+                                    </select>
+                                    <p class="text-[11px] text-slate-500 mt-1">Filtered: only channels where you have ADMIN or OWNER role.</p>
                                 </div>
                             </div>
 
-                            <button type="button" onclick="saveAdminChannelForwarderConfig()" id="save-channel-fwd-btn" class="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
-                                <i class="fa-solid fa-floppy-disk text-slate-950"></i>
-                                <span>Save Forwarder Settings</span>
-                            </button>
+                            <div class="flex justify-end pt-1">
+                                <button type="button" onclick="addForwardingRule()" id="add-rule-btn" class="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-600 hover:to-emerald-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                    <i class="fa-solid fa-plus text-slate-950"></i>
+                                    <span>Add Forwarding Rule</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- ACTIVE RULES TABLE -->
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h4 class="text-xs font-bold text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-arrows-split-up-and-left text-cyan-400"></i> Active Forwarding Rules (Many-to-Many)
+                                </h4>
+                                <span id="rules-count-badge" class="text-[10px] bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full font-mono">0 rules</span>
+                            </div>
+
+                            <div class="overflow-x-auto w-full rounded-2xl border border-slate-800/80 bg-slate-950/50">
+                                <table class="w-full text-left text-xs min-w-[550px]">
+                                    <thead>
+                                        <tr class="text-[10px] uppercase text-slate-400 border-b border-slate-800 font-mono bg-slate-900/40">
+                                            <th class="p-3">Source Channel (Copy From)</th>
+                                            <th class="p-3 text-center">Route</th>
+                                            <th class="p-3">Target Channel (Publish To)</th>
+                                            <th class="p-3 text-center">Status</th>
+                                            <th class="p-3 text-right">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="channel-rules-tbody">
+                                        <tr>
+                                            <td colspan="5" class="p-6 text-center text-slate-500 text-xs">
+                                                Loading forwarding rules...
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
@@ -2225,7 +2251,7 @@
             if (labelText) labelText.innerText = 'Select Image to Broadcast';
         }
 
-        // 6D. ADMIN CHANNEL AUTO-FORWARDER HANDLERS
+        // 6D. ADMIN CHANNEL AUTO-FORWARDER HANDLERS (MANY-TO-MANY ROUTING ENGINE)
         async function loadAdminNewsletters() {
             const srcSelect = document.getElementById('channel-source-select');
             const tgtSelect = document.getElementById('channel-target-select');
@@ -2240,128 +2266,246 @@
                 const res = await fetch(`/api/admin/newsletters?username=${encodeURIComponent(activeUser)}`);
                 const data = await res.json();
                 
-                let newsletters = data.newsletters || [];
+                // Format can be array directly or {newsletters: [...]}
+                const newsletters = Array.isArray(data) ? data : (data.newsletters || []);
                 
                 srcSelect.innerHTML = '<option value="">-- Select Source Channel --</option>';
-                tgtSelect.innerHTML = '<option value="">-- Select Target Channel (Requires ADMIN/OWNER) --</option>';
+                tgtSelect.innerHTML = '<option value="">-- Select Target Channel (Admin / Owner Only) --</option>';
 
                 if (newsletters.length === 0) {
                     srcSelect.innerHTML = '<option value="">No subscribed channels found on WhatsApp</option>';
                     tgtSelect.innerHTML = '<option value="">No subscribed channels found on WhatsApp</option>';
                 } else {
+                    // Source Dropdown (Copy From): Show ALL channels from API. Format: {name}
                     newsletters.forEach(nl => {
-                        const role = (nl.role || '').toUpperCase();
-                        const isAdminOrOwner = role === 'ADMIN' || role === 'OWNER';
-                        
-                        // Source channel option
+                        const channelName = nl.name || 'Unknown Channel';
                         const optSrc = document.createElement('option');
                         optSrc.value = nl.jid;
-                        optSrc.textContent = `${nl.name} (${nl.jid.substring(0, 14)}...) [${role || 'MEMBER'}]`;
+                        optSrc.textContent = channelName;
+                        optSrc.setAttribute('data-name', channelName);
                         srcSelect.appendChild(optSrc);
-
-                        // Target channel option
-                        const optTgt = document.createElement('option');
-                        optTgt.value = nl.jid;
-                        optTgt.textContent = `${nl.name} (${nl.jid.substring(0, 14)}...) [${role || 'MEMBER'}]${isAdminOrOwner ? ' ✓' : ' (Read-Only)'}`;
-                        if (!isAdminOrOwner) {
-                            optTgt.disabled = true;
-                        }
-                        tgtSelect.appendChild(optTgt);
                     });
+
+                    // Target Dropdown (Publish To): Filter and show ONLY channels where role == 'ADMIN' or role == 'OWNER'. Format: {name}
+                    const writeableChannels = newsletters.filter(nl => {
+                        const r = (nl.role || '').toUpperCase();
+                        return r === 'ADMIN' || r === 'OWNER';
+                    });
+
+                    if (writeableChannels.length === 0) {
+                        tgtSelect.innerHTML = '<option value="">No channels where you have ADMIN/OWNER permissions</option>';
+                    } else {
+                        writeableChannels.forEach(nl => {
+                            const channelName = nl.name || 'Unknown Channel';
+                            const optTgt = document.createElement('option');
+                            optTgt.value = nl.jid;
+                            optTgt.textContent = channelName;
+                            optTgt.setAttribute('data-name', channelName);
+                            tgtSelect.appendChild(optTgt);
+                        });
+                    }
                 }
 
-                // Load existing saved config
-                await loadAdminChannelForwarderConfig();
+                // Immediately load the Active Rules table
+                await loadChannelForwardingRules();
             } catch (err) {
                 console.error('Error fetching admin newsletters:', err);
                 srcSelect.innerHTML = '<option value="">Failed to load channels</option>';
                 tgtSelect.innerHTML = '<option value="">Failed to load channels</option>';
+                await loadChannelForwardingRules();
             }
         }
 
-        async function loadAdminChannelForwarderConfig() {
+        // LOAD ACTIVE FORWARDING RULES TABLE (MANY-TO-MANY)
+        async function loadChannelForwardingRules() {
+            const tbody = document.getElementById('channel-rules-tbody');
+            const countBadge = document.getElementById('rules-count-badge');
+            if (!tbody) return;
+
             try {
-                const res = await fetch('/api/admin/channel-forwarder');
-                if (res.ok) {
-                    const data = await res.json();
-                    const srcSelect = document.getElementById('channel-source-select');
-                    const tgtSelect = document.getElementById('channel-target-select');
-                    const toggle = document.getElementById('channel-forwarder-active-toggle');
-                    const statusBadge = document.getElementById('channel-forwarder-status-badge');
+                const res = await fetch('/api/admin/channel-rules');
+                if (!res.ok) throw new Error('Failed to fetch rules');
+                const data = await res.json();
+                const rules = Array.isArray(data) ? data : (data.rules || []);
 
-                    if (data.source_channel_jid && srcSelect) {
-                        srcSelect.value = data.source_channel_jid;
-                    }
-                    if (data.target_channel_jid && tgtSelect) {
-                        tgtSelect.value = data.target_channel_jid;
-                    }
-                    if (toggle) {
-                        toggle.checked = Boolean(data.channel_forwarder_active);
-                        if (statusBadge) {
-                            statusBadge.innerText = toggle.checked ? 'ACTIVE' : 'Inactive';
-                            statusBadge.className = toggle.checked ? 'text-emerald-400 font-bold' : 'text-slate-400';
-                        }
-                    }
+                if (countBadge) {
+                    countBadge.innerText = `${rules.length} rule${rules.length === 1 ? '' : 's'}`;
                 }
+
+                if (rules.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="p-8 text-center text-slate-500 text-xs">
+                                <i class="fa-solid fa-arrows-split-up-and-left text-slate-600 text-base mb-2 block"></i>
+                                No forwarding rules created yet. Select a source and target channel above and click <strong>"Add Forwarding Rule"</strong> to start routing posts.
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = rules.map(rule => {
+                    const srcDisplay = escapeHtml(rule.source_name || rule.source_jid);
+                    const tgtDisplay = escapeHtml(rule.target_name || rule.target_jid);
+                    const isActive = Boolean(rule.is_active);
+                    
+                    const statusButton = isActive
+                        ? `<button type="button" onclick="toggleForwardingRule(${rule.id})" class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition cursor-pointer inline-flex items-center gap-1.5" title="Click to disable rule">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> ACTIVE
+                           </button>`
+                        : `<button type="button" onclick="toggleForwardingRule(${rule.id})" class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 transition cursor-pointer inline-flex items-center gap-1.5" title="Click to enable rule">
+                                <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> INACTIVE
+                           </button>`;
+
+                    return `
+                        <tr class="border-b border-slate-800/60 hover:bg-slate-900/40 transition">
+                            <td class="p-3 font-semibold text-cyan-300">
+                                <div class="flex items-center gap-2">
+                                    <i class="fa-solid fa-bullhorn text-cyan-400 text-xs"></i>
+                                    <span>${srcDisplay}</span>
+                                </div>
+                                <div class="text-[10px] text-slate-500 font-mono mt-0.5 truncate max-w-[200px]">${escapeHtml(rule.source_jid)}</div>
+                            </td>
+                            <td class="p-3 text-center">
+                                <span class="text-amber-400 text-sm font-bold">➡️</span>
+                            </td>
+                            <td class="p-3 font-semibold text-emerald-300">
+                                <div class="flex items-center gap-2">
+                                    <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i>
+                                    <span>${tgtDisplay}</span>
+                                </div>
+                                <div class="text-[10px] text-slate-500 font-mono mt-0.5 truncate max-w-[200px]">${escapeHtml(rule.target_jid)}</div>
+                            </td>
+                            <td class="p-3 text-center">
+                                ${statusButton}
+                            </td>
+                            <td class="p-3 text-right">
+                                <button type="button" onclick="deleteForwardingRule(${rule.id})" class="px-2.5 py-1 text-xs text-rose-400 hover:text-white hover:bg-rose-500/20 rounded-lg border border-rose-500/30 transition cursor-pointer inline-flex items-center gap-1.5" title="Delete Rule">
+                                    <i class="fa-solid fa-trash-can text-[11px]"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
             } catch (err) {
-                console.warn('Error loading channel forwarder config:', err);
+                console.error('Error loading channel rules:', err);
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="p-6 text-center text-rose-400 text-xs">
+                            Failed to load forwarding rules. Check network connection.
+                        </td>
+                    </tr>
+                `;
             }
         }
 
-        async function saveAdminChannelForwarderConfig() {
-            const srcJid = document.getElementById('channel-source-select')?.value || '';
-            const tgtJid = document.getElementById('channel-target-select')?.value || '';
-            const active = document.getElementById('channel-forwarder-active-toggle')?.checked || false;
+        // ADD FORWARDING RULE
+        async function addForwardingRule() {
+            const srcSelect = document.getElementById('channel-source-select');
+            const tgtSelect = document.getElementById('channel-target-select');
+            const addBtn = document.getElementById('add-rule-btn');
+            
+            const srcJid = srcSelect?.value || '';
+            const tgtJid = tgtSelect?.value || '';
 
-            if (active && (!srcJid || !tgtJid)) {
-                alert('Please select both a Source Channel and a Target Channel before enabling auto-forwarding.');
+            if (!srcJid || !tgtJid) {
+                alert('Please select both a Source Channel and a Target Channel.');
                 return;
             }
 
-            if (srcJid && tgtJid && srcJid === tgtJid) {
+            if (srcJid === tgtJid) {
                 alert('Source Channel and Target Channel cannot be the same!');
                 return;
             }
 
-            const saveBtn = document.getElementById('save-channel-fwd-btn');
-            if (saveBtn) {
-                saveBtn.disabled = true;
-                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-slate-950"></i> Saving...';
+            const srcOpt = srcSelect.options[srcSelect.selectedIndex];
+            const tgtOpt = tgtSelect.options[tgtSelect.selectedIndex];
+            const srcName = srcOpt?.getAttribute('data-name') || srcOpt?.textContent || srcJid;
+            const tgtName = tgtOpt?.getAttribute('data-name') || tgtOpt?.textContent || tgtJid;
+            const activeUser = getActiveUsername() || 'admin';
+
+            if (addBtn) {
+                addBtn.disabled = true;
+                addBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-slate-950"></i> Adding Rule...';
             }
 
             try {
-                const res = await fetch('/api/admin/channel-forwarder', {
+                const res = await fetch('/api/admin/channel-rules', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        source_channel_jid: srcJid,
-                        target_channel_jid: tgtJid,
-                        channel_forwarder_active: active
+                        admin_account_id: activeUser,
+                        source_jid: srcJid,
+                        source_name: srcName,
+                        target_jid: tgtJid,
+                        target_name: tgtName
                     })
                 });
 
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     if (typeof showToast === 'function') {
-                        showToast('Channel Auto-Forwarder settings saved successfully!', 'success');
+                        showToast(`Forwarding rule added: "${srcName}" ➡️ "${tgtName}"`, 'success');
                     } else {
-                        alert('Channel Auto-Forwarder settings saved successfully!');
+                        alert(`Forwarding rule added: "${srcName}" ➡️ "${tgtName}"`);
                     }
-                    const statusBadge = document.getElementById('channel-forwarder-status-badge');
-                    if (statusBadge) {
-                        statusBadge.innerText = active ? 'ACTIVE' : 'Inactive';
-                        statusBadge.className = active ? 'text-emerald-400 font-bold' : 'text-slate-400';
-                    }
+                    // Reset selects
+                    if (srcSelect) srcSelect.selectedIndex = 0;
+                    if (tgtSelect) tgtSelect.selectedIndex = 0;
+                    // Reload rules list
+                    await loadChannelForwardingRules();
                 } else {
-                    alert(data.message || 'Failed to save settings');
+                    alert(data.message || 'Failed to add forwarding rule');
                 }
             } catch (err) {
                 alert('Request failed. Check network connection.');
             } finally {
-                if (saveBtn) {
-                    saveBtn.disabled = false;
-                    saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk text-slate-950"></i> Save Forwarder Settings';
+                if (addBtn) {
+                    addBtn.disabled = false;
+                    addBtn.innerHTML = '<i class="fa-solid fa-plus text-slate-950"></i> <span>Add Forwarding Rule</span>';
                 }
+            }
+        }
+
+        // TOGGLE FORWARDING RULE ACTIVE STATE
+        async function toggleForwardingRule(id) {
+            try {
+                const res = await fetch(`/api/admin/channel-rules/toggle?id=${id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    await loadChannelForwardingRules();
+                } else {
+                    alert(data.message || 'Failed to toggle rule');
+                }
+            } catch (err) {
+                alert('Failed to toggle rule state.');
+            }
+        }
+
+        // DELETE FORWARDING RULE
+        async function deleteForwardingRule(id) {
+            if (!confirm(`Are you sure you want to delete forwarding rule #${id}?`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/admin/channel-rules?id=${id}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    if (typeof showToast === 'function') {
+                        showToast('Forwarding rule deleted successfully!', 'success');
+                    }
+                    await loadChannelForwardingRules();
+                } else {
+                    alert(data.message || 'Failed to delete rule');
+                }
+            } catch (err) {
+                alert('Failed to delete rule. Check connection.');
             }
         }
 

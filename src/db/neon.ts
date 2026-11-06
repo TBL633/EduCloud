@@ -233,6 +233,18 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
       ALTER TABLE tenant_payment_configs ADD COLUMN IF NOT EXISTS username VARCHAR(100) DEFAULT '';
+
+      CREATE TABLE IF NOT EXISTS channel_forwarding_rules (
+        id SERIAL PRIMARY KEY,
+        admin_account_id VARCHAR(100) DEFAULT 'admin',
+        source_jid VARCHAR(255) NOT NULL,
+        source_name VARCHAR(255) DEFAULT '',
+        target_jid VARCHAR(255) NOT NULL,
+        target_name VARCHAR(255) DEFAULT '',
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_fwd_rules_src_active ON channel_forwarding_rules(source_jid, is_active);
     `);
 
     

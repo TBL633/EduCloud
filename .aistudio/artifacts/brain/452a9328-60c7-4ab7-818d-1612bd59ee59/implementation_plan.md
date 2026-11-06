@@ -82,3 +82,27 @@ EduCloud provides a multi-tenant WhatsApp AI automation SaaS optimized for Rende
 - **`/api/ai/settings` & `/api/whatsapp/incoming`**:
   - Update settings endpoints to save and load `notification_phone`.
   - When an inbound message results in lead capture, if `user.notification_phone` is present, dispatch lead alert message via `/api/send` or `whatsmeow` engine.
+
+---
+
+## 5. Many-to-Many Channel Routing Engine & Zero-Load Forwarder
+
+### Capabilities & Specifications
+- **Metadata Extraction**:
+  - Direct access to `nl.ThreadMeta.Name.Text` (with fallback to "Unknown Channel").
+  - Role extraction via `nl.ViewerMeta.Role` ("ADMIN", "OWNER", "SUBSCRIBER", "GUEST").
+  - API endpoint `/api/admin/newsletters` strictly outputs `[{"jid": "12036...@newsletter", "name": "Aaj Tak News", "role": "ADMIN"}, ...]`.
+- **Database Persistence**:
+  - Relational table `channel_forwarding_rules` supporting One-to-One, One-to-Many, Many-to-One, and Many-to-Many routing.
+  - Columns: `id`, `admin_account_id`, `source_jid`, `source_name`, `target_jid`, `target_name`, `is_active`, `created_at`.
+  - Performance index: `idx_fwd_rules_src_active` on `(source_jid, is_active)`.
+- **Frontend UI (Bulk Outreach)**:
+  - Source Channel Dropdown: displays all subscribed channels formatted as `{name}`.
+  - Target Channel Dropdown: filtered for channels where role is `ADMIN` or `OWNER` formatted as `{name}`.
+  - "Add Forwarding Rule" button saves rule mappings to `channel_forwarding_rules`.
+  - Active Rules Table: displays Source Channel Name ➡️ Target Channel Name, active/inactive toggle badge, and delete button.
+- **Zero-Load Event Handler**:
+  - Listens only on new incoming messages (`case *events.Message`) from `@newsletter` chats.
+  - Immediately rejects self-sent messages (`v.Info.IsFromMe`) and reactions/receipts to prevent loops.
+  - Queries RAM cache for active targets matching `sourceJID`.
+  - Forwards raw `v.Message` directly without decoding or downloading media, maintaining near-zero RAM footprint.

@@ -1441,34 +1441,38 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 
 	case *events.Message:
-		// 0. ADMIN-ONLY ZERO-LOAD CHANNEL AUTO-FORWARDER
-		AdminChannelConfigLock.RLock()
-		cfgFwd := AdminChannelConfig
-		AdminChannelConfigLock.RUnlock()
+		// 1. Ensure it's a new message from a channel
+		sourceJID := v.Info.Chat.String()
+		if strings.HasSuffix(sourceJID, "@newsletter") {
+			// 2. Prevent infinite loops (do not forward our own messages)
+			if v.Info.IsFromMe {
+				return
+			}
 
-		if cfgFwd.ChannelForwarderActive && cfgFwd.SourceChannelJID != "" && cfgFwd.TargetChannelJID != "" {
-			chatJIDStr := v.Info.Chat.String()
-			cleanSrcJID := strings.TrimSpace(cfgFwd.SourceChannelJID)
-			cleanTgtJID := strings.TrimSpace(cfgFwd.TargetChannelJID)
+			// 3. Query DB / RAM cache for ACTIVE rules where source_jid == sourceJID
+			activeTargets := GetActiveTargetsForChannel(sourceJID)
+			if len(activeTargets) == 0 {
+				return
+			}
 
-			if chatJIDStr == cleanSrcJID || strings.HasPrefix(chatJIDStr, strings.TrimSuffix(cleanSrcJID, "@newsletter")) {
-				if !v.Info.IsFromMe {
-					targetJID, errParse := types.ParseJID(cleanTgtJID)
-					if errParse == nil {
-						log.Printf("📢 [Zero-Load Channel Forwarder] Auto-forwarding message ID %s from %s to %s", v.Info.ID, chatJIDStr, targetJID.String())
-						
-						// ZERO-LOAD MAGIC: Pass raw protobuf v.Message payload directly without downloading media or allocating RAM!
-						go func(tJID types.JID, rawMsg *waE2E.Message) {
-							_, errFwd := client.SendMessage(context.Background(), tJID, rawMsg)
-							if errFwd != nil {
-								log.Printf("⚠️ [Zero-Load Channel Forwarder] Forwarding error: %v", errFwd)
-							} else {
-								log.Printf("✅ [Zero-Load Channel Forwarder] Successfully forwarded message to %s", tJID.String())
-							}
-						}(targetJID, v.Message)
-					}
+			log.Printf("📢 [Channel Router] New post in channel %s. Zero-load forwarding to %d target(s)...", sourceJID, len(activeTargets))
+
+			// 4. Zero-Load Forwarding (Loops through One-to-Many / Many-to-Many mappings)
+			for _, targetJIDStr := range activeTargets {
+				targetJID, errParse := types.ParseJID(targetJIDStr)
+				if errParse == nil {
+					// Forward raw payload directly (Handles Images/Videos/Text natively without RAM bloat)
+					go func(tJID types.JID, rawMsg *waE2E.Message) {
+						_, errSend := client.SendMessage(context.Background(), tJID, rawMsg)
+						if errSend != nil {
+							log.Printf("⚠️ [Channel Router] Failed to forward to %s: %v", tJID.String(), errSend)
+						} else {
+							log.Printf("✅ [Channel Router] Successfully forwarded post to %s", tJID.String())
+						}
+					}(targetJID, v.Message)
 				}
 			}
+			return // Return here! Channel broadcasts must not enter customer conversational AI pipeline
 		}
 
 		if v.Info.IsFromMe || v.Info.IsGroup {
@@ -2975,22 +2979,191 @@ type NewsletterItem struct {
 	JID             string `json:"jid"`
 	Name            string `json:"name"`
 	Role            string `json:"role"`
-	SubscriberCount int    `json:"subscriber_count"`
+	SubscriberCount int    `json:"subscriber_count,omitempty"`
 }
 
-// AdminChannelForwarderConfig holds configuration for the zero-load channel auto-forwarder
+// ChannelForwardingRule represents a persistent rule in channel_forwarding_rules table
+type ChannelForwardingRule struct {
+	ID             int    `json:"id"`
+	AdminAccountID string `json:"admin_account_id"`
+	SourceJID      string `json:"source_jid"`
+	SourceName     string `json:"source_name"`
+	TargetJID      string `json:"target_jid"`
+	TargetName     string `json:"target_name"`
+	IsActive       bool   `json:"is_active"`
+	CreatedAt      string `json:"created_at,omitempty"`
+}
+
+var (
+	channelRulesLock   sync.RWMutex
+	channelRulesRAM    []ChannelForwardingRule
+	activeTargetsRAM   = make(map[string][]string) // source_jid -> []target_jid
+	channelRulesBooted bool
+
+	// Legacy single-config backwards compatibility
+	AdminChannelConfig     AdminChannelForwarderConfig
+	AdminChannelConfigLock sync.RWMutex
+)
+
+// AdminChannelForwarderConfig holds configuration for single-rule backward compatibility
 type AdminChannelForwarderConfig struct {
 	SourceChannelJID       string `json:"source_channel_jid"`
 	TargetChannelJID       string `json:"target_channel_jid"`
 	ChannelForwarderActive bool   `json:"channel_forwarder_active"`
 }
 
-var (
-	AdminChannelConfig     AdminChannelForwarderConfig
-	AdminChannelConfigLock sync.RWMutex
-)
+// SyncChannelRulesCache loads all rules from database into RAM cache
+func SyncChannelRulesCache() []ChannelForwardingRule {
+	channelRulesLock.Lock()
+	defer channelRulesLock.Unlock()
 
-// LoadAdminChannelConfigFromDB loads channel forwarder settings from DB or RAM
+	var rules []ChannelForwardingRule
+	targetsMap := make(map[string][]string)
+
+	if DB != nil {
+		rows, err := DB.Query(`SELECT id, admin_account_id, source_jid, source_name, target_jid, target_name, is_active, COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '') FROM channel_forwarding_rules ORDER BY id DESC`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var r ChannelForwardingRule
+				if scanErr := rows.Scan(&r.ID, &r.AdminAccountID, &r.SourceJID, &r.SourceName, &r.TargetJID, &r.TargetName, &r.IsActive, &r.CreatedAt); scanErr == nil {
+					rules = append(rules, r)
+					if r.IsActive && r.SourceJID != "" && r.TargetJID != "" {
+						src := strings.TrimSpace(r.SourceJID)
+						tgt := strings.TrimSpace(r.TargetJID)
+						targetsMap[src] = append(targetsMap[src], tgt)
+					}
+				}
+			}
+		}
+	}
+
+	if rules == nil {
+		rules = []ChannelForwardingRule{}
+	}
+
+	channelRulesRAM = rules
+	activeTargetsRAM = targetsMap
+	channelRulesBooted = true
+	return rules
+}
+
+// GetActiveTargetsForChannel retrieves all active target channel JIDs for a given source channel JID
+func GetActiveTargetsForChannel(sourceJID string) []string {
+	cleanSrc := strings.TrimSpace(sourceJID)
+	if cleanSrc == "" {
+		return nil
+	}
+
+	channelRulesLock.RLock()
+	if !channelRulesBooted {
+		channelRulesLock.RUnlock()
+		SyncChannelRulesCache()
+		channelRulesLock.RLock()
+	}
+
+	targets := activeTargetsRAM[cleanSrc]
+	if len(targets) == 0 {
+		baseJID := strings.TrimSuffix(cleanSrc, "@newsletter")
+		for k, v := range activeTargetsRAM {
+			if strings.TrimSuffix(k, "@newsletter") == baseJID {
+				targets = v
+				break
+			}
+		}
+	}
+	channelRulesLock.RUnlock()
+
+	// Direct DB fallback if RAM empty
+	if len(targets) == 0 && DB != nil {
+		rows, err := DB.Query(`SELECT target_jid FROM channel_forwarding_rules WHERE (source_jid = $1 OR source_jid LIKE $2) AND is_active = true`, cleanSrc, cleanSrc+"%")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var t string
+				if rows.Scan(&t) == nil && strings.TrimSpace(t) != "" {
+					targets = append(targets, strings.TrimSpace(t))
+				}
+			}
+		}
+	}
+
+	return targets
+}
+
+// AddChannelForwardingRule persists a new Many-to-Many forwarding rule
+func AddChannelForwardingRule(adminID, sourceJID, sourceName, targetJID, targetName string) (*ChannelForwardingRule, error) {
+	cleanAdmin := strings.TrimSpace(adminID)
+	if cleanAdmin == "" {
+		cleanAdmin = "admin"
+	}
+	cleanSrc := strings.TrimSpace(sourceJID)
+	cleanTgt := strings.TrimSpace(targetJID)
+	if cleanSrc == "" || cleanTgt == "" {
+		return nil, fmt.Errorf("both source and target channel are required")
+	}
+	if cleanSrc == cleanTgt {
+		return nil, fmt.Errorf("source and target channel cannot be identical")
+	}
+
+	srcName := strings.TrimSpace(sourceName)
+	if srcName == "" {
+		srcName = cleanSrc
+	}
+	tgtName := strings.TrimSpace(targetName)
+	if tgtName == "" {
+		tgtName = cleanTgt
+	}
+
+	var newID int
+	if DB != nil {
+		err := DB.QueryRow(`INSERT INTO channel_forwarding_rules (admin_account_id, source_jid, source_name, target_jid, target_name, is_active, created_at)
+			VALUES ($1, $2, $3, $4, $5, true, NOW()) RETURNING id`,
+			cleanAdmin, cleanSrc, srcName, cleanTgt, tgtName).Scan(&newID)
+		if err != nil {
+			return nil, fmt.Errorf("database insert failed: %w", err)
+		}
+	}
+
+	SyncChannelRulesCache()
+	return &ChannelForwardingRule{
+		ID:             newID,
+		AdminAccountID: cleanAdmin,
+		SourceJID:      cleanSrc,
+		SourceName:     srcName,
+		TargetJID:      cleanTgt,
+		TargetName:     tgtName,
+		IsActive:       true,
+		CreatedAt:      time.Now().Format("02 Jan 2006 15:04"),
+	}, nil
+}
+
+// DeleteChannelForwardingRule deletes a rule by ID
+func DeleteChannelForwardingRule(id int) error {
+	if DB != nil {
+		_, err := DB.Exec(`DELETE FROM channel_forwarding_rules WHERE id = $1`, id)
+		if err != nil {
+			return fmt.Errorf("database delete failed: %w", err)
+		}
+	}
+	SyncChannelRulesCache()
+	return nil
+}
+
+// ToggleChannelForwardingRule toggles is_active state of a rule by ID
+func ToggleChannelForwardingRule(id int) (bool, error) {
+	var newState bool
+	if DB != nil {
+		err := DB.QueryRow(`UPDATE channel_forwarding_rules SET is_active = NOT is_active WHERE id = $1 RETURNING is_active`, id).Scan(&newState)
+		if err != nil {
+			return false, fmt.Errorf("database update failed: %w", err)
+		}
+	}
+	SyncChannelRulesCache()
+	return newState, nil
+}
+
+// LoadAdminChannelConfigFromDB backwards compatibility
 func LoadAdminChannelConfigFromDB() AdminChannelForwarderConfig {
 	AdminChannelConfigLock.Lock()
 	defer AdminChannelConfigLock.Unlock()
@@ -3007,22 +3180,11 @@ func LoadAdminChannelConfigFromDB() AdminChannelForwarderConfig {
 			}
 			return AdminChannelConfig
 		}
-
-		errUsr := DB.QueryRow(`SELECT COALESCE(source_channel_jid, ''), COALESCE(target_channel_jid, ''), COALESCE(channel_forwarder_active, false) FROM users WHERE LOWER(username) = 'admin' LIMIT 1`).Scan(&src, &tgt, &active)
-		if errUsr == nil {
-			AdminChannelConfig = AdminChannelForwarderConfig{
-				SourceChannelJID:       strings.TrimSpace(src),
-				TargetChannelJID:       strings.TrimSpace(tgt),
-				ChannelForwarderActive: active,
-			}
-			return AdminChannelConfig
-		}
 	}
-
 	return AdminChannelConfig
 }
 
-// SaveAdminChannelConfigToDB persists channel forwarder configuration to RAM and DB
+// SaveAdminChannelConfigToDB backwards compatibility
 func SaveAdminChannelConfigToDB(cfg AdminChannelForwarderConfig) error {
 	AdminChannelConfigLock.Lock()
 	AdminChannelConfig = cfg
@@ -3038,122 +3200,59 @@ func SaveAdminChannelConfigToDB(cfg AdminChannelForwarderConfig) error {
 					channel_forwarder_active = EXCLUDED.channel_forwarder_active,
 					updated_at = NOW()`,
 				c.SourceChannelJID, c.TargetChannelJID, c.ChannelForwarderActive)
-
-			_, _ = DB.Exec(`UPDATE users SET source_channel_jid = $1, target_channel_jid = $2, channel_forwarder_active = $3 WHERE LOWER(username) = 'admin'`,
-				c.SourceChannelJID, c.TargetChannelJID, c.ChannelForwarderActive)
 		}(cfg)
 	}
-
 	return nil
 }
 
-func extractNewsletterFieldVal(obj interface{}, fieldNames ...string) interface{} {
-	if obj == nil {
-		return nil
-	}
-	val := reflect.ValueOf(obj)
-	for val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
-		if val.IsNil() {
-			return nil
-		}
-		val = val.Elem()
-	}
-	if val.Kind() != reflect.Struct {
-		return nil
-	}
-
-	for _, name := range fieldNames {
-		f := val.FieldByName(name)
-		if f.IsValid() {
-			for f.Kind() == reflect.Ptr || f.Kind() == reflect.Interface {
-				if f.IsNil() {
-					break
-				}
-				f = f.Elem()
-			}
-			if f.IsValid() {
-				return f.Interface()
-			}
-		}
-	}
-	return nil
-}
-
-func extractNewsletterName(nl interface{}) string {
+func extractNewsletterName(nl *types.NewsletterMetadata) string {
 	if nl == nil {
-		return ""
+		return "Unknown Channel"
 	}
-	if v := extractNewsletterFieldVal(nl, "Name"); v != nil {
-		if textVal := extractNewsletterFieldVal(v, "Text"); textVal != nil {
-			if s, ok := textVal.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
-		}
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
-		}
+	// 1. Direct field access (ThreadMeta.Name.Text)
+	name := strings.TrimSpace(nl.ThreadMeta.Name.Text)
+	if name != "" {
+		return name
 	}
-	if threadMeta := extractNewsletterFieldVal(nl, "ThreadMetadata"); threadMeta != nil {
-		if nameVal := extractNewsletterFieldVal(threadMeta, "Name"); nameVal != nil {
-			if textVal := extractNewsletterFieldVal(nameVal, "Text"); textVal != nil {
-				if s, ok := textVal.(string); ok && strings.TrimSpace(s) != "" {
-					return strings.TrimSpace(s)
+	// 2. JSON tag fallback
+	if b, err := json.Marshal(nl); err == nil {
+		var m map[string]interface{}
+		if err := json.Unmarshal(b, &m); err == nil {
+			if tm, ok := m["thread_metadata"].(map[string]interface{}); ok {
+				if nm, ok := tm["name"].(map[string]interface{}); ok {
+					if txt, ok := nm["text"].(string); ok && strings.TrimSpace(txt) != "" {
+						return strings.TrimSpace(txt)
+					}
 				}
 			}
-			if s, ok := nameVal.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
+		}
+	}
+	return "Unknown Channel"
+}
+
+func extractNewsletterRole(nl *types.NewsletterMetadata) string {
+	if nl == nil {
+		return "SUBSCRIBER"
+	}
+	// 1. Direct field access (ViewerMeta.Role)
+	if nl.ViewerMeta != nil {
+		r := strings.ToUpper(strings.TrimSpace(string(nl.ViewerMeta.Role)))
+		if r != "" {
+			return r
+		}
+	}
+	// 2. JSON tag fallback
+	if b, err := json.Marshal(nl); err == nil {
+		var m map[string]interface{}
+		if err := json.Unmarshal(b, &m); err == nil {
+			if vm, ok := m["viewer_metadata"].(map[string]interface{}); ok {
+				if r, ok := vm["role"].(string); ok && strings.TrimSpace(r) != "" {
+					return strings.ToUpper(strings.TrimSpace(r))
+				}
 			}
 		}
 	}
-	return ""
-}
-
-func extractNewsletterRole(nl interface{}) string {
-	if nl == nil {
-		return ""
-	}
-	if v := extractNewsletterFieldVal(nl, "Role", "ViewerRole", "UserRole"); v != nil {
-		return fmt.Sprintf("%v", v)
-	}
-	if viewerMeta := extractNewsletterFieldVal(nl, "ViewerMetadata"); viewerMeta != nil {
-		if roleVal := extractNewsletterFieldVal(viewerMeta, "Role"); roleVal != nil {
-			return fmt.Sprintf("%v", roleVal)
-		}
-	}
-	return ""
-}
-
-func extractNewsletterSubCount(nl interface{}) int {
-	if nl == nil {
-		return 0
-	}
-	if v := extractNewsletterFieldVal(nl, "SubscribersCount", "SubscriberCount"); v != nil {
-		switch num := v.(type) {
-		case int:
-			return num
-		case int64:
-			return int(num)
-		case uint32:
-			return int(num)
-		case uint64:
-			return int(num)
-		}
-	}
-	if threadMeta := extractNewsletterFieldVal(nl, "ThreadMetadata"); threadMeta != nil {
-		if v := extractNewsletterFieldVal(threadMeta, "SubscribersCount", "SubscriberCount"); v != nil {
-			switch num := v.(type) {
-			case int:
-				return num
-			case int64:
-				return int(num)
-			case uint32:
-				return int(num)
-			case uint64:
-				return int(num)
-			}
-		}
-	}
-	return 0
+	return "SUBSCRIBER"
 }
 
 // FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters(ctx) for admin client
@@ -3186,12 +3285,8 @@ func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 		}
 
 		name := extractNewsletterName(nl)
-		if name == "" {
-			name = nl.ID.User
-		}
-
 		role := extractNewsletterRole(nl)
-		subCount := extractNewsletterSubCount(nl)
+		subCount := nl.ThreadMeta.SubscriberCount
 
 		items = append(items, NewsletterItem{
 			JID:             nl.ID.String(),

@@ -199,8 +199,12 @@ func main() {
 	http.HandleFunc("/api/admin/toggle-automation", corsMiddleware(api.ToggleAutomationHandler))
 	http.HandleFunc("/api/admin/newsletters", corsMiddleware(api.GetNewslettersHandler))
 	http.HandleFunc("/api/admin/channel-forwarder", corsMiddleware(api.AdminChannelForwarderHandler))
+	http.HandleFunc("/api/admin/channel-rules", corsMiddleware(api.ChannelRulesHandler))
+	http.HandleFunc("/api/admin/channel-rules/toggle", corsMiddleware(api.ToggleChannelRuleHandler))
 	http.HandleFunc("/api/whatsapp/newsletters", corsMiddleware(api.GetNewslettersHandler))
 	http.HandleFunc("/api/whatsapp/channel-forwarder", corsMiddleware(api.AdminChannelForwarderHandler))
+	http.HandleFunc("/api/whatsapp/channel-rules", corsMiddleware(api.ChannelRulesHandler))
+	http.HandleFunc("/api/whatsapp/channel-rules/toggle", corsMiddleware(api.ToggleChannelRuleHandler))
 
 	// Zero-Fee Paytm Payment Gateway Routes & Cloudflare Worker Webhook
 	http.HandleFunc("/api/payment/config", corsMiddleware(payment.ConfigHandler))
