@@ -12,7 +12,9 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3045,7 +3047,116 @@ func SaveAdminChannelConfigToDB(cfg AdminChannelForwarderConfig) error {
 	return nil
 }
 
-// FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters() for admin client
+func extractNewsletterFieldVal(obj interface{}, fieldNames ...string) interface{} {
+	if obj == nil {
+		return nil
+	}
+	val := reflect.ValueOf(obj)
+	for val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
+		if val.IsNil() {
+			return nil
+		}
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return nil
+	}
+
+	for _, name := range fieldNames {
+		f := val.FieldByName(name)
+		if f.IsValid() {
+			for f.Kind() == reflect.Ptr || f.Kind() == reflect.Interface {
+				if f.IsNil() {
+					break
+				}
+				f = f.Elem()
+			}
+			if f.IsValid() {
+				return f.Interface()
+			}
+		}
+	}
+	return nil
+}
+
+func extractNewsletterName(nl interface{}) string {
+	if nl == nil {
+		return ""
+	}
+	if v := extractNewsletterFieldVal(nl, "Name"); v != nil {
+		if textVal := extractNewsletterFieldVal(v, "Text"); textVal != nil {
+			if s, ok := textVal.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	if threadMeta := extractNewsletterFieldVal(nl, "ThreadMetadata"); threadMeta != nil {
+		if nameVal := extractNewsletterFieldVal(threadMeta, "Name"); nameVal != nil {
+			if textVal := extractNewsletterFieldVal(nameVal, "Text"); textVal != nil {
+				if s, ok := textVal.(string); ok && strings.TrimSpace(s) != "" {
+					return strings.TrimSpace(s)
+				}
+			}
+			if s, ok := nameVal.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func extractNewsletterRole(nl interface{}) string {
+	if nl == nil {
+		return ""
+	}
+	if v := extractNewsletterFieldVal(nl, "Role", "ViewerRole", "UserRole"); v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	if viewerMeta := extractNewsletterFieldVal(nl, "ViewerMetadata"); viewerMeta != nil {
+		if roleVal := extractNewsletterFieldVal(viewerMeta, "Role"); roleVal != nil {
+			return fmt.Sprintf("%v", roleVal)
+		}
+	}
+	return ""
+}
+
+func extractNewsletterSubCount(nl interface{}) int {
+	if nl == nil {
+		return 0
+	}
+	if v := extractNewsletterFieldVal(nl, "SubscribersCount", "SubscriberCount"); v != nil {
+		switch num := v.(type) {
+		case int:
+			return num
+		case int64:
+			return int(num)
+		case uint32:
+			return int(num)
+		case uint64:
+			return int(num)
+		}
+	}
+	if threadMeta := extractNewsletterFieldVal(nl, "ThreadMetadata"); threadMeta != nil {
+		if v := extractNewsletterFieldVal(threadMeta, "SubscribersCount", "SubscriberCount"); v != nil {
+			switch num := v.(type) {
+			case int:
+				return num
+			case int64:
+				return int(num)
+			case uint32:
+				return int(num)
+			case uint64:
+				return int(num)
+			}
+		}
+	}
+	return 0
+}
+
+// FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters(ctx) for admin client
 func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	if cleanUsr == "" {
@@ -3063,7 +3174,7 @@ func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 		return nil, fmt.Errorf("WhatsApp client is disconnected")
 	}
 
-	newsletters, err := client.GetSubscribedNewsletters()
+	newsletters, err := client.GetSubscribedNewsletters(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch subscribed newsletters: %w", err)
 	}
@@ -3073,23 +3184,14 @@ func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 		if nl == nil {
 			continue
 		}
-		name := ""
-		if nl.ThreadMetadata != nil && nl.ThreadMetadata.Name != nil {
-			name = strings.TrimSpace(nl.ThreadMetadata.Name.Text)
-		}
+
+		name := extractNewsletterName(nl)
 		if name == "" {
 			name = nl.ID.User
 		}
 
-		role := ""
-		if nl.ViewerMetadata != nil {
-			role = string(nl.ViewerMetadata.Role)
-		}
-
-		subCount := 0
-		if nl.ThreadMetadata != nil {
-			subCount = int(nl.ThreadMetadata.SubscribersCount)
-		}
+		role := extractNewsletterRole(nl)
+		subCount := extractNewsletterSubCount(nl)
 
 		items = append(items, NewsletterItem{
 			JID:             nl.ID.String(),
