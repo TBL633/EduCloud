@@ -531,7 +531,23 @@ func GenerateQRHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetAppWebhookURL determines the full public URL for receiving payment webhooks
 func GetAppWebhookURL() string {
+	if hook := strings.TrimSpace(os.Getenv("WEBHOOK_URL")); hook != "" && !strings.Contains(hook, "localhost") && !strings.Contains(hook, "127.0.0.1") {
+		if !strings.HasSuffix(hook, "/webhook/payment") {
+			return strings.TrimSuffix(hook, "/") + "/webhook/payment"
+		}
+		return hook
+	}
 	renderURL := strings.TrimSpace(os.Getenv("RENDER_EXTERNAL_URL"))
+	if renderURL == "" {
+		host := strings.TrimSpace(os.Getenv("RENDER_EXTERNAL_HOSTNAME"))
+		if host != "" {
+			if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+				renderURL = "https://" + host
+			} else {
+				renderURL = host
+			}
+		}
+	}
 	if renderURL != "" && !strings.Contains(renderURL, "localhost") && !strings.Contains(renderURL, "127.0.0.1") {
 		return strings.TrimSuffix(renderURL, "/") + "/webhook/payment"
 	}

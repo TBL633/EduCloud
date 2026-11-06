@@ -394,6 +394,9 @@ func GetOrCreateClient(username string) *whatsmeow.Client {
 		for otherUsr, otherClient := range ActiveClients {
 			if otherUsr != cleanUsr && otherClient != nil && otherClient.Store != nil && otherClient.Store.ID != nil {
 				if otherClient.Store.ID.User == deviceStore.ID.User {
+					otherClient.AddEventHandler(func(evt interface{}) {
+						handleWhatsAppEvents(cleanUsr, otherClient, evt)
+					})
 					ActiveClients[cleanUsr] = otherClient
 					log.Printf("🔗 Reusing active WhatsApp client connection for @%s (shares device %s with @%s)", cleanUsr, deviceStore.ID.User, otherUsr)
 					return otherClient
@@ -464,17 +467,29 @@ func DisconnectAndUnlinkClient(username string) {
 
 	client, exists := ActiveClients[cleanUsr]
 	if exists && client != nil {
-		if client.IsConnected() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			_ = client.Logout(ctx)
-			cancel()
+		isShared := false
+		for otherUsr, otherClient := range ActiveClients {
+			if otherUsr != cleanUsr && otherClient == client {
+				isShared = true
+				break
+			}
 		}
-		client.Disconnect()
 
-		if client.Store != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			_ = client.Store.Delete(ctx)
-			cancel()
+		if !isShared {
+			if client.IsConnected() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = client.Logout(ctx)
+				cancel()
+			}
+			client.Disconnect()
+
+			if client.Store != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = client.Store.Delete(ctx)
+				cancel()
+			}
+		} else {
+			log.Printf("ℹ️ [WhatsApp Gateway] Connection for @%s is shared with another active tenant; preserving shared WebSocket socket.", cleanUsr)
 		}
 	}
 
@@ -1424,12 +1439,42 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		}
 
 	case *events.Message:
+		// 0. ADMIN-ONLY ZERO-LOAD CHANNEL AUTO-FORWARDER
+		AdminChannelConfigLock.RLock()
+		cfgFwd := AdminChannelConfig
+		AdminChannelConfigLock.RUnlock()
+
+		if cfgFwd.ChannelForwarderActive && cfgFwd.SourceChannelJID != "" && cfgFwd.TargetChannelJID != "" {
+			chatJIDStr := v.Info.Chat.String()
+			cleanSrcJID := strings.TrimSpace(cfgFwd.SourceChannelJID)
+			cleanTgtJID := strings.TrimSpace(cfgFwd.TargetChannelJID)
+
+			if chatJIDStr == cleanSrcJID || strings.HasPrefix(chatJIDStr, strings.TrimSuffix(cleanSrcJID, "@newsletter")) {
+				if !v.Info.IsFromMe {
+					targetJID, errParse := types.ParseJID(cleanTgtJID)
+					if errParse == nil {
+						log.Printf("📢 [Zero-Load Channel Forwarder] Auto-forwarding message ID %s from %s to %s", v.Info.ID, chatJIDStr, targetJID.String())
+						
+						// ZERO-LOAD MAGIC: Pass raw protobuf v.Message payload directly without downloading media or allocating RAM!
+						go func(tJID types.JID, rawMsg *waE2E.Message) {
+							_, errFwd := client.SendMessage(context.Background(), tJID, rawMsg)
+							if errFwd != nil {
+								log.Printf("⚠️ [Zero-Load Channel Forwarder] Forwarding error: %v", errFwd)
+							} else {
+								log.Printf("✅ [Zero-Load Channel Forwarder] Successfully forwarded message to %s", tJID.String())
+							}
+						}(targetJID, v.Message)
+					}
+				}
+			}
+		}
+
 		if v.Info.IsFromMe || v.Info.IsGroup {
 			return
 		}
 
 		if v.Info.Sender.Server == "newsletter" || v.Info.Chat.Server == "newsletter" || v.Info.Chat.Server == "broadcast" {
-			return // Ignore newsletters, channels, status broadcasts
+			return // Ignore newsletters, channels, status broadcasts for customer AI workflow
 		}
 
 		// 1. INSTANT BLUE TICKS (MarkRead) - Fired IMMEDIATELY upon message packet receipt!
@@ -1454,6 +1499,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 		senderPhone := ResolveRealPhoneNumber(client, v.Info.Sender, v.Info.Chat)
 		if senderPhone == "" || len(senderPhone) < 8 || strings.HasPrefix(senderPhone, "120363") {
 			return // Ignore invalid or broadcast JIDs
+		}
+
+		// Immediate Typing Indicator Feedback (0ms Latency for UX)
+		if activeClient := client; activeClient != nil && activeClient.IsLoggedIn() {
+			_ = activeClient.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+			if !v.Info.Sender.IsEmpty() && v.Info.Sender != v.Info.Chat {
+				_ = activeClient.SendChatPresence(context.Background(), v.Info.Sender, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+			}
 		}
 
 		var msgText string
@@ -1782,12 +1835,10 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 					case "extract_profile":
 						if act.Payload != nil && act.Payload.Profile != nil {
-							err := ExecuteExtractProfileHand(username, senderPhone, act.Payload.Profile)
-							if err != nil {
-								executionErr = err
-								failedActionName = "extract_profile"
-								break
-							}
+							// Asynchronous profile extraction for instant AI reply delivery
+							go func(prof *AIProfileDataPayload) {
+								_ = ExecuteExtractProfileHand(username, senderPhone, prof)
+							}(act.Payload.Profile)
 						}
 
 					case "send_catalog_images":
@@ -2437,6 +2488,40 @@ func SendBulkMessages(client *whatsmeow.Client, phones []string, message string,
 	return results
 }
 
+func parsePriceToFloat(raw interface{}) float64 {
+	if raw == nil {
+		return 0.0
+	}
+	switch v := raw.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int:
+		return float64(v)
+	case []byte:
+		s := strings.TrimSpace(string(v))
+		s = strings.ReplaceAll(s, "₹", "")
+		s = strings.ReplaceAll(s, ",", "")
+		f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		return f
+	case string:
+		s := strings.TrimSpace(v)
+		s = strings.ReplaceAll(s, "₹", "")
+		s = strings.ReplaceAll(s, ",", "")
+		f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		return f
+	default:
+		s := fmt.Sprintf("%v", raw)
+		s = strings.ReplaceAll(s, "₹", "")
+		s = strings.ReplaceAll(s, ",", "")
+		f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		return f
+	}
+}
+
 // SendCatalogImagesHand (Hand: send_catalog_images): queries DB for matching products/categories, downloads image_url, and sends ImageMessages via whatsmeow
 func SendCatalogImagesHand(client *whatsmeow.Client, username, customerPhone, category string) error {
 	if client == nil || !client.IsLoggedIn() {
@@ -2488,7 +2573,9 @@ func SendCatalogImagesHand(client *whatsmeow.Client, username, customerPhone, ca
 		defer rows.Close()
 		for rows.Next() {
 			var p catalogProduct
-			if scanErr := rows.Scan(&p.Name, &p.Price, &p.ImageURL); scanErr == nil && p.ImageURL != "" {
+			var rawPrice interface{}
+			if scanErr := rows.Scan(&p.Name, &rawPrice, &p.ImageURL); scanErr == nil && p.ImageURL != "" {
+				p.Price = parsePriceToFloat(rawPrice)
 				productsList = append(productsList, p)
 			}
 		}
@@ -2516,7 +2603,9 @@ func SendCatalogImagesHand(client *whatsmeow.Client, username, customerPhone, ca
 			defer fbRows.Close()
 			for fbRows.Next() {
 				var p catalogProduct
-				if scanErr := fbRows.Scan(&p.Name, &p.Price, &p.ImageURL); scanErr == nil && p.ImageURL != "" {
+				var rawPrice interface{}
+				if scanErr := fbRows.Scan(&p.Name, &rawPrice, &p.ImageURL); scanErr == nil && p.ImageURL != "" {
+					p.Price = parsePriceToFloat(rawPrice)
 					productsList = append(productsList, p)
 				}
 			}
@@ -2877,5 +2966,143 @@ func GetMerchantAlertPhone(username string) string {
 		return strings.TrimSpace(cfg.MerchantPhone)
 	}
 	return ""
+}
+
+// NewsletterItem represents metadata of a WhatsApp channel (newsletter)
+type NewsletterItem struct {
+	JID             string `json:"jid"`
+	Name            string `json:"name"`
+	Role            string `json:"role"`
+	SubscriberCount int    `json:"subscriber_count"`
+}
+
+// AdminChannelForwarderConfig holds configuration for the zero-load channel auto-forwarder
+type AdminChannelForwarderConfig struct {
+	SourceChannelJID       string `json:"source_channel_jid"`
+	TargetChannelJID       string `json:"target_channel_jid"`
+	ChannelForwarderActive bool   `json:"channel_forwarder_active"`
+}
+
+var (
+	AdminChannelConfig     AdminChannelForwarderConfig
+	AdminChannelConfigLock sync.RWMutex
+)
+
+// LoadAdminChannelConfigFromDB loads channel forwarder settings from DB or RAM
+func LoadAdminChannelConfigFromDB() AdminChannelForwarderConfig {
+	AdminChannelConfigLock.Lock()
+	defer AdminChannelConfigLock.Unlock()
+
+	if DB != nil {
+		var src, tgt string
+		var active bool
+		err := DB.QueryRow(`SELECT source_channel_jid, target_channel_jid, channel_forwarder_active FROM admin_channel_forwarder_configs WHERE username = 'admin' LIMIT 1`).Scan(&src, &tgt, &active)
+		if err == nil {
+			AdminChannelConfig = AdminChannelForwarderConfig{
+				SourceChannelJID:       strings.TrimSpace(src),
+				TargetChannelJID:       strings.TrimSpace(tgt),
+				ChannelForwarderActive: active,
+			}
+			return AdminChannelConfig
+		}
+
+		errUsr := DB.QueryRow(`SELECT COALESCE(source_channel_jid, ''), COALESCE(target_channel_jid, ''), COALESCE(channel_forwarder_active, false) FROM users WHERE LOWER(username) = 'admin' LIMIT 1`).Scan(&src, &tgt, &active)
+		if errUsr == nil {
+			AdminChannelConfig = AdminChannelForwarderConfig{
+				SourceChannelJID:       strings.TrimSpace(src),
+				TargetChannelJID:       strings.TrimSpace(tgt),
+				ChannelForwarderActive: active,
+			}
+			return AdminChannelConfig
+		}
+	}
+
+	return AdminChannelConfig
+}
+
+// SaveAdminChannelConfigToDB persists channel forwarder configuration to RAM and DB
+func SaveAdminChannelConfigToDB(cfg AdminChannelForwarderConfig) error {
+	AdminChannelConfigLock.Lock()
+	AdminChannelConfig = cfg
+	AdminChannelConfigLock.Unlock()
+
+	if DB != nil {
+		go func(c AdminChannelForwarderConfig) {
+			_, _ = DB.Exec(`INSERT INTO admin_channel_forwarder_configs (username, source_channel_jid, target_channel_jid, channel_forwarder_active, updated_at)
+				VALUES ('admin', $1, $2, $3, NOW())
+				ON CONFLICT (username) DO UPDATE SET
+					source_channel_jid = EXCLUDED.source_channel_jid,
+					target_channel_jid = EXCLUDED.target_channel_jid,
+					channel_forwarder_active = EXCLUDED.channel_forwarder_active,
+					updated_at = NOW()`,
+				c.SourceChannelJID, c.TargetChannelJID, c.ChannelForwarderActive)
+
+			_, _ = DB.Exec(`UPDATE users SET source_channel_jid = $1, target_channel_jid = $2, channel_forwarder_active = $3 WHERE LOWER(username) = 'admin'`,
+				c.SourceChannelJID, c.TargetChannelJID, c.ChannelForwarderActive)
+		}(cfg)
+	}
+
+	return nil
+}
+
+// FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters() for admin client
+func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if cleanUsr == "" {
+		cleanUsr = "admin"
+	}
+
+	ClientsLock.Lock()
+	client, exists := ActiveClients[cleanUsr]
+	if !exists || client == nil || !client.IsLoggedIn() {
+		client = ActiveClients["admin"]
+	}
+	ClientsLock.Unlock()
+
+	if client == nil || !client.IsLoggedIn() {
+		return nil, fmt.Errorf("WhatsApp client is disconnected")
+	}
+
+	newsletters, err := client.GetSubscribedNewsletters()
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch subscribed newsletters: %w", err)
+	}
+
+	var items []NewsletterItem
+	for _, nl := range newsletters {
+		if nl == nil {
+			continue
+		}
+		name := ""
+		if nl.ThreadMetadata != nil && nl.ThreadMetadata.Name != nil {
+			name = strings.TrimSpace(nl.ThreadMetadata.Name.Text)
+		}
+		if name == "" {
+			name = nl.ID.User
+		}
+
+		role := ""
+		if nl.ViewerMetadata != nil {
+			role = string(nl.ViewerMetadata.Role)
+		}
+
+		subCount := 0
+		if nl.ThreadMetadata != nil {
+			subCount = int(nl.ThreadMetadata.SubscribersCount)
+		}
+
+		items = append(items, NewsletterItem{
+			JID:             nl.ID.String(),
+			Name:            name,
+			Role:            role,
+			SubscriberCount: subCount,
+		})
+	}
+
+	if items == nil {
+		items = []NewsletterItem{}
+	}
+
+	return items, nil
 }
 

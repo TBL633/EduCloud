@@ -197,6 +197,10 @@ func main() {
 	http.HandleFunc("/api/admin/create-user", corsMiddleware(api.CreateUserHandler))
 	http.HandleFunc("/api/admin/delete-user", corsMiddleware(api.DeleteUserHandler))
 	http.HandleFunc("/api/admin/toggle-automation", corsMiddleware(api.ToggleAutomationHandler))
+	http.HandleFunc("/api/admin/newsletters", corsMiddleware(api.GetNewslettersHandler))
+	http.HandleFunc("/api/admin/channel-forwarder", corsMiddleware(api.AdminChannelForwarderHandler))
+	http.HandleFunc("/api/whatsapp/newsletters", corsMiddleware(api.GetNewslettersHandler))
+	http.HandleFunc("/api/whatsapp/channel-forwarder", corsMiddleware(api.AdminChannelForwarderHandler))
 
 	// Zero-Fee Paytm Payment Gateway Routes & Cloudflare Worker Webhook
 	http.HandleFunc("/api/payment/config", corsMiddleware(payment.ConfigHandler))

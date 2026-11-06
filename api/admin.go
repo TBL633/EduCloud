@@ -295,3 +295,73 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, 404, map[string]string{"status": "error", "message": "User profile not found"})
 }
+
+// ADMIN GET SUBSCRIBED NEWSLETTERS / CHANNELS API
+func GetNewslettersHandler(w http.ResponseWriter, r *http.Request) {
+	username := cleanUsername(r.URL.Query().Get("username"))
+	if username == "" {
+		username = "admin"
+	}
+
+	newsletters, err := whatsapp.FetchSubscribedNewsletters(username)
+	if err != nil {
+		respondJSON(w, 400, map[string]interface{}{
+			"status":      "error",
+			"message":     err.Error(),
+			"newsletters": []whatsapp.NewsletterItem{},
+		})
+		return
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":      "success",
+		"newsletters": newsletters,
+	})
+}
+
+// ADMIN CHANNEL FORWARDER CONFIG HANDLER (GET & POST)
+func AdminChannelForwarderHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		cfg := whatsapp.LoadAdminChannelConfigFromDB()
+		respondJSON(w, 200, map[string]interface{}{
+			"status":                 "success",
+			"source_channel_jid":       cfg.SourceChannelJID,
+			"target_channel_jid":       cfg.TargetChannelJID,
+			"channel_forwarder_active": cfg.ChannelForwarderActive,
+			"config":                 cfg,
+		})
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			SourceChannelJID       string `json:"source_channel_jid"`
+			TargetChannelJID       string `json:"target_channel_jid"`
+			ChannelForwarderActive bool   `json:"channel_forwarder_active"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Invalid JSON body"})
+			return
+		}
+
+		cfg := whatsapp.AdminChannelForwarderConfig{
+			SourceChannelJID:       strings.TrimSpace(req.SourceChannelJID),
+			TargetChannelJID:       strings.TrimSpace(req.TargetChannelJID),
+			ChannelForwarderActive: req.ChannelForwarderActive,
+		}
+
+		if err := whatsapp.SaveAdminChannelConfigToDB(cfg); err != nil {
+			respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to save configuration: " + err.Error()})
+			return
+		}
+
+		respondJSON(w, 200, map[string]interface{}{
+			"status":  "success",
+			"message": "Automated channel forwarder configuration saved successfully!",
+			"config":  cfg,
+		})
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}

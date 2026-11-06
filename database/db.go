@@ -150,6 +150,16 @@ func migrateSchema() {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS source_channel_jid VARCHAR(255) DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS target_channel_jid VARCHAR(255) DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS channel_forwarder_active BOOLEAN DEFAULT false;`,
+		`CREATE TABLE IF NOT EXISTS admin_channel_forwarder_configs (
+			username VARCHAR(100) PRIMARY KEY,
+			source_channel_jid VARCHAR(255) DEFAULT '',
+			target_channel_jid VARCHAR(255) DEFAULT '',
+			channel_forwarder_active BOOLEAN DEFAULT false,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`,
 		`CREATE TABLE IF NOT EXISTS tenant_whatsapp_sessions (
 			username VARCHAR(100) PRIMARY KEY,

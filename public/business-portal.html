@@ -490,6 +490,70 @@
                         </div>
                     </div>
 
+                    <!-- AUTOMATED CHANNEL FORWARDING ENGINE (ADMIN-ONLY ZERO-LOAD ENGINE) -->
+                    <div id="channel-forwarder-card" class="glass-card p-5 sm:p-8 rounded-3xl border border-slate-800 space-y-5">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
+                            <div>
+                                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-bullhorn text-amber-400"></i> Automated Channel Forwarding Engine
+                                </h3>
+                                <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                                    Auto-forward real-time channel posts directly from a Source WhatsApp Channel to a Target WhatsApp Channel with zero media-download RAM load on the server.
+                                </p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full font-mono font-bold flex items-center gap-1.5 shrink-0">
+                                    <i class="fa-solid fa-bolt text-amber-400"></i> Zero-Load RAM Magic
+                                </span>
+                                <button type="button" onclick="loadAdminNewsletters()" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold border border-slate-700 transition cursor-pointer flex items-center gap-1.5 shrink-0">
+                                    <i class="fa-solid fa-rotate text-emerald-400"></i> Refresh Channels
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- Source Channel Dropdown -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                                    <i class="fa-solid fa-right-from-bracket text-cyan-400 mr-1"></i> Source Channel (Copy From)
+                                </label>
+                                <select id="channel-source-select" class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-amber-500 font-semibold cursor-pointer">
+                                    <option value="">-- Select Source Channel --</option>
+                                </select>
+                                <p class="text-[11px] text-slate-500 mt-1">Channel where incoming posts will be monitored.</p>
+                            </div>
+
+                            <!-- Target Channel Dropdown -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                                    <i class="fa-solid fa-right-to-bracket text-emerald-400 mr-1"></i> Target Channel (Publish To)
+                                </label>
+                                <select id="channel-target-select" class="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white outline-none focus:ring-2 focus:ring-emerald-500 font-semibold cursor-pointer">
+                                    <option value="">-- Select Target Channel (Requires ADMIN/OWNER Role) --</option>
+                                </select>
+                                <p class="text-[11px] text-slate-500 mt-1">Target channel where copied posts will be published instantly.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-3 border-t border-slate-800/80">
+                            <div class="flex items-center gap-3">
+                                <label class="relative inline-flex items-center cursor-pointer select-none">
+                                    <input type="checkbox" id="channel-forwarder-active-toggle" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                </label>
+                                <div>
+                                    <span class="text-xs font-bold text-white block">Enable Real-Time Auto-Forwarding</span>
+                                    <span class="text-[10px] text-slate-400 font-mono">Status: <span id="channel-forwarder-status-badge" class="text-slate-400">Inactive</span></span>
+                                </div>
+                            </div>
+
+                            <button type="button" onclick="saveAdminChannelForwarderConfig()" id="save-channel-fwd-btn" class="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg">
+                                <i class="fa-solid fa-floppy-disk text-slate-950"></i>
+                                <span>Save Forwarder Settings</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Delivery Logs Table Container (Responsive) -->
                     <div class="glass-card p-5 rounded-2xl border border-slate-800">
                         <div class="flex items-center justify-between mb-3">
@@ -1264,7 +1328,10 @@
                 fetchWhatsAppQR();
                 loadCustomerConversationsList();
             }
-            if (tabId === 'bulk') fetchCampaignLogs();
+            if (tabId === 'bulk') {
+                fetchCampaignLogs();
+                loadAdminNewsletters();
+            }
             if (tabId === 'catalog') {
                 loadCategories();
                 loadProductCatalog();
@@ -2156,6 +2223,146 @@
             if (thumb) thumb.src = '';
             if (previewCard) previewCard.classList.add('hidden');
             if (labelText) labelText.innerText = 'Select Image to Broadcast';
+        }
+
+        // 6D. ADMIN CHANNEL AUTO-FORWARDER HANDLERS
+        async function loadAdminNewsletters() {
+            const srcSelect = document.getElementById('channel-source-select');
+            const tgtSelect = document.getElementById('channel-target-select');
+            if (!srcSelect || !tgtSelect) return;
+
+            const activeUser = getActiveUsername();
+
+            srcSelect.innerHTML = '<option value="">Loading subscribed WhatsApp channels...</option>';
+            tgtSelect.innerHTML = '<option value="">Loading subscribed WhatsApp channels...</option>';
+
+            try {
+                const res = await fetch(`/api/admin/newsletters?username=${encodeURIComponent(activeUser)}`);
+                const data = await res.json();
+                
+                let newsletters = data.newsletters || [];
+                
+                srcSelect.innerHTML = '<option value="">-- Select Source Channel --</option>';
+                tgtSelect.innerHTML = '<option value="">-- Select Target Channel (Requires ADMIN/OWNER) --</option>';
+
+                if (newsletters.length === 0) {
+                    srcSelect.innerHTML = '<option value="">No subscribed channels found on WhatsApp</option>';
+                    tgtSelect.innerHTML = '<option value="">No subscribed channels found on WhatsApp</option>';
+                } else {
+                    newsletters.forEach(nl => {
+                        const role = (nl.role || '').toUpperCase();
+                        const isAdminOrOwner = role === 'ADMIN' || role === 'OWNER';
+                        
+                        // Source channel option
+                        const optSrc = document.createElement('option');
+                        optSrc.value = nl.jid;
+                        optSrc.textContent = `${nl.name} (${nl.jid.substring(0, 14)}...) [${role || 'MEMBER'}]`;
+                        srcSelect.appendChild(optSrc);
+
+                        // Target channel option
+                        const optTgt = document.createElement('option');
+                        optTgt.value = nl.jid;
+                        optTgt.textContent = `${nl.name} (${nl.jid.substring(0, 14)}...) [${role || 'MEMBER'}]${isAdminOrOwner ? ' ✓' : ' (Read-Only)'}`;
+                        if (!isAdminOrOwner) {
+                            optTgt.disabled = true;
+                        }
+                        tgtSelect.appendChild(optTgt);
+                    });
+                }
+
+                // Load existing saved config
+                await loadAdminChannelForwarderConfig();
+            } catch (err) {
+                console.error('Error fetching admin newsletters:', err);
+                srcSelect.innerHTML = '<option value="">Failed to load channels</option>';
+                tgtSelect.innerHTML = '<option value="">Failed to load channels</option>';
+            }
+        }
+
+        async function loadAdminChannelForwarderConfig() {
+            try {
+                const res = await fetch('/api/admin/channel-forwarder');
+                if (res.ok) {
+                    const data = await res.json();
+                    const srcSelect = document.getElementById('channel-source-select');
+                    const tgtSelect = document.getElementById('channel-target-select');
+                    const toggle = document.getElementById('channel-forwarder-active-toggle');
+                    const statusBadge = document.getElementById('channel-forwarder-status-badge');
+
+                    if (data.source_channel_jid && srcSelect) {
+                        srcSelect.value = data.source_channel_jid;
+                    }
+                    if (data.target_channel_jid && tgtSelect) {
+                        tgtSelect.value = data.target_channel_jid;
+                    }
+                    if (toggle) {
+                        toggle.checked = Boolean(data.channel_forwarder_active);
+                        if (statusBadge) {
+                            statusBadge.innerText = toggle.checked ? 'ACTIVE' : 'Inactive';
+                            statusBadge.className = toggle.checked ? 'text-emerald-400 font-bold' : 'text-slate-400';
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Error loading channel forwarder config:', err);
+            }
+        }
+
+        async function saveAdminChannelForwarderConfig() {
+            const srcJid = document.getElementById('channel-source-select')?.value || '';
+            const tgtJid = document.getElementById('channel-target-select')?.value || '';
+            const active = document.getElementById('channel-forwarder-active-toggle')?.checked || false;
+
+            if (active && (!srcJid || !tgtJid)) {
+                alert('Please select both a Source Channel and a Target Channel before enabling auto-forwarding.');
+                return;
+            }
+
+            if (srcJid && tgtJid && srcJid === tgtJid) {
+                alert('Source Channel and Target Channel cannot be the same!');
+                return;
+            }
+
+            const saveBtn = document.getElementById('save-channel-fwd-btn');
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-slate-950"></i> Saving...';
+            }
+
+            try {
+                const res = await fetch('/api/admin/channel-forwarder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_channel_jid: srcJid,
+                        target_channel_jid: tgtJid,
+                        channel_forwarder_active: active
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    if (typeof showToast === 'function') {
+                        showToast('Channel Auto-Forwarder settings saved successfully!', 'success');
+                    } else {
+                        alert('Channel Auto-Forwarder settings saved successfully!');
+                    }
+                    const statusBadge = document.getElementById('channel-forwarder-status-badge');
+                    if (statusBadge) {
+                        statusBadge.innerText = active ? 'ACTIVE' : 'Inactive';
+                        statusBadge.className = active ? 'text-emerald-400 font-bold' : 'text-slate-400';
+                    }
+                } else {
+                    alert(data.message || 'Failed to save settings');
+                }
+            } catch (err) {
+                alert('Request failed. Check network connection.');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk text-slate-950"></i> Save Forwarder Settings';
+                }
+            }
         }
 
         // 7. FETCH CAMPAIGN LOGS

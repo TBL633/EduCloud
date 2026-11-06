@@ -25,6 +25,9 @@ export interface User {
   paytm_mid?: string;
   paytm_vpa?: string;
   store_policies?: string;
+  source_channel_jid?: string;
+  target_channel_jid?: string;
+  channel_forwarder_active?: boolean;
   status: 'Connected' | 'QR_Ready' | 'Disconnected';
   qr: string;
   created_at: string;
