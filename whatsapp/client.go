@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1247,23 +1246,6 @@ func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone 
 
 	// Dispatch Automated WhatsApp Lead Alert directly to notification_phone
 	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
-
-	// Send immediate confirmation reply to customer
-	if isCOD {
-		confirmReply := "✅ *Aapka Cash On Delivery (COD) Order Confirm ho gaya hai!* 🚚\n\n" +
-			"Hamari team jald hi aapka order process karegi. Delivery ke time cash payment ready rakhein.\n\n" +
-			"Dhanyawad! 🙏"
-		if client != nil && client.IsLoggedIn() {
-			_ = SendMessage(client, cleanCustomer, confirmReply)
-		}
-	} else if isPrepaid {
-		confirmReply := "✅ *Payment Update Received!* 🙏\n\n" +
-			"Aapka payment update mil gaya hai. Hamari team verify karke aapka order dispatch karegi.\n\n" +
-			"Dhanyawad!"
-		if client != nil && client.IsLoggedIn() {
-			_ = SendMessage(client, cleanCustomer, confirmReply)
-		}
-	}
 }
 
 // TriggerConfirmedPaymentLead is called when Paytm Soundbox / Gateway verifies a payment (TXN_SUCCESS)
@@ -1346,13 +1328,13 @@ func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID
 	}
 
 
-	// Send instant WhatsApp receipt/confirmation to the customer
+	// Send dynamic AI-generated WhatsApp receipt/confirmation to the customer
 	if cleanPhone != "" && len(cleanPhone) >= 10 {
-		customerConfirmMsg := fmt.Sprintf("🎉 *Aapka Order safaltapurvak prapt hua! Hum jald hi delivery karenge.* 🙏\n\n"+
-			"• *Order ID*: %s\n"+
-			"• *Amount*: ₹%s\n"+
-			"• *Status*: Confirmed & Payment Verified ✅\n\n"+
-			"Dhanyawad!", orderID, amount)
+		aiPrompt := fmt.Sprintf("Payment of Rs. %s for Order %s was just confirmed via Paytm UPI. Write a joyful, polite WhatsApp order confirmation receipt for the customer with quotes (>) and emojis. Thank them warmly and inform that their order will be prepared and delivered shortly.", amount, orderID)
+		customerConfirmMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, nil)
+		if errAI != nil || customerConfirmMsg == "" {
+			customerConfirmMsg = fmt.Sprintf("> 🎉 *ORDER CONFIRMED & PAYMENT RECEIVED* ✅\n> 📦 *Order ID:* %s • 💵 *Amount:* ₹%s\n\nAapka order safaltapurvak confirm ho gaya hai! Hum jald hi delivery karenge. Dhanyawad! 🙏✨🚚", orderID, amount)
+		}
 
 		client := GetOrCreateClient(cleanUsr)
 		if client == nil || !client.IsLoggedIn() {
@@ -1538,22 +1520,12 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			log.Printf("📍 [Delivery Radius Validation] +%s -> Distance: %.2f km (Max Allowed: %.1f km)", senderPhone, distKM, maxRadius)
 
 			if distKM > maxRadius {
-				// Distance > MaxRadiusKM: Directly auto-reply (bypassing AI) and halt funnel!
-				outOfRangeReply := fmt.Sprintf("Maaf kijiye! Humari delivery sirf %.1f km tak available hai. Aapki location dukan se %.1f km door hai.", maxRadius, distKM)
-				activeClient := client
-				if activeClient == nil || !activeClient.IsLoggedIn() {
-					activeClient = GetOrCreateClient(username)
-				}
-				if activeClient != nil && activeClient.IsLoggedIn() {
-					_ = SendReplyMessage(activeClient, senderPhone, outOfRangeReply, v.Info.ID, v.Info.Sender, v.Message)
-				}
-				PushToLiveChat(username, senderPhone, outOfRangeReply, "outgoing_ai")
-				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", outOfRangeReply)
-				return // HALT FUNNEL!
+				// Distance > MaxRadiusKM: Pass delivery constraint context to AI to reply naturally without hardcoded text
+				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km). NOTE TO AI: The store's maximum delivery radius is %.1f km. The customer is outside delivery range. Politely and warmly inform them using WhatsApp quotes (>) and emojis that home delivery is not available for this distance, and offer store pickup or counter visit.", resolvedAddr, distKM, maxRadius)
+			} else {
+				// Distance <= MaxRadiusKM: Feed location acknowledgment into conversation history
+				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within delivery radius). Coordinates: %.6f, %.6f", resolvedAddr, distKM, locLat, locLng)
 			}
-
-			// Distance <= MaxRadiusKM: Feed location acknowledgment into conversation history
-			msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within delivery radius). Coordinates: %.6f, %.6f", resolvedAddr, distKM, locLat, locLng)
 		} else {
 			// Check if customer is in PENDING payment status and sent an image (Payment Screenshot)
 			hasScreenshot := isIncomingImageOrDocument(v.Message)
@@ -1691,8 +1663,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 
 				PushToLiveChat(username, senderPhone, disputeAlert, "lead_alert")
 
-				// 2. Replies to user: "🙏 Aapka screenshot prapt hua. Humare owner ise check kar rahe hain, order jald hi update hoga."
-				userReply := "🙏 Aapka screenshot prapt hua. Humare owner ise check kar rahe hain, order jald hi update hoga."
+				// 2. Dynamic AI reply to customer acknowledging payment screenshot
+				cfgSnap := GetUserConfigRAM(username)
+				aiPrompt := fmt.Sprintf("Customer (+%s) sent a payment screenshot for Order %s (Total: Rs. %.2f). The screenshot has been forwarded to the store owner for manual verification. Thank the customer warmly with WhatsApp quotes (>) and emojis, acknowledge receipt of their screenshot, and assure them their order will be verified and processed shortly.", senderPhone, orderID, totalAmt)
+				userReply, errAI := GenerateAIContextualReply(username, senderPhone, aiPrompt, cfgSnap)
+				if errAI != nil || userReply == "" {
+					userReply = fmt.Sprintf("> 📸 *PAYMENT SCREENSHOT RECEIVED* 🙏\n> _Order #%s • Amount: ₹%.2f_\n\nAapka screenshot prapt ho gaya hai! Humare store owner ko verify karne ke liye bhej diya gaya hai. Thodi hi der me aapka order confirm ho jayega! Dhanyawad! ✨🚚", orderID, totalAmt)
+				}
 				if activeClient != nil && activeClient.IsLoggedIn() {
 					_ = SendReplyMessage(activeClient, senderPhone, userReply, v.Info.ID, v.Info.Sender, v.Message)
 				}
@@ -1871,7 +1848,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						// PHASE 5: Send wait text first, then execute Paytm verification
 						waitMsg := strings.TrimSpace(octopusResp.AIReplyText)
 						if waitMsg == "" {
-							waitMsg = "Bina delay ke check kar raha hu, kripya 2 second rukie... ⏳"
+							waitMsg = "> ⏳ *VERIFYING PAYMENT STATUS* 🔍\n> _Please wait a moment while we confirm with the bank..._\n\nBina delay ke check kar raha hu, kripya 2 second rukie! 🚀"
 						}
 						if activeClient != nil && activeClient.IsLoggedIn() {
 							_ = SendReplyMessage(activeClient, senderPhone, waitMsg, v.Info.ID, v.Info.Sender, v.Message)
@@ -1920,7 +1897,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 						PushToLiveChat(username, senderPhone, apology, "outgoing_ai")
 						go SaveCustomerChatAndPrune(username, senderPhone, "assistant", apology)
 					} else {
-						fallbackMsg := "Maaf kijiye, abhi request process karne me takleef hui. Kripya thodi der baad dobara batayein ya helpline par contact karein! 🙏"
+						fallbackMsg := "> ⚠️ *STORE ASSISTANT UPDATE* 💬\n> _Kripya ek pal intezar karein._\n\nMaaf kijiye, abhi request process karne me thodi rukawat aayi. Kripya thodi der baad dobara batayein ya humare store se direct sampark karein! 🙏✨"
 						if activeClient != nil && activeClient.IsLoggedIn() {
 							_ = SendReplyMessage(activeClient, senderPhone, fallbackMsg, v.Info.ID, v.Info.Sender, v.Message)
 						}
@@ -2825,7 +2802,11 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 
 	if savedOrderID == "" {
 		log.Printf("⚠️ [Octopus Hand: verify_payment] No active pending Order ID found for +%s", cleanPhone)
-		failedMsg := "⚠️ Payment abhi tak verify nahi hua hai. Agar aapne pay kar diya hai, toh kripya Screenshot bhejein."
+		aiPrompt := "Customer checked payment status, but no active pending order was found in the database. Politely inform them using quotes (>) and emojis that we are checking, and ask them to share their payment screenshot or order details so we can assist immediately."
+		failedMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, cfg)
+		if errAI != nil || failedMsg == "" {
+			failedMsg = "> ⏳ *PAYMENT VERIFICATION PENDING* 🔍\n> _Aapka payment status verify kiya ja raha hai._\n\nAbhi bank se payment record match nahi hua hai. Agar aap pay kar chuke hain, toh kripya payment ka *Screenshot* yahan share karein, hum turant confirm kar denge! 🙏✨"
+		}
 		if v != nil {
 			_ = SendReplyMessage(client, cleanPhone, failedMsg, v.Info.ID, v.Info.Sender, v.Message)
 		} else {
@@ -2845,7 +2826,11 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 
 	if mid == "" {
 		log.Printf("❌ [Octopus Hand: verify_payment] Paytm MID missing for @%s", cleanUsr)
-		failedMsg := "⚠️ Payment abhi tak verify nahi hua hai. Agar aapne pay kar diya hai, toh kripya Screenshot bhejein."
+		aiPrompt := fmt.Sprintf("Payment verification check for Order %s. The payment is awaiting confirmation. Politely inform the customer using quotes (>) and emojis to share their UPI payment screenshot, and the store owner will verify and confirm their order right away.", savedOrderID)
+		failedMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, cfg)
+		if errAI != nil || failedMsg == "" {
+			failedMsg = fmt.Sprintf("> ⏳ *PAYMENT VERIFICATION PENDING* 🔍\n> _Order #%s_\n\nAapka payment abhi bank se confirm nahi hua hai. Agar aap pay kar chuke hain, toh kripya payment ka *Screenshot* yahan share karein, hum turant verify kar denge! 🙏✨", savedOrderID)
+		}
 		if v != nil {
 			_ = SendReplyMessage(client, cleanPhone, failedMsg, v.Info.ID, v.Info.Sender, v.Message)
 		} else {
@@ -2864,8 +2849,11 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 		} else {
 			log.Printf("⏳ [Octopus Hand: verify_payment] Payment not completed yet for %s (Status: %s)", savedOrderID, statusResp.Status)
 		}
-		// 5. IF FAILED: Golang replies: "⚠️ Payment abhi tak verify nahi hua hai. Agar aapne pay kar diya hai, toh kripya Screenshot bhejein."
-		failedMsg := "⚠️ Payment abhi tak verify nahi hua hai. Agar aapne pay kar diya hai, toh kripya Screenshot bhejein."
+		aiPrompt := fmt.Sprintf("Payment verification check for Order %s. The payment status from bank is not successful yet. Politely inform the customer using WhatsApp quotes (>) and emojis that bank confirmation is taking a moment, and ask them to share their payment screenshot or wait a minute while we re-check.", savedOrderID)
+		failedMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, cfg)
+		if errAI != nil || failedMsg == "" {
+			failedMsg = fmt.Sprintf("> ⏳ *PAYMENT VERIFICATION PENDING* 🔍\n> _Order #%s_\n\nAapka payment abhi bank se confirm nahi hua hai. Agar aap pay kar chuke hain, toh kripya payment ka *Screenshot* yahan share karein, hum turant verify kar denge! 🙏✨", savedOrderID)
+		}
 		if v != nil {
 			_ = SendReplyMessage(client, cleanPhone, failedMsg, v.Info.ID, v.Info.Sender, v.Message)
 		} else {
@@ -2876,8 +2864,7 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 		return nil
 	}
 
-	// 4. IF TXN_SUCCESS: Golang overrides the AI with a hardcoded final success message:
-	// "✅ Payment Verified! Aapka order confirm ho gaya hai." -> Clears Cart -> Clears Order ID -> Sets state to BROWSING.
+	// 4. IF TXN_SUCCESS: Generate AI celebratory confirmation message and update state
 	_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "BROWSING")
 	_ = SetCustomerState(cleanUsr, cleanPhone, "chatting")
 	_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, "")
@@ -2893,7 +2880,11 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 		_, _ = DB.Exec(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Confirmed Paid (Paytm Direct)', NOW())`, cleanUsr, cleanPhone, leadInquiry)
 	}
 
-	confMsg := "✅ Payment Verified! Aapka order confirm ho gaya hai."
+	aiPrompt := fmt.Sprintf("Payment of Rs. %s for Order %s has been SUCCESSFULLY VERIFIED via Paytm UPI (Txn ID: %s). Write a joyous, celebratory WhatsApp order confirmation message with quotes (>) and emojis. Thank the customer warmly, confirm their order, and assure them that their items will be packed and dispatched for delivery shortly.", statusResp.TxnAmount, savedOrderID, statusResp.TxnID)
+	confMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, cfg)
+	if errAI != nil || confMsg == "" {
+		confMsg = fmt.Sprintf("> 🎉 *PAYMENT VERIFIED & ORDER CONFIRMED!* ✅\n> 📦 *Order ID:* %s • 💰 *Amount Paid:* ₹%s\n\nBadhai ho! Aapka payment verify ho gaya hai aur order confirm ho chuka hai. Hamari team jald hi aapka order dispatch karegi! Dhanyawad! 🙏🚚✨", savedOrderID, statusResp.TxnAmount)
+	}
 	if v != nil {
 		_ = SendReplyMessage(client, cleanPhone, confMsg, v.Info.ID, v.Info.Sender, v.Message)
 	} else {

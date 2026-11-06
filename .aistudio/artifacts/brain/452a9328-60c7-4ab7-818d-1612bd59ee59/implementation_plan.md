@@ -106,3 +106,25 @@ EduCloud provides a multi-tenant WhatsApp AI automation SaaS optimized for Rende
   - Immediately rejects self-sent messages (`v.Info.IsFromMe`) and reactions/receipts to prevent loops.
   - Queries RAM cache for active targets matching `sourceJID`.
   - Forwards raw `v.Message` directly without decoding or downloading media, maintaining near-zero RAM footprint.
+
+---
+
+## 6. Build Reliability & Customer Chat Aesthetics (WhatsApp Quotes & Emojis)
+- **Compiler Hardening**: Removed unused `"reflect"` import in `whatsapp/client.go` to ensure clean Go compilation on Render.
+- **Aesthetic Message Styling**:
+  - Upgraded system prompt instructions to mandate WhatsApp blockquote callouts (`> `) for headers, title cards, order summaries, and announcements.
+  - Enriched messages with warm, professional emojis (✨, 🙏, 📦, 🍕, 🛒, 🏷️, 💳, 🚚, ⚡, 🎉, 🌟, 🧾, 📍, 📞, 🤝) and bold highlights for readable, premium formatting.
+  - Enhanced all fallback and apology responses with styled quote headers and emojis.
+
+---
+
+## 7. Strict Zero Hardcoded Replies Policy (100% Dynamic AI Responses)
+- **Eliminated Hardcoded Strings**:
+  - Removed static `outOfRangeReply` text; location constraint context is now routed directly into the AI pipeline to craft personalized, polite replies.
+  - Removed static `userReply` on payment screenshot receipt; screenshots are acknowledged via dynamic `GenerateAIContextualReply` while simultaneously notifying the merchant.
+  - Removed duplicate customer `confirmReply` calls from the background `CheckAndProcessLead` task so only the AI interacts with the customer.
+  - Replaced hardcoded `failedMsg` and `confMsg` in `ExecuteVerifyPaymentHand` with dynamic AI generations via `GenerateAIContextualReply`.
+  - Replaced static webhook receipt message in `TriggerConfirmedPaymentLead` with dynamic AI order confirmation generation.
+- **Dynamic Helper `GenerateAIContextualReply`**:
+  - Automatically loads the tenant's AI config, sliding window memory, and system prompt.
+  - Generates replies with WhatsApp blockquote formatting (`> `) and expressive emojis dynamically through the LLM.

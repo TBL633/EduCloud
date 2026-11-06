@@ -137,22 +137,22 @@ type OctopusAIResponse struct {
 }
 
 // SafeAIFallbackReply is the safe polite message sent to WhatsApp users when AI parsing fails
-const SafeAIFallbackReply = "मुझे माफ़ करें, मैं अभी समझ नहीं पा रहा हूँ। क्या आप दोबारा बता सकते हैं?"
+const SafeAIFallbackReply = "> ✨ *NAMASTE JI* 🙏\n> _Aapki sahayata ke liye hum hamesha hazir hain!_\n\nMaaf kijiye, main aapka sandesh theek se samajh nahi paya. Kripya apna sawal ya item ka naam dobara batayein! 😊🍕"
 
 // jsonExtractorRegex matches everything between the outermost curly braces { ... }
 var jsonExtractorRegex = regexp.MustCompile(`(?s)\{.*\}`)
 
-// Master Octopus Agentic System Prompt Template (STRICT MULTI-ACTION JSON ENFORCEMENT)
+// Master Octopus Agentic System Prompt Template (STRICT MULTI-ACTION JSON ENFORCEMENT & BEAUTIFUL DESIGN)
 const octopusSystemPromptJSON = `You are the brain of the automated store sales & support agent for "%s" (a %s).
 Store Policy: %s
 Your output language MUST BE strictly: %s.
 
 CRITICAL INSTRUCTION: You MUST output ONLY a valid, raw JSON object. Do NOT wrap the JSON in markdown code blocks (like ` + "```json" + `), asterisks, or any explanatory text. NEVER write asterisks around key names (NEVER write *ai_reply_text*: or *actions*:). Your response MUST strictly start with '{' and end with '}'.
 
-You are the brain. You must understand the user's intent, write a polite human-like reply, and command the backend to execute one or more physical actions using this strict JSON schema:
+You are the brain. You must understand the user's intent, write a beautifully designed, polite, human-like reply, and command the backend to execute one or more physical actions using this strict JSON schema:
 
 {
-  "ai_reply_text": "String (Your polite, context-aware reply to the customer with warm emojis in %s)",
+  "ai_reply_text": "String (Your beautifully designed reply with WhatsApp quotes (>), rich emojis, and bold styling in %s)",
   "actions": [
     {
       "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, cancel_order, escalate_to_human)",
@@ -165,36 +165,48 @@ You are the brain. You must understand the user's intent, write a polite human-l
   ]
 }
 
+VISUAL DESIGN & FORMATTING GUIDELINES (WHATSAPP AESTHETICS):
+1. **WhatsApp Blockquote Feature (> )**: 
+   - ALWAYS use WhatsApp blockquotes (` + "`>`" + `) for headers, title cards, announcements, highlighted features, and summaries!
+   - Example quote header:
+     > ✨ *Store Name / Special Notice*
+     > 🛍️ _Tagline or key highlight_
+2. **Rich & Vibrant Emojis**: Liberally use warm, engaging, context-aware emojis (✨, 🙏, 🍕, 🛒, 📦, 🏷️, 💳, 🚚, ⚡, 🎉, 🌟, 🧾, 📍, 📞, 🤝, 😊, 🚀). Every message must feel alive and delightful.
+3. **Typography & Spacing**:
+   - Use *bold* for product names, prices, categories, and calls to action.
+   - Use bullet points (• ) for clean lists.
+   - Never send walls of plain, unformatted text. Keep paragraphs short and visually organized.
+
 MASTER WORKFLOW - 6-PHASE AGENTIC CUSTOMER JOURNEY:
 
 PHASE 1: GREETING & BROWSING (The Welcome)
 - When user says "Hi", "Hello", "Menu dikhao", or wants to browse, and cart is empty (state is BROWSING):
-  {"ai_reply_text": "Namaste! 🙏 Swagat hai. Upar humara menu hai. Aap kya order karna chahenge?", "actions": [{"hand": "send_catalog_images", "payload": {"category": "all"}}]}
+  {"ai_reply_text": "> ✨ *Namaste & Welcome to Our Store!* 🙏\n> 🛍️ _Fresh Quality & Fast Home Delivery 🚚_\n\nSwagat hai aapka! 😊 Humara catalog / menu upar bhej diya gaya hai.\n\nAap kya lena pasand karenge? (Jaise Pizza, Burger, Snacks, ya Drinks) 🍕🥤", "actions": [{"hand": "send_catalog_images", "payload": {"category": "all"}}]}
 
 PHASE 2: ADDING TO CART (The Selection)
 - When user wants to add/select items (e.g. "Ek paneer pizza aur 2 burger add kar do"):
   Match items with the RAG catalog below to find exact product IDs and quantities.
-  {"ai_reply_text": "Done! Aapki cart me items jod diye gaye hain. Aapka total ₹[Total] hua. Kya main checkout karu?", "actions": [{"hand": "update_cart", "payload": {"cart_items": [{"id": "pizza_1", "qty": 1}, {"id": "burger_2", "qty": 2}]}}]}
+  {"ai_reply_text": "> 🛒 *CART UPDATED* ✨\n> 📦 *Added Items:* Paneer Pizza x1, Burger x2\n> 💰 *Subtotal:* ₹[Total]\n\nSuperb choice! 🍕 Items aapki cart me add ho gaye hain.\n\nKya hum delivery address save karke *checkout* karein? 🚚", "actions": [{"hand": "update_cart", "payload": {"cart_items": [{"id": "pizza_1", "qty": 1}, {"id": "burger_2", "qty": 2}]}}]}
 
 PHASE 3: PROFILE EXTRACTION & PRE-PAYMENT SUMMARY (The Order Summary)
 - When user confirms checkout or provides delivery details (e.g. "Haan checkout kar do. Address hai Ward no 1, Kanpur. Number 9876543210"):
   CRITICAL: Show a complete order summary formatted with WhatsApp blockquotes (` + "`>`" + `) BEFORE asking for payment:
-  {"ai_reply_text": "Aapka address save ho gaya hai! Here is your order summary:\n\n> *ORDER SUMMARY* 🛒\n> 🍕 *Items:* [List of cart items with prices]\n> 🚚 *Address:* Ward no 1, Kanpur\n> 💰 *Total Amount:* ₹[Total]\n\nKya aap payment *Online (UPI QR)* se karenge ya *Cash on Delivery (COD)*?", "actions": [{"hand": "extract_profile", "payload": {"profile": {"address": "Ward no 1, Kanpur", "contact": "9876543210"}}}]}
+  {"ai_reply_text": "Aapka delivery address save ho gaya hai! 🎉\n\n> 🧾 *ORDER CONFIRMATION SUMMARY* 📦\n> 🍕 *Items:* [List of cart items with prices]\n> 🚚 *Delivery Address:* Ward no 1, Kanpur\n> 📞 *Contact:* 9876543210\n> 💵 *Payable Total:* ₹[Total] (No Extra Charges)\n\nKya aap payment *Online (Instant UPI QR)* se karenge ya *Cash on Delivery (COD)*? 😊", "actions": [{"hand": "extract_profile", "payload": {"profile": {"address": "Ward no 1, Kanpur", "contact": "9876543210"}}}]}
 
 PHASE 4: PAYMENT LOCK & QR GENERATION (The Handoff)
 - Only when user confirms payment via Online/UPI (e.g. "Online", "UPI", "QR code bhejo", "Haan payment karta hu"):
-  {"ai_reply_text": "Perfect! Kripya upar diye gaye UPI QR code ko scan karke payment karein. Payment hone ke baad 'Ho gaya' likhein. 🙏", "actions": [{"hand": "generate_payment_qr"}]}
+  {"ai_reply_text": "> 📲 *INSTANT UPI QR PAYMENT* ⚡\n> 💳 Scan the official UPI QR code above via GPay, PhonePe, or Paytm.\n> 💵 *Payable Amount:* ₹[Total]\n\nPayment complete hone ke baad yahan *'Ho gaya'* likhein, hum turant verify karke order dispatch karenge! 🙏✨", "actions": [{"hand": "generate_payment_qr"}]}
 
 PHASE 5: DIRECT VERIFICATION (The Moment of Truth)
 - When state is PAYMENT_PENDING or user says "Ho gaya", "Payment done", or "paid":
-  {"ai_reply_text": "Bina delay ke check kar raha hu, kripya 2 second rukie... ⏳", "actions": [{"hand": "verify_payment"}]}
+  {"ai_reply_text": "> ⏳ *VERIFYING PAYMENT STATUS* 🔍\n> _Please wait a moment while we confirm with the bank..._\n\nBina delay ke check kar raha hu, kripya 2 second rukie! 🚀", "actions": [{"hand": "verify_payment"}]}
 
 PHASE 6: HUMAN ESCALATION (The Fallback)
 - When user asks for human/agent/owner (e.g. "insan se baat karao", "talk to human", "owner se baat karni hai", "call me"):
-  {"ai_reply_text": "Maine hamare store owner ko notify kar diya hai. Wah jald hi aapse yahan ya phone par sampark karenge! 🙏", "actions": [{"hand": "escalate_to_human"}]}
+  {"ai_reply_text": "> 🤝 *CUSTOMER SUPPORT ASSISTANCE* 💬\n> _Store owner aur manager ko aapki baat forward kar di gayi hai._\n\nHumari team jald hi aapse direct sampark karegi! Tab tak kya main kisi aur item me aapki sahayata kar sakta hu? 🙏✨", "actions": [{"hand": "escalate_to_human"}]}
 
-STRICT FORMATTING & EXECUTION RULES:
-1. Always format responses using rich WhatsApp markdown (*bold*, _italic_) and friendly emojis (🙏, 📦, 😊, 🛒, 🍕, 🚚).
+STRICT EXECUTION RULES:
+1. Always format responses using rich WhatsApp blockquotes (` + "`>`" + `), *bold*, and enthusiastic emojis.
 2. MANDATORY PRE-PAYMENT SUMMARY: Before asking for payment or generating a QR code, you MUST show the full order summary in blockquotes (` + "`>`" + `). Never trigger generate_payment_qr until user acknowledges the order summary and confirms online payment.
 3. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
 4. If current_state is PAYMENT_PENDING:
@@ -1275,7 +1287,8 @@ func GenerateAIFeedbackApology(username, customerPhone, failedAction, errorDetai
 	hiddenSystemPrompt := fmt.Sprintf(`You are the polite store assistant for "%s".
 SYSTEM INTERNAL ERROR: The action [%s] failed because [%s].
 Apologize to the user contextually and offer an alternative in polite %s.
-Do not mention system errors, code, databases, or technical API terms. Keep it natural, human-like, polite, and reassuring with warm emojis (🙏, 📦, 😊).
+Do not mention system errors, code, databases, or technical API terms.
+Format the message beautifully with WhatsApp blockquote callouts (>), bold highlights (*text*), clean spacing, and warm emojis (🙏, 📦, 😊, ✨).
 Return ONLY your apologetic message for the customer.`, bizName, failedAction, errorDetail, lang)
 
 	history := []ChatMessage{
@@ -1295,6 +1308,86 @@ Return ONLY your apologetic message for the customer.`, bizName, failedAction, e
 
 	log.Printf("🤖 [AI Feedback Loop Generated Apology] for +%s (Action %s failed: %s):\n%s", cleanPhone, failedAction, errorDetail, cleanApology)
 	return cleanApology, nil
+}
+
+// GenerateAIContextualReply generates a 100% dynamic, context-aware reply strictly from AI (NO hardcoded replies).
+// It formats with WhatsApp blockquotes (>), rich emojis, and warm customer care tone.
+func GenerateAIContextualReply(username, customerPhone, situationContext string, cfg *UserConfigRAM) (string, error) {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	cleanPhone := FormatPhone(customerPhone)
+
+	if cfg == nil {
+		cfg = GetUserConfigRAM(cleanUsr)
+	}
+
+	selectedApiKey := getRotatedAPIKey(cleanUsr, cfg.APIKey)
+	if selectedApiKey == "" {
+		selectedApiKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		}
+		if selectedApiKey == "" {
+			selectedApiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		}
+	}
+	if selectedApiKey == "" && DB != nil {
+		var fallbackKey, fallbackProv, fallbackModel string
+		_ = DB.QueryRow(`SELECT api_key, COALESCE(ai_provider, 'groq'), COALESCE(ai_model, 'llama-3.3-70b-versatile') 
+			FROM users WHERE api_key != '' AND api_key IS NOT NULL LIMIT 1`).Scan(&fallbackKey, &fallbackProv, &fallbackModel)
+		if fallbackKey != "" {
+			selectedApiKey = fallbackKey
+			cfg.Provider = fallbackProv
+			cfg.Model = fallbackModel
+		}
+	}
+
+	if selectedApiKey == "" {
+		return "", fmt.Errorf("no API key available to generate AI reply")
+	}
+
+	bName := cfg.BusinessName
+	if bName == "" {
+		bName = cleanUsr
+	}
+	bType := cfg.BusinessType
+	if bType == "" {
+		bType = "Kirana / General Store"
+	}
+	lang := cfg.Language
+	if lang == "" {
+		lang = "Hinglish"
+	}
+
+	systemInstruction := fmt.Sprintf(`You are the polite, enthusiastic store assistant for "%s" (%s).
+Output language MUST BE strictly: %s.
+SITUATION UPDATE: %s
+
+TASK: Write a direct, beautifully formatted message to send to the WhatsApp customer.
+STRICT DESIGN RULES:
+1. Always start or highlight with a WhatsApp blockquote (> ) card header (e.g. > ✨ *Store Notice / Update* \n> 🛍️ _Detail_).
+2. Liberally use warm, friendly emojis (✨, 🙏, 📦, 🍕, 🛒, 🏷️, 💳, 🚚, ⚡, 🎉, 🌟, 🧾, 📍, 📞, 🤝, 😊).
+3. Use *bold* for key details (amounts, order IDs, next actions).
+4. Output ONLY the raw message text for the customer. DO NOT output JSON. DO NOT output code blocks or quotes around the whole text.`, bName, bType, lang, situationContext)
+
+	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
+	if len(history) == 0 {
+		history = []ChatMessage{
+			{Role: "user", Content: "Hello, please provide an update on my order / inquiry."},
+		}
+	}
+
+	reply, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, 0.7, selectedApiKey, systemInstruction, history)
+	if err != nil || strings.TrimSpace(reply) == "" {
+		return "", err
+	}
+
+	cleanReply := strings.TrimSpace(reply)
+	cleanReply = strings.TrimPrefix(cleanReply, "```json")
+	cleanReply = strings.TrimPrefix(cleanReply, "```")
+	cleanReply = strings.TrimSuffix(cleanReply, "```")
+	cleanReply = strings.TrimSpace(cleanReply)
+
+	return cleanReply, nil
 }
 
 // ParseAIResponseJSON legacy adapter for backward compatibility
