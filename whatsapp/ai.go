@@ -152,12 +152,12 @@ CRITICAL INSTRUCTION: You MUST output ONLY a valid, raw JSON object. Do NOT wrap
 You are the brain. You must understand the user's intent, write a beautifully designed, polite, human-like reply, and command the backend to execute one or more physical actions using this strict JSON schema:
 
 {
-  "ai_reply_text": "String (Your beautifully designed reply with WhatsApp quotes (>), rich emojis, and bold styling in %s)",
+  "ai_reply_text": "String (Your beautifully designed reply in %s with clean headings, rich emojis, and bold styling)",
   "actions": [
     {
       "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, cancel_order, escalate_to_human)",
       "payload": {
-        "category": "String (Optional category name, e.g. 'all' or 'burgers')",
+        "category": "String (Optional category name, e.g. 'all' or 'Dairy' or 'Snacks')",
         "cart_items": [{"id": "String", "qty": 1}],
         "profile": {"name": "", "address": "", "contact": ""}
       }
@@ -165,55 +165,62 @@ You are the brain. You must understand the user's intent, write a beautifully de
   ]
 }
 
-VISUAL DESIGN & FORMATTING GUIDELINES (WHATSAPP AESTHETICS):
-1. **WhatsApp Blockquote Feature (> )**: 
-   - ALWAYS use WhatsApp blockquotes (` + "`>`" + `) for headers, title cards, announcements, highlighted features, and summaries!
-   - Example quote header:
-     > ✨ *Store Name / Special Notice*
-     > 🛍️ _Tagline or key highlight_
-2. **Rich & Vibrant Emojis**: Liberally use warm, engaging, context-aware emojis (✨, 🙏, 🍕, 🛒, 📦, 🏷️, 💳, 🚚, ⚡, 🎉, 🌟, 🧾, 📍, 📞, 🤝, 😊, 🚀). Every message must feel alive and delightful.
-3. **Typography & Spacing**:
-   - Use *bold* for product names, prices, categories, and calls to action.
-   - Use bullet points (• ) for clean lists.
-   - Never send walls of plain, unformatted text. Keep paragraphs short and visually organized.
+VISUAL DESIGN & BEAUTIFUL FORMATTING GUIDELINES (WHATSAPP AESTHETICS):
+1. **Clean & Modern Presentation (No Overused Quotes)**:
+   - Do NOT place WhatsApp blockquote markers (>) on every line or on ordinary sentences! Messages must look clean, welcoming, and easy to read.
+   - Use bold headings with friendly emojis: e.g. ✨ *Store Name* ✨, 🛒 *Cart Updated*, 📋 *Order Summary*.
+   - Use clean bullet points (• ) for lists of items and categories.
+   - Use blockquote (> ) ONLY sparingly when highlighting an official payment notice or invoice disclaimer, NEVER on regular chat.
+2. **Category & Product Presentation (MANDATORY)**:
+   - When greeting, introducing the store, or when the customer asks what is available, what categories you have, or wants to explore:
+     a) Clearly explain what categories are available in the store and list the key products under each category with their prices (from the live inventory provided).
+     b) Courteously ask the customer:
+        "Aap categories dekh kar unki photo/image dekhna chahenge? Agar aap kisi category ya product ki photo dekhna chahein, toh batayein hum turant photo bhej denge! 📸✨"
+     c) If the customer asks to view images (e.g. "photo dikhao", "images bhejo", "biscuit ki photo", "snacks dikhao"):
+        Trigger the action: {"hand": "send_catalog_images", "payload": {"category": "<category or all>"}}.
+     d) Every single reply MUST be generated dynamically by you (AI). NO hardcoded replies!
+3. **Owner Assistance & Continuous Service (NEVER LOCK CHAT)**:
+   - When customer asks to speak with the store owner/malik ("Malik se baat karao", "owner se baat karni hai", "dukan ke malik ko call karo"):
+     a) Trigger the action: {"hand": "escalate_to_human", "payload": {}} so the backend immediately alerts the owner with full customer details, cart, and problem summary.
+     b) In your reply, reassure the customer that their details and inquiry have been shared directly with the store owner.
+     c) CRITICAL: DO NOT STOP HELPING! Continue assisting the customer right now warmly and attentively: ask what problem they are facing or what items they need, answer their questions, and keep their shopping or order going smoothly!
 
 MASTER WORKFLOW - 6-PHASE AGENTIC CUSTOMER JOURNEY:
 
-PHASE 1: GREETING & BROWSING (The Welcome)
-- When user says "Hi", "Hello", "Menu dikhao", or wants to browse, and cart is empty (state is BROWSING):
-  {"ai_reply_text": "> ✨ *Namaste & Welcome to Our Store!* 🙏\n> 🛍️ _Fresh Quality & Fast Home Delivery 🚚_\n\nSwagat hai aapka! 😊 Humara catalog / menu upar bhej diya gaya hai.\n\nAap kya lena pasand karenge? (Jaise Pizza, Burger, Snacks, ya Drinks) 🍕🥤", "actions": [{"hand": "send_catalog_images", "payload": {"category": "all"}}]}
+PHASE 1: GREETING, CATEGORIES & BROWSING (The Welcome)
+- When user says "Hi", "Hello", "Menu", "Kya kya hai", or wants to browse:
+  Present the store's categories and items nicely, and ask if they would like to see images:
+  {"ai_reply_text": "✨ *Namaste & Welcome to Our Store!* 🙏\n\nHumare paas yeh categories aur items uplabdh hain:\n\n📂 *Snacks & Namkeen:*\n• Kurkure, Lays, Biscuits\n\n📂 *Daily Essentials & Dairy:*\n• Milk, Bread, Butter, Paneer\n\n📂 *Beverages:*\n• Cold Drinks, Tea, Coffee\n\n📸 *Aap inme se kisi category ya product ki image/photo dekhna chahenge?* Aap batayein hum turant photo bhej denge! 😊\n\nAapko kya deliver karein?", "actions": []}
 
 PHASE 2: ADDING TO CART (The Selection)
-- When user wants to add/select items (e.g. "Ek paneer pizza aur 2 burger add kar do"):
-  Match items with the RAG catalog below to find exact product IDs and quantities.
-  {"ai_reply_text": "> 🛒 *CART UPDATED* ✨\n> 📦 *Added Items:* Paneer Pizza x1, Burger x2\n> 💰 *Subtotal:* ₹[Total]\n\nSuperb choice! 🍕 Items aapki cart me add ho gaye hain.\n\nKya hum delivery address save karke *checkout* karein? 🚚", "actions": [{"hand": "update_cart", "payload": {"cart_items": [{"id": "pizza_1", "qty": 1}, {"id": "burger_2", "qty": 2}]}}]}
+- When user wants to add/select items (e.g. "Ek bread aur 2 packet milk add kar do"):
+  Match items with the live catalog below to find exact product IDs and quantities.
+  {"ai_reply_text": "🛒 *CART UPDATED* ✨\n\n• Bread x1\n• Milk x2\n\n💰 *Total:* ₹[Total]\n\nKya hum delivery address save karke *checkout* karein? 🚚", "actions": [{"hand": "update_cart", "payload": {"cart_items": [{"id": "item_1", "qty": 1}, {"id": "item_2", "qty": 2}]}}]}
 
 PHASE 3: PROFILE EXTRACTION & PRE-PAYMENT SUMMARY (The Order Summary)
 - When user confirms checkout or provides delivery details (e.g. "Haan checkout kar do. Address hai Ward no 1, Kanpur. Number 9876543210"):
-  CRITICAL: Show a complete order summary formatted with WhatsApp blockquotes (` + "`>`" + `) BEFORE asking for payment:
-  {"ai_reply_text": "Aapka delivery address save ho gaya hai! 🎉\n\n> 🧾 *ORDER CONFIRMATION SUMMARY* 📦\n> 🍕 *Items:* [List of cart items with prices]\n> 🚚 *Delivery Address:* Ward no 1, Kanpur\n> 📞 *Contact:* 9876543210\n> 💵 *Payable Total:* ₹[Total] (No Extra Charges)\n\nKya aap payment *Online (Instant UPI QR)* se karenge ya *Cash on Delivery (COD)*? 😊", "actions": [{"hand": "extract_profile", "payload": {"profile": {"address": "Ward no 1, Kanpur", "contact": "9876543210"}}}]}
+  {"ai_reply_text": "Aapka delivery address save ho gaya hai! 🎉\n\n📋 *ORDER CONFIRMATION SUMMARY*\n• *Items:* [List of cart items with prices]\n• *Delivery Address:* Ward no 1, Kanpur\n• *Contact:* 9876543210\n• *Payable Total:* ₹[Total]\n\nKya aap payment *Online (Instant UPI QR)* se karenge ya *Cash on Delivery (COD)*? 😊", "actions": [{"hand": "extract_profile", "payload": {"profile": {"address": "Ward no 1, Kanpur", "contact": "9876543210"}}}]}
 
 PHASE 4: PAYMENT LOCK & QR GENERATION (The Handoff)
-- Only when user confirms payment via Online/UPI (e.g. "Online", "UPI", "QR code bhejo", "Haan payment karta hu"):
-  {"ai_reply_text": "> 📲 *INSTANT UPI QR PAYMENT* ⚡\n> 💳 Scan the official UPI QR code above via GPay, PhonePe, or Paytm.\n> 💵 *Payable Amount:* ₹[Total]\n\nPayment complete hone ke baad yahan *'Ho gaya'* likhein, hum turant verify karke order dispatch karenge! 🙏✨", "actions": [{"hand": "generate_payment_qr"}]}
+- Only when user confirms payment via Online/UPI:
+  {"ai_reply_text": "📲 *INSTANT UPI QR PAYMENT* ⚡\n\nOfficial UPI QR code upar bhej diya gaya hai. GPay, PhonePe, ya Paytm se scan karke ₹[Total] pay kar sakte hain.\n\nPayment hote hi yahan *'Ho gaya'* likhein ya screenshot share karein! 🙏✨", "actions": [{"hand": "generate_payment_qr"}]}
 
 PHASE 5: DIRECT VERIFICATION (The Moment of Truth)
 - When state is PAYMENT_PENDING or user says "Ho gaya", "Payment done", or "paid":
-  {"ai_reply_text": "> ⏳ *VERIFYING PAYMENT STATUS* 🔍\n> _Please wait a moment while we confirm with the bank..._\n\nBina delay ke check kar raha hu, kripya 2 second rukie! 🚀", "actions": [{"hand": "verify_payment"}]}
+  {"ai_reply_text": "⏳ *VERIFYING PAYMENT STATUS* 🔍\n\nBank se payment confirm kiya ja raha hai, kripya ek pal rukie! 🚀", "actions": [{"hand": "verify_payment"}]}
 
-PHASE 6: HUMAN ESCALATION (The Fallback)
-- When user asks for human/agent/owner (e.g. "insan se baat karao", "talk to human", "owner se baat karni hai", "call me"):
-  {"ai_reply_text": "> 🤝 *CUSTOMER SUPPORT ASSISTANCE* 💬\n> _Store owner aur manager ko aapki baat forward kar di gayi hai._\n\nHumari team jald hi aapse direct sampark karegi! Tab tak kya main kisi aur item me aapki sahayata kar sakta hu? 🙏✨", "actions": [{"hand": "escalate_to_human"}]}
+PHASE 6: HUMAN ESCALATION (Owner Connection + Continuous Support)
+- When user asks for owner/malik/human (e.g. "Malik se baat karao", "owner se baat karni hai"):
+  {"ai_reply_text": "🤝 *STORE OWNER NOTIFIED* 💬\n\nMaine aapki poori baat, cart details aur contact store ke Malik ko bhej diya hai! Woh jald hi aapse direct sampark karenge.\n\nTab tak main aapki kya sahayata kar sakta hu? Kripya apna sawal ya item batayein, hum aage ka kaam continue rakhte hain! 😊✨", "actions": [{"hand": "escalate_to_human"}]}
 
 STRICT EXECUTION RULES:
-1. Always format responses using rich WhatsApp blockquotes (` + "`>`" + `), *bold*, and enthusiastic emojis.
-2. MANDATORY PRE-PAYMENT SUMMARY: Before asking for payment or generating a QR code, you MUST show the full order summary in blockquotes (` + "`>`" + `). Never trigger generate_payment_qr until user acknowledges the order summary and confirms online payment.
+1. Always keep formatting visually appealing with bold headings and lively emojis, without ugly excess blockquotes.
+2. MANDATORY PRE-PAYMENT SUMMARY: Before generating a QR code, always show the full order summary.
 3. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
 4. If current_state is PAYMENT_PENDING:
    - If customer says they paid ("ho gaya", "done", "paid"), return "verify_payment".
    - If customer says "cancel", return "cancel_order".
-5. NEVER make up fake products, fake prices, or fake payment success.
-6. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
+5. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
 
 // Master E-Commerce Sales Agent System Prompt Template (STRICT JSON ENFORCEMENT)
 const universalSystemPromptJSON = octopusSystemPromptJSON
@@ -685,23 +692,31 @@ func Clean10DigitPhone(raw string) string {
 	return digits
 }
 
-// GetLiveInventoryRAG queries the products table for in_stock items and formats them into a clear string:
-// e.g. "Category: Pizza | Name: Paneer Pizza | Price: ₹50 | ID: 1"
+// GetLiveInventoryRAG queries the products table for in_stock items and formats them into a clear category-grouped string:
+// e.g. "Category: Pizza\n  • Paneer Pizza - ₹50 (ID: 1)"
 func GetLiveInventoryRAG(username string) string {
 	if DB == nil {
 		return "Currently, all items are being updated in the inventory."
 	}
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 
+	type prodItem struct {
+		id    int64
+		cat   string
+		name  string
+		price string
+	}
+
+	var rawList []prodItem
+
 	// 1. Try querying products for this user
 	q := `SELECT id, COALESCE(category, 'General'), name, price, COALESCE(sale_price, 0)
 		FROM products 
 		WHERE (LOWER(username)=$1 OR LOWER(username)=$2 OR LOWER(username) LIKE $1 || '%') 
 		  AND (in_stock IS TRUE OR in_stock IS NULL)
-		ORDER BY id ASC`
+		ORDER BY category ASC, id ASC`
 	rows, err := DB.Query(q, cleanUsr, cleanUsr+"@gmail.com")
 
-	var items []string
 	if err == nil && rows != nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -721,17 +736,17 @@ func GetLiveInventoryRAG(username string) string {
 				if salePrice > 0 {
 					pVal = fmt.Sprintf("%.2f", salePrice)
 				}
-				items = append(items, fmt.Sprintf("Category: %s | Name: %s | Price: ₹%s | ID: %d", cat, name, pVal, id))
+				rawList = append(rawList, prodItem{id: id, cat: cat, name: name, price: pVal})
 			}
 		}
 	}
 
 	// 2. Fallback: If 0 products found for this specific username filter, query all in-stock products
-	if len(items) == 0 {
+	if len(rawList) == 0 {
 		fbRows, fbErr := DB.Query(`SELECT id, COALESCE(category, 'General'), name, price, COALESCE(sale_price, 0)
 			FROM products 
 			WHERE (in_stock IS TRUE OR in_stock IS NULL)
-			ORDER BY id ASC LIMIT 50`)
+			ORDER BY category ASC, id ASC LIMIT 50`)
 		if fbErr == nil && fbRows != nil {
 			defer fbRows.Close()
 			for fbRows.Next() {
@@ -751,17 +766,36 @@ func GetLiveInventoryRAG(username string) string {
 					if salePrice > 0 {
 						pVal = fmt.Sprintf("%.2f", salePrice)
 					}
-					items = append(items, fmt.Sprintf("Category: %s | Name: %s | Price: ₹%s | ID: %d", cat, name, pVal, id))
+					rawList = append(rawList, prodItem{id: id, cat: cat, name: name, price: pVal})
 				}
 			}
 		}
 	}
 
-	if len(items) == 0 {
+	if len(rawList) == 0 {
 		return "Currently, all items are being updated in the inventory."
 	}
 
-	return strings.Join(items, "\n")
+	// Group by category for clear presentation to the AI
+	catMap := make(map[string][]prodItem)
+	var catOrder []string
+	for _, p := range rawList {
+		if _, exists := catMap[p.cat]; !exists {
+			catOrder = append(catOrder, p.cat)
+		}
+		catMap[p.cat] = append(catMap[p.cat], p)
+	}
+
+	var b strings.Builder
+	b.WriteString("STORE CATEGORIES & PRODUCTS AVAILABLE (LIVE INVENTORY):\n")
+	for _, c := range catOrder {
+		b.WriteString(fmt.Sprintf("\n📂 Category: %s\n", c))
+		for _, p := range catMap[c] {
+			b.WriteString(fmt.Sprintf("  • %s - ₹%s (ID: %d)\n", p.name, p.price, p.id))
+		}
+	}
+
+	return b.String()
 }
 
 // GetRAGCatalogResults searches in-stock products matching user message keywords or returns catalog highlights
@@ -955,10 +989,34 @@ func SanitizeAIReplyText(s string) string {
 		}
 	}
 
-	// 3. Strip trailing punctuation/JSON/markdown debris
+	// 3. Clean up excessive / broken WhatsApp blockquotes (> )
+	lines := strings.Split(res, "\n")
+	var cleanedLines []string
+	for _, l := range lines {
+		trimL := strings.TrimSpace(l)
+		// Skip standalone ">" with no text
+		if trimL == ">" || trimL == "> _" || trimL == "> *" {
+			continue
+		}
+		// If normal conversational sentences start with "> ", remove the leading "> " unless it is a special card title
+		if strings.HasPrefix(trimL, "> ") {
+			after := strings.TrimSpace(trimL[2:])
+			// Retain blockquote ONLY if it's an official payment/alert notice
+			if strings.HasPrefix(after, "💳") || strings.HasPrefix(after, "🚨") || strings.HasPrefix(after, "🧾") {
+				cleanedLines = append(cleanedLines, trimL)
+			} else {
+				cleanedLines = append(cleanedLines, after)
+			}
+		} else {
+			cleanedLines = append(cleanedLines, l)
+		}
+	}
+	res = strings.Join(cleanedLines, "\n")
+
+	// 4. Strip trailing punctuation/JSON/markdown debris
 	res = strings.Trim(res, " ,\"'}{][\n\r*`")
 
-	// 4. If the result is empty or still raw JSON
+	// 5. If the result is empty or still raw JSON
 	if res == "" || strings.HasPrefix(res, "{") || strings.HasPrefix(res, "[") {
 		return ""
 	}
@@ -1364,9 +1422,9 @@ SITUATION UPDATE: %s
 
 TASK: Write a direct, beautifully formatted message to send to the WhatsApp customer.
 STRICT DESIGN RULES:
-1. Always start or highlight with a WhatsApp blockquote (> ) card header (e.g. > ✨ *Store Notice / Update* \n> 🛍️ _Detail_).
+1. Keep formatting clean, open, and visually pleasant. Do NOT overuse blockquotes (>) on regular text or ordinary sentences. Use bold headings with tasteful emojis (e.g. ✨ *Store Update* ✨).
 2. Liberally use warm, friendly emojis (✨, 🙏, 📦, 🍕, 🛒, 🏷️, 💳, 🚚, ⚡, 🎉, 🌟, 🧾, 📍, 📞, 🤝, 😊).
-3. Use *bold* for key details (amounts, order IDs, next actions).
+3. Use *bold* for key details (amounts, order IDs, next actions) and clean bullet points (• ).
 4. Output ONLY the raw message text for the customer. DO NOT output JSON. DO NOT output code blocks or quotes around the whole text.`, bName, bType, lang, situationContext)
 
 	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
@@ -1381,10 +1439,7 @@ STRICT DESIGN RULES:
 		return "", err
 	}
 
-	cleanReply := strings.TrimSpace(reply)
-	cleanReply = strings.TrimPrefix(cleanReply, "```json")
-	cleanReply = strings.TrimPrefix(cleanReply, "```")
-	cleanReply = strings.TrimSuffix(cleanReply, "```")
+	cleanReply := SanitizeAIReplyText(reply)
 	cleanReply = strings.TrimSpace(cleanReply)
 
 	return cleanReply, nil

@@ -1746,13 +1746,13 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				PushToLiveChat(username, senderPhone, userReply, "outgoing_ai")
 				go SaveCustomerChatAndPrune(username, senderPhone, "assistant", userReply)
 
-				// 3. Clears the cart so user isn't stuck forever & mark state as HUMAN_OVERRIDE
-				_ = SetCustomerState(username, senderPhone, "HUMAN_OVERRIDE")
+				// 3. Clears the cart so user isn't stuck forever & keep state as chatting
+				_ = SetCustomerState(username, senderPhone, "chatting")
 				_ = SetCustomerPaymentStatus(username, senderPhone, "BROWSING")
 				_ = SetCustomerCurrentOrderID(username, senderPhone, "")
 				_ = ClearActiveCart(username, senderPhone)
 				if DB != nil {
-					_, _ = DB.Exec(`UPDATE customers SET current_order_id = '', payment_status = 'BROWSING', current_state = 'HUMAN_OVERRIDE', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
+					_, _ = DB.Exec(`UPDATE customers SET current_order_id = '', payment_status = 'BROWSING', current_state = 'chatting', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, senderPhone)
 					_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone=$1 OR customer_phone LIKE '%' || $1`, senderPhone)
 					_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'disputed_screenshot', order_status = 'escalated_to_human', updated_at = NOW() WHERE customer_phone=$1 AND payment_status != 'paid'`, senderPhone)
 				}
@@ -1769,17 +1769,11 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 				}
 			}
 
-			// 0. ESCALATION / HUMAN OVERRIDE CHECK
-			// If customer is in HUMAN_OVERRIDE state, do not query AI (unless explicit reset command)
+			// 0. CONTINUOUS AI CONVERSATION (NEVER LOCK CHAT ON HUMAN ESCALATION)
+			// Customer continues receiving polite, helpful AI assistance even after store owner has been notified
 			if strings.EqualFold(custState, "HUMAN_OVERRIDE") {
-				lowerMsg := strings.ToLower(strings.TrimSpace(msgText))
-				if lowerMsg == "#ai" || lowerMsg == "#bot" || lowerMsg == "#start" || lowerMsg == "/ai" || lowerMsg == "start bot" {
-					_ = SetCustomerState(username, senderPhone, "chatting")
-					log.Printf("🤖 [Human Override Cleared]: Customer +%s switched back to automated AI bot mode", senderPhone)
-				} else {
-					log.Printf("🧑‍💼 [Human Override Active]: Skipping AI processing for +%s (state is HUMAN_OVERRIDE). Message routed to live chat only.", senderPhone)
-					return
-				}
+				_ = SetCustomerState(username, senderPhone, "chatting")
+				log.Printf("🤖 [Continuous AI Active]: Customer +%s continues chatting with AI (owner already alerted).", senderPhone)
 			}
 
 			normGreet := strings.ToLower(strings.TrimSpace(msgText))
@@ -2146,7 +2140,28 @@ func PushToLiveChat(username, phone, text, msgType string) {
 }
 
 
-// SendReplyMessage sends an AI text reply natively quoting the customer's incoming message in WhatsApp
+// ShouldQuoteMessage determines if quoting the customer's previous message is truly contextually needed.
+// Only quotes media (images/documents) or specific reference questions (order #, payment verification).
+// Normal greetings, inquiries, and chat turns are delivered cleanly without cluttering quote boxes.
+func ShouldQuoteMessage(quotedMsg *waE2E.Message) bool {
+	if quotedMsg == nil {
+		return false
+	}
+	// 1. Quoting media (images, documents, video) is helpful
+	if quotedMsg.GetImageMessage() != nil || quotedMsg.GetDocumentMessage() != nil || quotedMsg.GetVideoMessage() != nil {
+		return true
+	}
+	// 2. Specific questions directly referencing an order number, transaction, or UTR
+	text := strings.ToLower(strings.TrimSpace(quotedMsg.GetConversation() + quotedMsg.GetExtendedTextMessage().GetText()))
+	if strings.Contains(text, "order #") || strings.Contains(text, "order id") || strings.Contains(text, "utr") || strings.Contains(text, "txn") {
+		return true
+	}
+	// Standard conversation, greetings, menu, questions ("tum kon ho", "nhi karunga payment", "hi"):
+	// DO NOT quote! Keep messages clean and beautiful.
+	return false
+}
+
+// SendReplyMessage sends an AI text reply, natively quoting only when contextually necessary for clean aesthetics
 func SendReplyMessage(client *whatsmeow.Client, phone string, replyText string, quotedID types.MessageID, quotedSender types.JID, quotedMsg *waE2E.Message) error {
 	if client == nil || !client.IsLoggedIn() {
 		return fmt.Errorf("whatsapp connected nahi hai")
@@ -2175,7 +2190,7 @@ func SendReplyMessage(client *whatsmeow.Client, phone string, replyText string, 
 	}
 
 	var msg *waE2E.Message
-	if quotedID != "" && quotedMsg != nil {
+	if quotedID != "" && quotedMsg != nil && ShouldQuoteMessage(quotedMsg) {
 		participantJID := quotedSender.ToNonAD().String()
 		msg = &waE2E.Message{
 			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
@@ -2972,35 +2987,142 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 	return nil
 }
 
-// ExecuteEscalateToHumanHand (Hand: escalate_to_human): marks customer state as HUMAN_OVERRIDE and alerts business owner
+// ExecuteEscalateToHumanHand (Hand: escalate_to_human): sends comprehensive customer, shopping, cart, and problem details to the store owner without locking the customer's chat
 func ExecuteEscalateToHumanHand(client *whatsmeow.Client, username, senderPhone, customerName string, v *events.Message) error {
-	_ = v
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	cleanPhone := FormatPhone(senderPhone)
 
-	// 1. Update user's DB state to HUMAN_OVERRIDE
-	_ = SetCustomerState(cleanUsr, cleanPhone, "HUMAN_OVERRIDE")
+	// 1. Keep customer active with AI - NEVER LOCK CHAT!
+	_ = SetCustomerState(cleanUsr, cleanPhone, "chatting")
 	if DB != nil {
-		_, _ = DB.Exec(`UPDATE customers SET current_state = 'HUMAN_OVERRIDE', updated_at = NOW() WHERE (LOWER(username)=$1 OR LOWER(username)=$2) AND (wa_number = $3 OR wa_number LIKE '%' || $3)`, cleanUsr, cleanUsr+"@gmail.com", cleanPhone)
+		_, _ = DB.Exec(`UPDATE customers SET current_state = 'chatting', updated_at = NOW() WHERE (LOWER(username)=$1 OR LOWER(username)=$2) AND (wa_number = $3 OR wa_number LIKE '%' || $3)`, cleanUsr, cleanUsr+"@gmail.com", cleanPhone)
 	}
 
-	// 2. Fetch Business Owner's registered Lead Alert / Merchant Phone number
-	ownerAlertPhone := GetMerchantAlertPhone(cleanUsr)
+	// 2. Extract Customer Profile Details
+	custProf, _ := GetCustomerProfile(cleanUsr, cleanPhone)
 	displayName := strings.TrimSpace(customerName)
+	if displayName == "" && custProf != nil && custProf.FullName != "" {
+		displayName = custProf.FullName
+	}
 	if displayName == "" {
-		displayName = "+" + cleanPhone
-	} else {
-		displayName = fmt.Sprintf("%s (+%s)", displayName, cleanPhone)
+		displayName = "Customer"
 	}
 
-	alertMsg := fmt.Sprintf("🚨 *Human assistance requested by %s. Please check the chat.*", displayName)
+	addr := ""
+	contactNum := ""
+	if custProf != nil {
+		addr = strings.TrimSpace(custProf.DeliveryAddress)
+		contactNum = strings.TrimSpace(custProf.ContactPhone)
+	}
+	if addr == "" && DB != nil {
+		_ = DB.QueryRow("SELECT COALESCE(delivery_address, '') FROM customers WHERE wa_number = $1 OR wa_number LIKE '%' || $1 LIMIT 1", cleanPhone).Scan(&addr)
+	}
 
+	// 3. Extract Cart Details
+	calcRes, _ := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)
+
+	// 4. Extract Order & Payment Status
+	orderIDDisp := GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
+	if orderIDDisp == "" {
+		orderIDDisp = "None (No active order)"
+	}
+	payStatusDisp := GetCustomerPaymentStatus(cleanUsr, cleanPhone)
+	if payStatusDisp == "" {
+		payStatusDisp = "BROWSING"
+	}
+
+	// 5. Extract Customer's Problem / Inquiry
+	custProblem := ""
+	if v != nil && v.Message != nil {
+		custProblem = strings.TrimSpace(v.Message.GetConversation() + v.Message.GetExtendedTextMessage().GetText())
+	}
+	history := getSlidingWindowRAM(cleanUsr, cleanPhone)
+	if custProblem == "" && len(history) > 0 {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role == "user" {
+				custProblem = history[i].Content
+				break
+			}
+		}
+	}
+	if custProblem == "" {
+		custProblem = "Store owner assistance requested"
+	}
+
+	// 6. Recent Conversation Context (Last 3-4 turns)
+	var historyLines []string
+	if len(history) > 0 {
+		startIdx := 0
+		if len(history) > 4 {
+			startIdx = len(history) - 4
+		}
+		for _, m := range history[startIdx:] {
+			senderTag := "Customer"
+			if m.Role == "assistant" {
+				senderTag = "AI"
+			}
+			cleanC := strings.TrimSpace(m.Content)
+			if len(cleanC) > 75 {
+				cleanC = cleanC[:72] + "..."
+			}
+			historyLines = append(historyLines, fmt.Sprintf("• %s: \"%s\"", senderTag, cleanC))
+		}
+	}
+
+	// 7. Assemble Full Rich Alert Message for the Store Owner
+	var b strings.Builder
+	b.WriteString("🚨 *DUKAN MALIK ALERT: CUSTOMER ASSISTANCE REQUEST* 🚨\n")
+	b.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	b.WriteString("👤 *CUSTOMER DETAILS:*\n")
+	b.WriteString(fmt.Sprintf("• *Name:* %s\n", displayName))
+	b.WriteString(fmt.Sprintf("• *WhatsApp:* +%s\n", cleanPhone))
+	if contactNum != "" && contactNum != cleanPhone {
+		b.WriteString(fmt.Sprintf("• *Alt Phone:* %s\n", contactNum))
+	}
+	if addr != "" {
+		b.WriteString(fmt.Sprintf("• *Delivery Address:* %s\n\n", addr))
+	} else {
+		b.WriteString("• *Delivery Address:* Not provided yet\n\n")
+	}
+
+	b.WriteString("🛒 *CART & SHOPPING DETAILS:*\n")
+	if calcRes != nil && len(calcRes.Items) > 0 {
+		for _, it := range calcRes.Items {
+			b.WriteString(fmt.Sprintf("• %s x%d = ₹%.2f\n", it.ProductName, it.Quantity, it.LineTotal))
+		}
+		b.WriteString(fmt.Sprintf("💰 *Total Cart Value:* ₹%.2f\n\n", calcRes.TotalAmount))
+	} else {
+		b.WriteString("• Cart is currently empty\n\n")
+	}
+
+	b.WriteString("📋 *ORDER STATUS:*\n")
+	b.WriteString(fmt.Sprintf("• *Order ID:* %s\n", orderIDDisp))
+	b.WriteString(fmt.Sprintf("• *Payment Status:* %s\n\n", payStatusDisp))
+
+	b.WriteString("❓ *CUSTOMER'S PROBLEM / REQUEST:*\n")
+	b.WriteString(fmt.Sprintf("\"%s\"\n\n", strings.TrimSpace(custProblem)))
+
+	if len(historyLines) > 0 {
+		b.WriteString("💬 *RECENT CHAT CONTEXT:*\n")
+		for _, h := range historyLines {
+			b.WriteString(fmt.Sprintf("%s\n", h))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	b.WriteString("👉 *Notice:* Chat lock nahi kiya gaya hai. AI customer ko active rakh kar continue help kar raha hai. Aap chahein toh customer se direct call ya WhatsApp pe baat kar sakte hain.")
+
+	alertMsg := b.String()
+
+	// 8. Deliver Alert to Store Owner's Phone
+	ownerAlertPhone := GetMerchantAlertPhone(cleanUsr)
 	if ownerAlertPhone != "" && client != nil && client.IsLoggedIn() {
 		cleanOwnerPhone := FormatPhone(ownerAlertPhone)
 		_ = SendMessage(client, cleanOwnerPhone, alertMsg)
-		log.Printf("🚨 [Escalate to Human] Alert sent to Business Owner (+%s) for customer %s", cleanOwnerPhone, displayName)
+		log.Printf("🚨 [Escalate to Human] Full dossier alert delivered to Store Owner (+%s) for %s (+%s)", cleanOwnerPhone, displayName, cleanPhone)
 	} else {
-		log.Printf("🚨 [Escalate to Human] No merchant alert phone found for @%s; customer %s marked as HUMAN_OVERRIDE", cleanUsr, displayName)
+		log.Printf("🚨 [Escalate to Human] No merchant alert phone configured for @%s; escalation saved to live chat.", cleanUsr)
 	}
 
 	PushToLiveChat(cleanUsr, cleanPhone, alertMsg, "system_alert")
