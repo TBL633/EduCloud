@@ -1432,27 +1432,97 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			}
 
 			// 3. Query DB / RAM cache for ACTIVE rules where source_jid == sourceJID
-			activeTargets := GetActiveTargetsForChannel(sourceJID)
-			if len(activeTargets) == 0 {
+			activeRules := GetActiveRulesForChannel(sourceJID)
+			if len(activeRules) == 0 {
 				return
 			}
 
-			log.Printf("📢 [Channel Router] New post in channel %s. Zero-load forwarding to %d target(s)...", sourceJID, len(activeTargets))
+			log.Printf("📢 [Channel Router] New post in channel %s. Zero-load forwarding matching %d active rule(s)...", sourceJID, len(activeRules))
 
-			// 4. Zero-Load Forwarding (Loops through One-to-Many / Many-to-Many mappings)
-			for _, targetJIDStr := range activeTargets {
-				targetJID, errParse := types.ParseJID(targetJIDStr)
-				if errParse == nil {
-					// Forward raw payload directly (Handles Images/Videos/Text natively without RAM bloat)
-					go func(tJID types.JID, rawMsg *waE2E.Message) {
-						_, errSend := client.SendMessage(context.Background(), tJID, rawMsg)
-						if errSend != nil {
-							log.Printf("⚠️ [Channel Router] Failed to forward to %s: %v", tJID.String(), errSend)
-						} else {
-							log.Printf("✅ [Channel Router] Successfully forwarded post to %s", tJID.String())
-						}
-					}(targetJID, v.Message)
+			// 4. Granular Forwarding (Filters, URL Blockers, Context Strippers)
+			for _, rule := range activeRules {
+				targetJID, errParse := types.ParseJID(rule.TargetJID)
+				if errParse != nil {
+					continue
 				}
+
+				msg := v.Message
+				if msg == nil {
+					continue
+				}
+
+				textConv := msg.GetConversation()
+				extendedText := msg.GetExtendedTextMessage().GetText()
+				imgCaption := msg.GetImageMessage().GetCaption()
+				vidCaption := msg.GetVideoMessage().GetCaption()
+				docCaption := msg.GetDocumentMessage().GetCaption()
+
+				fullText := textConv + extendedText + imgCaption + vidCaption + docCaption
+				hasText := strings.TrimSpace(fullText) != ""
+				hasMedia := msg.GetImageMessage() != nil || msg.GetVideoMessage() != nil || msg.GetDocumentMessage() != nil || msg.GetAudioMessage() != nil
+
+				// --- FORWARD LOGIC FILTERS ---
+				// Values: all, only_text, text_and_media, only_media
+				logic := strings.ToLower(strings.TrimSpace(rule.ForwardLogic))
+				if logic == "" {
+					logic = "all"
+				}
+
+				if logic == "only_text" && !hasText {
+					continue
+				}
+				if logic == "only_media" && !hasMedia {
+					continue
+				}
+				if logic == "text_and_media" && !(hasText || hasMedia) {
+					continue
+				}
+
+				// --- URL BLOCKER LOGIC ---
+				if rule.BlockURLs {
+					lowerText := strings.ToLower(fullText)
+					if strings.Contains(lowerText, "http://") || strings.Contains(lowerText, "https://") || strings.Contains(lowerText, "www.") {
+						log.Printf("🚫 [Channel Router] Rule #%d skipped message containing blocked external URL to %s", rule.ID, rule.TargetName)
+						continue
+					}
+				}
+
+				// --- "VIEW CHANNEL" STRIPPER (CONTEXT CLEANER) ---
+				msgToSend := msg
+				if rule.StripChannelLinks {
+					// Clone message to prevent mutating original payload for other rules
+					msgToSend = proto.Clone(msg).(*waE2E.Message)
+					if msgToSend.ExtendedTextMessage != nil && msgToSend.ExtendedTextMessage.ContextInfo != nil {
+						msgToSend.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(false)
+						msgToSend.ExtendedTextMessage.ContextInfo.ForwardingScore = proto.Uint32(0)
+					}
+					if msgToSend.ImageMessage != nil && msgToSend.ImageMessage.ContextInfo != nil {
+						msgToSend.ImageMessage.ContextInfo.IsForwarded = proto.Bool(false)
+						msgToSend.ImageMessage.ContextInfo.ForwardingScore = proto.Uint32(0)
+					}
+					if msgToSend.VideoMessage != nil && msgToSend.VideoMessage.ContextInfo != nil {
+						msgToSend.VideoMessage.ContextInfo.IsForwarded = proto.Bool(false)
+						msgToSend.VideoMessage.ContextInfo.ForwardingScore = proto.Uint32(0)
+					}
+					if msgToSend.DocumentMessage != nil && msgToSend.DocumentMessage.ContextInfo != nil {
+						msgToSend.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(false)
+						msgToSend.DocumentMessage.ContextInfo.ForwardingScore = proto.Uint32(0)
+					}
+					if msgToSend.AudioMessage != nil && msgToSend.AudioMessage.ContextInfo != nil {
+						msgToSend.AudioMessage.ContextInfo.IsForwarded = proto.Bool(false)
+						msgToSend.AudioMessage.ContextInfo.ForwardingScore = proto.Uint32(0)
+					}
+				}
+
+				// Forward the payload directly without server-side media re-encoding
+				go func(tJID types.JID, rawMsg *waE2E.Message, rID int, tName string) {
+					_, errSend := client.SendMessage(context.Background(), tJID, rawMsg)
+					if errSend != nil {
+						log.Printf("⚠️ [Channel Router] Rule #%d failed to forward to %s (%s): %v", rID, tName, tJID.String(), errSend)
+					} else {
+						log.Printf("✅ [Channel Router] Rule #%d successfully forwarded post to %s (%s)", rID, tName, tJID.String())
+					}
+				}(targetJID, msgToSend, rule.ID, rule.TargetName)
 			}
 			return // Return here! Channel broadcasts must not enter customer conversational AI pipeline
 		}
@@ -2975,20 +3045,24 @@ type NewsletterItem struct {
 
 // ChannelForwardingRule represents a persistent rule in channel_forwarding_rules table
 type ChannelForwardingRule struct {
-	ID             int    `json:"id"`
-	AdminAccountID string `json:"admin_account_id"`
-	SourceJID      string `json:"source_jid"`
-	SourceName     string `json:"source_name"`
-	TargetJID      string `json:"target_jid"`
-	TargetName     string `json:"target_name"`
-	IsActive       bool   `json:"is_active"`
-	CreatedAt      string `json:"created_at,omitempty"`
+	ID                int    `json:"id"`
+	AdminAccountID    string `json:"admin_account_id"`
+	SourceJID         string `json:"source_jid"`
+	SourceName        string `json:"source_name"`
+	TargetJID         string `json:"target_jid"`
+	TargetName        string `json:"target_name"`
+	ForwardLogic      string `json:"forward_logic"`
+	BlockURLs         bool   `json:"block_urls"`
+	StripChannelLinks bool   `json:"strip_channel_links"`
+	IsActive          bool   `json:"is_active"`
+	CreatedAt         string `json:"created_at,omitempty"`
 }
 
 var (
 	channelRulesLock   sync.RWMutex
 	channelRulesRAM    []ChannelForwardingRule
-	activeTargetsRAM   = make(map[string][]string) // source_jid -> []target_jid
+	activeTargetsRAM   = make(map[string][]string)               // source_jid -> []target_jid
+	activeRulesRAM     = make(map[string][]ChannelForwardingRule) // source_jid -> []ChannelForwardingRule
 	channelRulesBooted bool
 
 	// Legacy single-config backwards compatibility
@@ -3010,19 +3084,24 @@ func SyncChannelRulesCache() []ChannelForwardingRule {
 
 	var rules []ChannelForwardingRule
 	targetsMap := make(map[string][]string)
+	rulesMap := make(map[string][]ChannelForwardingRule)
 
 	if DB != nil {
-		rows, err := DB.Query(`SELECT id, admin_account_id, source_jid, source_name, target_jid, target_name, is_active, COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '') FROM channel_forwarding_rules ORDER BY id DESC`)
+		rows, err := DB.Query(`SELECT id, admin_account_id, source_jid, source_name, target_jid, target_name, COALESCE(forward_logic, 'all'), COALESCE(block_urls, false), COALESCE(strip_channel_links, true), is_active, COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '') FROM channel_forwarding_rules ORDER BY id DESC`)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var r ChannelForwardingRule
-				if scanErr := rows.Scan(&r.ID, &r.AdminAccountID, &r.SourceJID, &r.SourceName, &r.TargetJID, &r.TargetName, &r.IsActive, &r.CreatedAt); scanErr == nil {
+				if scanErr := rows.Scan(&r.ID, &r.AdminAccountID, &r.SourceJID, &r.SourceName, &r.TargetJID, &r.TargetName, &r.ForwardLogic, &r.BlockURLs, &r.StripChannelLinks, &r.IsActive, &r.CreatedAt); scanErr == nil {
+					if r.ForwardLogic == "" {
+						r.ForwardLogic = "all"
+					}
 					rules = append(rules, r)
 					if r.IsActive && r.SourceJID != "" && r.TargetJID != "" {
 						src := strings.TrimSpace(r.SourceJID)
 						tgt := strings.TrimSpace(r.TargetJID)
 						targetsMap[src] = append(targetsMap[src], tgt)
+						rulesMap[src] = append(rulesMap[src], r)
 					}
 				}
 			}
@@ -3035,7 +3114,54 @@ func SyncChannelRulesCache() []ChannelForwardingRule {
 
 	channelRulesRAM = rules
 	activeTargetsRAM = targetsMap
+	activeRulesRAM = rulesMap
 	channelRulesBooted = true
+	return rules
+}
+
+// GetActiveRulesForChannel retrieves all active forwarding rules for a given source channel JID
+func GetActiveRulesForChannel(sourceJID string) []ChannelForwardingRule {
+	cleanSrc := strings.TrimSpace(sourceJID)
+	if cleanSrc == "" {
+		return nil
+	}
+
+	channelRulesLock.RLock()
+	if !channelRulesBooted {
+		channelRulesLock.RUnlock()
+		SyncChannelRulesCache()
+		channelRulesLock.RLock()
+	}
+
+	rules := activeRulesRAM[cleanSrc]
+	if len(rules) == 0 {
+		baseJID := strings.TrimSuffix(cleanSrc, "@newsletter")
+		for k, v := range activeRulesRAM {
+			if strings.TrimSuffix(k, "@newsletter") == baseJID {
+				rules = v
+				break
+			}
+		}
+	}
+	channelRulesLock.RUnlock()
+
+	// Direct DB fallback if RAM empty
+	if len(rules) == 0 && DB != nil {
+		rows, err := DB.Query(`SELECT id, admin_account_id, source_jid, source_name, target_jid, target_name, COALESCE(forward_logic, 'all'), COALESCE(block_urls, false), COALESCE(strip_channel_links, true), is_active, COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '') FROM channel_forwarding_rules WHERE (source_jid = $1 OR source_jid LIKE $2) AND is_active = true`, cleanSrc, cleanSrc+"%")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var r ChannelForwardingRule
+				if rows.Scan(&r.ID, &r.AdminAccountID, &r.SourceJID, &r.SourceName, &r.TargetJID, &r.TargetName, &r.ForwardLogic, &r.BlockURLs, &r.StripChannelLinks, &r.IsActive, &r.CreatedAt) == nil {
+					if r.ForwardLogic == "" {
+						r.ForwardLogic = "all"
+					}
+					rules = append(rules, r)
+				}
+			}
+		}
+	}
+
 	return rules
 }
 
@@ -3083,7 +3209,7 @@ func GetActiveTargetsForChannel(sourceJID string) []string {
 }
 
 // AddChannelForwardingRule persists a new Many-to-Many forwarding rule
-func AddChannelForwardingRule(adminID, sourceJID, sourceName, targetJID, targetName string) (*ChannelForwardingRule, error) {
+func AddChannelForwardingRule(adminID, sourceJID, sourceName, targetJID, targetName, forwardLogic string, blockURLs, stripChannelLinks bool) (*ChannelForwardingRule, error) {
 	cleanAdmin := strings.TrimSpace(adminID)
 	if cleanAdmin == "" {
 		cleanAdmin = "admin"
@@ -3106,11 +3232,16 @@ func AddChannelForwardingRule(adminID, sourceJID, sourceName, targetJID, targetN
 		tgtName = cleanTgt
 	}
 
+	cleanLogic := strings.ToLower(strings.TrimSpace(forwardLogic))
+	if cleanLogic == "" {
+		cleanLogic = "all"
+	}
+
 	var newID int
 	if DB != nil {
-		err := DB.QueryRow(`INSERT INTO channel_forwarding_rules (admin_account_id, source_jid, source_name, target_jid, target_name, is_active, created_at)
-			VALUES ($1, $2, $3, $4, $5, true, NOW()) RETURNING id`,
-			cleanAdmin, cleanSrc, srcName, cleanTgt, tgtName).Scan(&newID)
+		err := DB.QueryRow(`INSERT INTO channel_forwarding_rules (admin_account_id, source_jid, source_name, target_jid, target_name, forward_logic, block_urls, strip_channel_links, is_active, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, NOW()) RETURNING id`,
+			cleanAdmin, cleanSrc, srcName, cleanTgt, tgtName, cleanLogic, blockURLs, stripChannelLinks).Scan(&newID)
 		if err != nil {
 			return nil, fmt.Errorf("database insert failed: %w", err)
 		}
@@ -3118,14 +3249,66 @@ func AddChannelForwardingRule(adminID, sourceJID, sourceName, targetJID, targetN
 
 	SyncChannelRulesCache()
 	return &ChannelForwardingRule{
-		ID:             newID,
-		AdminAccountID: cleanAdmin,
-		SourceJID:      cleanSrc,
-		SourceName:     srcName,
-		TargetJID:      cleanTgt,
-		TargetName:     tgtName,
-		IsActive:       true,
-		CreatedAt:      time.Now().Format("02 Jan 2006 15:04"),
+		ID:                newID,
+		AdminAccountID:    cleanAdmin,
+		SourceJID:         cleanSrc,
+		SourceName:        srcName,
+		TargetJID:         cleanTgt,
+		TargetName:        tgtName,
+		ForwardLogic:      cleanLogic,
+		BlockURLs:         blockURLs,
+		StripChannelLinks: stripChannelLinks,
+		IsActive:          true,
+		CreatedAt:         time.Now().Format("02 Jan 2006 15:04"),
+	}, nil
+}
+
+// UpdateChannelForwardingRule updates an existing forwarding rule
+func UpdateChannelForwardingRule(id int, sourceJID, sourceName, targetJID, targetName, forwardLogic string, blockURLs, stripChannelLinks, isActive bool) (*ChannelForwardingRule, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid rule ID")
+	}
+	cleanSrc := strings.TrimSpace(sourceJID)
+	cleanTgt := strings.TrimSpace(targetJID)
+	if cleanSrc == "" || cleanTgt == "" {
+		return nil, fmt.Errorf("both source and target channel are required")
+	}
+	if cleanSrc == cleanTgt {
+		return nil, fmt.Errorf("source and target channel cannot be identical")
+	}
+
+	srcName := strings.TrimSpace(sourceName)
+	if srcName == "" {
+		srcName = cleanSrc
+	}
+	tgtName := strings.TrimSpace(targetName)
+	if tgtName == "" {
+		tgtName = cleanTgt
+	}
+	cleanLogic := strings.ToLower(strings.TrimSpace(forwardLogic))
+	if cleanLogic == "" {
+		cleanLogic = "all"
+	}
+
+	if DB != nil {
+		_, err := DB.Exec(`UPDATE channel_forwarding_rules SET source_jid = $1, source_name = $2, target_jid = $3, target_name = $4, forward_logic = $5, block_urls = $6, strip_channel_links = $7, is_active = $8 WHERE id = $9`,
+			cleanSrc, srcName, cleanTgt, tgtName, cleanLogic, blockURLs, stripChannelLinks, isActive, id)
+		if err != nil {
+			return nil, fmt.Errorf("database update failed: %w", err)
+		}
+	}
+	SyncChannelRulesCache()
+
+	return &ChannelForwardingRule{
+		ID:                id,
+		SourceJID:         cleanSrc,
+		SourceName:        srcName,
+		TargetJID:         cleanTgt,
+		TargetName:        tgtName,
+		ForwardLogic:      cleanLogic,
+		BlockURLs:         blockURLs,
+		StripChannelLinks: stripChannelLinks,
+		IsActive:          isActive,
 	}, nil
 }
 

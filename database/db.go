@@ -167,9 +167,15 @@ func migrateSchema() {
 			source_name VARCHAR(255) DEFAULT '',
 			target_jid VARCHAR(255) NOT NULL,
 			target_name VARCHAR(255) DEFAULT '',
+			forward_logic VARCHAR(50) DEFAULT 'all',
+			block_urls BOOLEAN DEFAULT false,
+			strip_channel_links BOOLEAN DEFAULT true,
 			is_active BOOLEAN DEFAULT true,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`ALTER TABLE channel_forwarding_rules ADD COLUMN IF NOT EXISTS forward_logic VARCHAR(50) DEFAULT 'all';`,
+		`ALTER TABLE channel_forwarding_rules ADD COLUMN IF NOT EXISTS block_urls BOOLEAN DEFAULT false;`,
+		`ALTER TABLE channel_forwarding_rules ADD COLUMN IF NOT EXISTS strip_channel_links BOOLEAN DEFAULT true;`,
 		`CREATE INDEX IF NOT EXISTS idx_fwd_rules_src_active ON channel_forwarding_rules(source_jid, is_active);`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;`,
 		`CREATE TABLE IF NOT EXISTS tenant_whatsapp_sessions (

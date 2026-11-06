@@ -333,11 +333,14 @@ func ChannelRulesHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	case "POST":
 		var req struct {
-			AdminAccountID string `json:"admin_account_id"`
-			SourceJID      string `json:"source_jid"`
-			SourceName     string `json:"source_name"`
-			TargetJID      string `json:"target_jid"`
-			TargetName     string `json:"target_name"`
+			AdminAccountID    string `json:"admin_account_id"`
+			SourceJID         string `json:"source_jid"`
+			SourceName        string `json:"source_name"`
+			TargetJID         string `json:"target_jid"`
+			TargetName        string `json:"target_name"`
+			ForwardLogic      string `json:"forward_logic"`
+			BlockURLs         bool   `json:"block_urls"`
+			StripChannelLinks *bool  `json:"strip_channel_links"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			respondJSON(w, 400, map[string]string{"status": "error", "message": "Invalid JSON payload"})
@@ -347,7 +350,11 @@ func ChannelRulesHandler(w http.ResponseWriter, r *http.Request) {
 			respondJSON(w, 400, map[string]string{"status": "error", "message": "Source and Target channels are required"})
 			return
 		}
-		rule, err := whatsapp.AddChannelForwardingRule(req.AdminAccountID, req.SourceJID, req.SourceName, req.TargetJID, req.TargetName)
+		stripLinks := true
+		if req.StripChannelLinks != nil {
+			stripLinks = *req.StripChannelLinks
+		}
+		rule, err := whatsapp.AddChannelForwardingRule(req.AdminAccountID, req.SourceJID, req.SourceName, req.TargetJID, req.TargetName, req.ForwardLogic, req.BlockURLs, stripLinks)
 		if err != nil {
 			respondJSON(w, 400, map[string]string{"status": "error", "message": err.Error()})
 			return
@@ -355,6 +362,44 @@ func ChannelRulesHandler(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, 200, map[string]interface{}{
 			"status":  "success",
 			"message": "Channel forwarding rule added successfully!",
+			"rule":    rule,
+		})
+	case "PUT":
+		var req struct {
+			ID                int    `json:"id"`
+			SourceJID         string `json:"source_jid"`
+			SourceName        string `json:"source_name"`
+			TargetJID         string `json:"target_jid"`
+			TargetName        string `json:"target_name"`
+			ForwardLogic      string `json:"forward_logic"`
+			BlockURLs         bool   `json:"block_urls"`
+			StripChannelLinks *bool  `json:"strip_channel_links"`
+			IsActive          *bool  `json:"is_active"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Invalid JSON payload"})
+			return
+		}
+		if req.ID <= 0 {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": "Valid rule ID is required"})
+			return
+		}
+		stripLinks := true
+		if req.StripChannelLinks != nil {
+			stripLinks = *req.StripChannelLinks
+		}
+		isActive := true
+		if req.IsActive != nil {
+			isActive = *req.IsActive
+		}
+		rule, err := whatsapp.UpdateChannelForwardingRule(req.ID, req.SourceJID, req.SourceName, req.TargetJID, req.TargetName, req.ForwardLogic, req.BlockURLs, stripLinks, isActive)
+		if err != nil {
+			respondJSON(w, 400, map[string]string{"status": "error", "message": err.Error()})
+			return
+		}
+		respondJSON(w, 200, map[string]interface{}{
+			"status":  "success",
+			"message": fmt.Sprintf("Forwarding rule #%d updated successfully!", req.ID),
 			"rule":    rule,
 		})
 	case "DELETE":
