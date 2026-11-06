@@ -617,6 +617,7 @@ type CartItemDetail struct {
 	ProductName string  `json:"product_name"`
 	UnitPrice   float64 `json:"unit_price"`
 	Qty         int     `json:"qty"`
+	Quantity    int     `json:"quantity,omitempty"`
 	LineTotal   float64 `json:"line_total"`
 }
 
@@ -931,6 +932,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 				ProductName: pName,
 				UnitPrice:   unitPrice,
 				Qty:         qty,
+				Quantity:    qty,
 				LineTotal:   lineTotal,
 			})
 		}

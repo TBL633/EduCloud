@@ -3088,7 +3088,7 @@ func ExecuteEscalateToHumanHand(client *whatsmeow.Client, username, senderPhone,
 	b.WriteString("🛒 *CART & SHOPPING DETAILS:*\n")
 	if calcRes != nil && len(calcRes.Items) > 0 {
 		for _, it := range calcRes.Items {
-			b.WriteString(fmt.Sprintf("• %s x%d = ₹%.2f\n", it.ProductName, it.Quantity, it.LineTotal))
+			b.WriteString(fmt.Sprintf("• %s x%d = ₹%.2f\n", it.ProductName, it.Qty, it.LineTotal))
 		}
 		b.WriteString(fmt.Sprintf("💰 *Total Cart Value:* ₹%.2f\n\n", calcRes.TotalAmount))
 	} else {
