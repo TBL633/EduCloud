@@ -811,24 +811,24 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	isSuccess := status == "SUCCESS" || status == "TXN_SUCCESS" || status == "PAID" || status == "COMPLETED" || status == "CONFIRMED"
 
-	var username, customerPhone string
+	var jid, tenantID string
 	var totalAmount float64
 
 	// Update Neon DB
 	if globalDB != nil {
-		// 1. Fetch current order info by order_id (case-insensitive exact)
+		// 1. Fetch order info directly from orders table
 		_ = globalDB.QueryRow(`
-			SELECT username, customer_phone, total_amount 
-			FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
-		`, orderID).Scan(&username, &customerPhone, &totalAmount)
+			SELECT COALESCE(jid, ''), COALESCE(tenant_id, 'admin'), COALESCE(customer_phone, ''), COALESCE(total_amount, 0)
+			FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+		`, orderID).Scan(&jid, &tenantID, &customerPhone, &totalAmount)
 
-		// 2. Partial match fallback
+		username = tenantID
+
+		// 2. Fallback to customer_order_states if needed
 		if username == "" || customerPhone == "" {
 			_ = globalDB.QueryRow(`
 				SELECT username, customer_phone, total_amount 
-				FROM customer_order_states 
-				WHERE order_id LIKE '%' || $1 || '%' OR $1 LIKE '%' || order_id || '%' 
-				ORDER BY updated_at DESC LIMIT 1
+				FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
 			`, orderID).Scan(&username, &customerPhone, &totalAmount)
 		}
 
@@ -857,11 +857,17 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if isSuccess {
-			// 2. Mark order as paid & confirmed in customer_order_states
+			// 2. Mark order as paid & confirmed in orders & customer_order_states
+			_, _ = globalDB.Exec(`
+				UPDATE orders 
+				SET payment_status = 'PAID', order_status = 'CONFIRMED', updated_at = NOW() 
+				WHERE LOWER(order_id) = LOWER($1) OR order_id = $1
+			`, orderID)
+
 			_, err = globalDB.Exec(`
 				UPDATE customer_order_states 
 				SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() 
-				WHERE LOWER(order_id) = LOWER($1)
+				WHERE LOWER(order_id) = LOWER($1) OR order_id = $1
 			`, orderID)
 			if err != nil {
 				log.Printf("⚠️ Error updating customer_order_states for %s: %v", orderID, err)

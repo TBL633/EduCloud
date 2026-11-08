@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"wa-server/payment"
 	"wa-server/whatsapp"
 )
 
@@ -548,113 +549,188 @@ func CheckoutOrderHandler(w http.ResponseWriter, r *http.Request) {
 		reqBody.PaymentMode = "COD"
 	}
 
-	// Calculate server-side total from items
+	// Normalize items to []whatsapp.CartItem
 	itemsBytes, _ := json.Marshal(reqBody.Items)
-	var parsedItems []map[string]interface{}
-	_ = json.Unmarshal(itemsBytes, &parsedItems)
+	var rawItems []map[string]interface{}
+	_ = json.Unmarshal(itemsBytes, &rawItems)
 
-	if len(parsedItems) == 0 {
-		respondJSON(w, 400, map[string]interface{}{"status": "error", "message": "Cart items cannot be empty."})
-		return
-	}
-
-	var calculatedSubtotal float64
-	for _, itm := range parsedItems {
-		var qty float64 = 1
-		if q, ok := itm["qty"].(float64); ok && q > 0 {
-			qty = q
-		}
-		var price float64 = 0
+	cartItems := make([]whatsapp.CartItem, 0, len(rawItems))
+	for _, itm := range rawItems {
+		idVal := itm["id"]
+		pID, _ := itm["product_id"].(string)
+		name, _ := itm["name"].(string)
+		var price float64
 		if p, ok := itm["price"].(float64); ok {
 			price = p
 		} else if pStr, ok := itm["price"].(string); ok {
-			var pVal float64
-			_, _ = fmt.Sscanf(pStr, "%f", &pVal)
-			price = pVal
+			_, _ = fmt.Sscanf(pStr, "%f", &price)
 		}
-		calculatedSubtotal += (price * qty)
+		var qty int = 1
+		if q, ok := itm["qty"].(float64); ok && q > 0 {
+			qty = int(q)
+		}
+		variant, _ := itm["selectedVariant"].(string)
+
+		cartItems = append(cartItems, whatsapp.CartItem{
+			ID:              idVal,
+			ProductID:       pID,
+			Name:            name,
+			Price:           price,
+			Qty:             qty,
+			SelectedVariant: variant,
+		})
 	}
 
-	if calculatedSubtotal <= 0 && reqBody.TotalAmount > 0 {
-		calculatedSubtotal = reqBody.TotalAmount
+	deliveryDetails := whatsapp.DeliveryInfo{
+		CustomerName:    reqBody.CustomerName,
+		DeliveryPhone:   cleanPhone,
+		DeliveryAddress: reqBody.DeliveryAddress,
+		PaymentMode:     reqBody.PaymentMode,
+		Subtotal:        reqBody.Subtotal,
+		DeliveryFee:     reqBody.DeliveryFee,
+		TotalAmount:     reqBody.TotalAmount,
 	}
 
-	finalTotal := calculatedSubtotal + reqBody.DeliveryFee
-	if finalTotal <= 0 {
-		finalTotal = reqBody.TotalAmount
+	// Call Centralized Order Processing Function
+	orderID, err := whatsapp.ProcessAndConfirmOrder(r.Context(), DB, nil, reqBody.JID, reqBody.TenantID, cartItems, deliveryDetails)
+	if err != nil {
+		log.Printf("⚠️ [Checkout Order Handler] ProcessAndConfirmOrder error: %v", err)
+		respondJSON(w, 500, map[string]interface{}{"status": "error", "message": "Failed to process order"})
+		return
 	}
 
-	orderID := fmt.Sprintf("ORD-%d-%04d", time.Now().Unix()%1000000, time.Now().Nanosecond()%10000)
+	isOnline := strings.ToUpper(strings.TrimSpace(reqBody.PaymentMode)) == "ONLINE"
 
-	if DB != nil {
-		// 1. Insert into orders table
-		_, err := DB.Exec(`INSERT INTO orders 
-			(order_id, jid, customer_phone, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', 'CONFIRMED', NOW(), NOW())
-			ON CONFLICT (order_id) DO UPDATE SET updated_at = NOW()`,
-			orderID, reqBody.JID, cleanPhone, reqBody.TenantID, reqBody.CustomerName, cleanPhone, reqBody.DeliveryAddress, string(itemsBytes), finalTotal, reqBody.PaymentMode)
-		if err != nil {
-			log.Printf("⚠️ Insert into orders warning: %v", err)
+	if isOnline {
+		if DB != nil {
+			_, _ = DB.Exec(`UPDATE orders SET payment_status = 'PENDING_PAYMENT', order_status = 'PENDING_PAYMENT' WHERE order_id = $1`, orderID)
+			_, _ = DB.Exec(`UPDATE customer_order_states SET payment_status = 'PENDING_PAYMENT', order_status = 'PENDING_PAYMENT' WHERE order_id = $1`, orderID)
 		}
 
-		// 2. Upsert customer_order_states for WhatsApp AI and thermal receipt generator
-		_, _ = DB.Exec(`INSERT INTO customer_order_states 
-			(username, customer_phone, jid, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, order_id, payment_mode, payment_status, order_status, updated_at)
-			VALUES ($1, $2, $3, $1, $4, $2, $5, $6, $7, $8, $9, 'PENDING', 'CONFIRMED', NOW())
-			ON CONFLICT (username, customer_phone) DO UPDATE SET
-				customer_name = EXCLUDED.customer_name,
-				delivery_phone = EXCLUDED.delivery_phone,
-				delivery_address = EXCLUDED.delivery_address,
-				items = EXCLUDED.items,
-				total_amount = EXCLUDED.total_amount,
-				order_id = EXCLUDED.order_id,
-				payment_mode = EXCLUDED.payment_mode,
-				payment_status = EXCLUDED.payment_status,
-				order_status = EXCLUDED.order_status,
-				jid = EXCLUDED.jid,
-				tenant_id = EXCLUDED.tenant_id,
-				updated_at = NOW()`,
-			reqBody.TenantID, cleanPhone, reqBody.JID, reqBody.CustomerName, reqBody.DeliveryAddress, string(itemsBytes), finalTotal, orderID, reqBody.PaymentMode)
+		payConfig := payment.GetPaymentConfig(reqBody.TenantID)
+		vpa := payConfig.MerchantVPA
+		if vpa == "" {
+			vpa = "9876543210@paytm"
+		}
+		payee := payConfig.PayeeName
+		if payee == "" {
+			payee = reqBody.TenantID
+		}
+		mid := payConfig.PaytmMID
 
-		// 3. Clear active_carts
-		_, _ = DB.Exec(`DELETE FROM active_carts WHERE (customer_phone = $1 OR jid = $2) AND (tenant_id = $3 OR LOWER(username) = LOWER($3))`, cleanPhone, reqBody.JID, reqBody.TenantID)
+		upiURI := payment.GenerateUPIString(payConfig, deliveryDetails.TotalAmount, orderID)
+		amtStr := fmt.Sprintf("%.2f", deliveryDetails.TotalAmount)
+		qrURL, _, errQR := payment.GenerateWorkerDynamicQR(vpa, payee, orderID, amtStr, "")
+		if errQR != nil || qrURL == "" {
+			qrURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=450x450&data=%s", upiURI)
+		}
 
-		// 4. Update customer record
-		_, _ = DB.Exec(`INSERT INTO customers (username, tenant_id, jid, wa_number, whatsapp_number, full_name, name, contact_phone, delivery_phone, delivery_address, saved_address, updated_at)
-			VALUES ($1, $1, $2, $3, $3, $4, $4, $3, $3, $5, $5, NOW())
-			ON CONFLICT (username, wa_number) DO UPDATE SET
-				name = EXCLUDED.name,
-				full_name = EXCLUDED.full_name,
-				delivery_phone = EXCLUDED.delivery_phone,
-				delivery_address = EXCLUDED.delivery_address,
-				saved_address = EXCLUDED.saved_address,
-				updated_at = NOW()`,
-			reqBody.TenantID, reqBody.JID, cleanPhone, reqBody.CustomerName, reqBody.DeliveryAddress)
+		if mid != "" {
+			_ = payment.StartWorkerPaymentCheck(mid, orderID, payment.GetAppWebhookURL())
+		}
+
+		respondJSON(w, 200, map[string]interface{}{
+			"status":         "success",
+			"message":        "Order created. Please scan UPI QR code to complete payment.",
+			"order_id":       orderID,
+			"payment_mode":   "ONLINE",
+			"payment_status": "PENDING_PAYMENT",
+			"order_status":   "PENDING_PAYMENT",
+			"total_amount":   deliveryDetails.TotalAmount,
+			"qr_image_url":   qrURL,
+			"upi_uri":        upiURI,
+			"order": map[string]interface{}{
+				"order_id":         orderID,
+				"jid":              reqBody.JID,
+				"customer_name":    reqBody.CustomerName,
+				"customer_phone":   cleanPhone,
+				"delivery_address": reqBody.DeliveryAddress,
+				"items":            cartItems,
+				"total_amount":     deliveryDetails.TotalAmount,
+				"payment_mode":     "ONLINE",
+				"payment_status":   "PENDING_PAYMENT",
+				"order_status":     "PENDING_PAYMENT",
+				"created_at":       time.Now().Format(time.RFC3339),
+			},
+		})
+		return
 	}
 
-	// 4. Trigger active WhatsApp push notification & thermal PDF receipt via whatsmeow
+	// Default COD flow: Trigger Centralized WhatsApp Notification asynchronously
 	go func() {
-		_ = whatsapp.TriggerWebOrderConfirmationPush(reqBody.TenantID, cleanPhone, orderID, finalTotal)
+		_ = whatsapp.SendOrderConfirmationWhatsApp(nil, reqBody.JID, orderID)
 	}()
 
 	respondJSON(w, 200, map[string]interface{}{
 		"status":       "success",
 		"message":      "Order Placed Successfully! We've sent the confirmation and receipt to your WhatsApp.",
 		"order_id":     orderID,
-		"total_amount": finalTotal,
+		"total_amount": deliveryDetails.TotalAmount,
 		"order": map[string]interface{}{
 			"order_id":         orderID,
 			"jid":              reqBody.JID,
 			"customer_name":    reqBody.CustomerName,
 			"customer_phone":   cleanPhone,
 			"delivery_address": reqBody.DeliveryAddress,
-			"items":            parsedItems,
-			"total_amount":     finalTotal,
+			"items":            cartItems,
+			"total_amount":     deliveryDetails.TotalAmount,
 			"payment_mode":     reqBody.PaymentMode,
 			"payment_status":   "PENDING",
 			"order_status":     "CONFIRMED",
 			"created_at":       time.Now().Format(time.RFC3339),
 		},
+	})
+}
+
+// OrderStatusHandler handles GET /api/orders/status & GET /api/orders/status/:orderId
+func OrderStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	orderID := strings.TrimSpace(r.URL.Query().Get("order_id"))
+	if orderID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) >= 3 && parts[0] == "api" && parts[1] == "orders" && parts[2] == "status" {
+			if len(parts) >= 4 {
+				orderID = strings.TrimSpace(parts[3])
+			}
+		}
+	}
+
+	if orderID == "" {
+		respondJSON(w, 400, map[string]interface{}{"status": "error", "message": "order_id parameter is required"})
+		return
+	}
+
+	var paymentStatus, orderStatus, tenantID string
+	var totalAmt float64
+
+	if DB != nil {
+		err := DB.QueryRow(`
+			SELECT COALESCE(payment_status, 'PENDING'), COALESCE(order_status, 'CONFIRMED'), COALESCE(total_amount, 0), COALESCE(tenant_id, 'admin')
+			FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+		`, orderID).Scan(&paymentStatus, &orderStatus, &totalAmt, &tenantID)
+
+		if err != nil {
+			_ = DB.QueryRow(`
+				SELECT COALESCE(payment_status, 'unpaid'), COALESCE(order_status, 'in_progress'), COALESCE(total_amount, 0), COALESCE(username, 'admin')
+				FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+			`, orderID).Scan(&paymentStatus, &orderStatus, &totalAmt, &tenantID)
+		}
+	}
+
+	normPayStatus := strings.ToUpper(strings.TrimSpace(paymentStatus))
+	isPaid := normPayStatus == "PAID" || normPayStatus == "SUCCESS" || normPayStatus == "TXN_SUCCESS" || normPayStatus == "COMPLETED"
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":         "success",
+		"order_id":       orderID,
+		"payment_status": normPayStatus,
+		"order_status":   orderStatus,
+		"total_amount":   totalAmt,
+		"paid":           isPaid,
 	})
 }
 

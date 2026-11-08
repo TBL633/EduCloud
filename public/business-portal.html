@@ -1073,6 +1073,19 @@
                                     <input type="text" id="paytm-vpa" placeholder="e.g. merchant_vpa@paytm" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-600">
                                 </div>
                             </div>
+
+                            <!-- Allow Cash on Delivery (COD) Toggle -->
+                            <div class="pt-3 border-t border-emerald-900/40 flex items-center justify-between">
+                                <div>
+                                    <span class="block text-xs font-bold text-slate-200">Allow Cash on Delivery (COD)</span>
+                                    <span class="text-[11px] text-slate-400">If disabled, customers on Web and WhatsApp must pay online via UPI/QR code.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="allow-cod-check" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-slate-900 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                </label>
+                            </div>
+
                             <p class="text-[11px] text-slate-400 leading-relaxed">
                                 <span class="font-bold text-emerald-400">Dynamic QR Integration:</span> When a customer chooses online payment on WhatsApp, the bot generates a dynamic UPI QR code with your exact Merchant VPA and Order Amount for instant scanning and auto-verification.
                             </p>
@@ -3638,6 +3651,7 @@
             const paytmMid = document.getElementById('paytm-mid')?.value.trim() || '';
             const paytmVpa = document.getElementById('paytm-vpa')?.value.trim() || '';
             const storePolicies = document.getElementById('ai-store-policies')?.value.trim() || '';
+            const allowCOD = document.getElementById('allow-cod-check')?.checked ?? true;
 
             // Automatically catch typed key from new input if user forgot to click Add
             const newKeyInput = document.getElementById('new-api-key-input');
@@ -3684,6 +3698,7 @@
                         paytm_mid: paytmMid,
                         paytm_vpa: paytmVpa,
                         store_policies: storePolicies,
+                        allow_cod: allowCOD,
                         username
                     })
                 });
@@ -3748,6 +3763,7 @@
                 const paytmMidEl = document.getElementById('paytm-mid');
                 const paytmVpaEl = document.getElementById('paytm-vpa');
                 const storePoliciesEl = document.getElementById('ai-store-policies');
+                const allowCODEl = document.getElementById('allow-cod-check');
 
                 if (platformEl) platformEl.value = data.ai_provider || data.platform || 'Gemini';
                 if (modelEl) modelEl.value = data.ai_model || data.model || '';
@@ -3765,6 +3781,7 @@
                 if (paytmMidEl) paytmMidEl.value = data.paytm_mid || '';
                 if (paytmVpaEl) paytmVpaEl.value = data.paytm_vpa || '';
                 if (storePoliciesEl) storePoliciesEl.value = data.store_policies || '';
+                if (allowCODEl) allowCODEl.checked = data.allow_cod ?? true;
 
                 if (data.api_key !== undefined) {
                     const raw = String(data.api_key || '').trim();

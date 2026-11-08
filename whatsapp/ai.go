@@ -48,6 +48,7 @@ type UserConfigRAM struct {
 	FreeDeliveryRadiusKM    float64
 	DeliveryChargeAmount    float64
 	RequireCustomerLocation bool
+	AllowCOD                bool
 	LastCached              time.Time
 }
 
@@ -318,6 +319,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 		FreeDeliveryRadiusKM:    3.0,
 		DeliveryChargeAmount:    40.0,
 		RequireCustomerLocation: false,
+		AllowCOD:                true,
 		LastCached:              time.Now(),
 	}
 
@@ -325,7 +327,8 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 		var p, k, s, m, bName, bType, lang, pol string
 		var pMidUser, pVpaUser string
 		var t, maxRad, freeRad, delCharge float64
-		var ar, ic, reqLoc bool
+		var ar, ic, reqLoc, allowCOD bool
+		allowCOD = true
 		err := DB.QueryRow(`SELECT 
 			COALESCE(ai_provider, 'groq'), 
 			COALESCE(api_key, ''), 
@@ -343,8 +346,9 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(max_delivery_radius_km, 15.0),
 			COALESCE(free_delivery_radius_km, 3.0),
 			COALESCE(delivery_charge_amount, 40.0),
-			COALESCE(require_customer_location, false)
-			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol, &pMidUser, &pVpaUser, &maxRad, &freeRad, &delCharge, &reqLoc)
+			COALESCE(require_customer_location, false),
+			COALESCE(allow_cod, true)
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol, &pMidUser, &pVpaUser, &maxRad, &freeRad, &delCharge, &reqLoc, &allowCOD)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -361,6 +365,7 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.FreeDeliveryRadiusKM = freeRad
 			cfg.DeliveryChargeAmount = delCharge
 			cfg.RequireCustomerLocation = reqLoc
+			cfg.AllowCOD = allowCOD
 			if bName != "" {
 				cfg.BusinessName = bName
 			}
@@ -1596,6 +1601,12 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		}
 	} else {
 		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, "", catalogContext)
+	}
+
+	if cfg != nil && !cfg.AllowCOD {
+		stableSysPrompt += "\n\nPAYMENT METHOD POLICY: If `allow_cod` is false, strictly tell the user that Cash on Delivery is NOT available for this store and they must pay online via UPI/QR code. Do NOT accept Cash on Delivery orders under any circumstances."
+	} else {
+		stableSysPrompt += "\n\nPAYMENT METHOD POLICY: Cash on Delivery (COD) and Online Payment (UPI/QR) are both available for this store."
 	}
 
 	// Returning Customer Context Injection

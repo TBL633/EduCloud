@@ -21,8 +21,9 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 		var provider, apiKey, sysPrompt, aiModel, notifPhone, bName, bType, lang, pMid, pVpa, policies string
 		var temp, maxRadVal, freeRadVal, delChargeVal float64
-		var autoReply, importCatalogDetails, reqLoc bool
+		var autoReply, importCatalogDetails, reqLoc, allowCOD bool
 		importCatalogDetails = true
+		allowCOD = true
 
 		if DB != nil {
 			_ = DB.QueryRow(`SELECT 
@@ -43,9 +44,10 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 				COALESCE(max_delivery_radius_km, 15.0),
 				COALESCE(free_delivery_radius_km, 3.0),
 				COALESCE(delivery_charge_amount, 40.0),
-				COALESCE(require_customer_location, false)
+				COALESCE(require_customer_location, false),
+				COALESCE(allow_cod, true)
 				FROM users WHERE LOWER(username)=LOWER($1)`, username).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang, &pMid, &pVpa, &policies, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc)
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang, &pMid, &pVpa, &policies, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &allowCOD)
 		}
 
 		if bName == "" {
@@ -82,6 +84,7 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			"free_delivery_radius_km":   freeRadVal,
 			"delivery_charge_amount":    delChargeVal,
 			"require_customer_location": reqLoc,
+			"allow_cod":                 allowCOD,
 		})
 		return
 	}
@@ -111,6 +114,7 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 			FreeDeliveryRadiusKM    interface{} `json:"free_delivery_radius_km"`
 			DeliveryChargeAmount    interface{} `json:"delivery_charge_amount"`
 			RequireCustomerLocation *bool       `json:"require_customer_location"`
+			AllowCOD                *bool       `json:"allow_cod"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -160,6 +164,9 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 		if DB != nil {
 			if req.RequireCustomerLocation != nil {
 				_, _ = DB.Exec("UPDATE users SET require_customer_location=$1 WHERE LOWER(username)=LOWER($2)", *req.RequireCustomerLocation, username)
+			}
+			if req.AllowCOD != nil {
+				_, _ = DB.Exec("UPDATE users SET allow_cod=$1 WHERE LOWER(username)=LOWER($2)", *req.AllowCOD, username)
 			}
 			_, err := DB.Exec(`UPDATE users SET 
 				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10,

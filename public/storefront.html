@@ -320,6 +320,26 @@
                     </div>
                     <textarea id="cust-address-input" rows="2" placeholder="Full Delivery Address & Landmark (Required)" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 resize-none"></textarea>
                 </div>
+
+                <!-- Payment Method Selector -->
+                <div class="pt-2 border-t border-slate-100 space-y-1.5">
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                        <i class="fa-solid fa-credit-card text-emerald-600"></i> Payment Method
+                    </label>
+                    <div class="grid grid-cols-2 gap-2" id="payment-method-options">
+                        <label id="opt-cod-label" class="flex items-center gap-2 p-2 bg-slate-50 border border-emerald-500 rounded-xl cursor-pointer font-bold text-xs text-slate-800 shadow-2xs transition">
+                            <input type="radio" name="payment_mode_selection" value="COD" checked onclick="selectPaymentMethod('COD')" class="accent-emerald-600">
+                            <span class="truncate"><i class="fa-solid fa-hand-holding-dollar text-emerald-600 mr-1"></i>COD</span>
+                        </label>
+                        <label id="opt-online-label" class="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer font-bold text-xs text-slate-800 transition">
+                            <input type="radio" name="payment_mode_selection" value="ONLINE" onclick="selectPaymentMethod('ONLINE')" class="accent-emerald-600">
+                            <span class="truncate"><i class="fa-solid fa-qrcode text-emerald-600 mr-1"></i>Online (UPI)</span>
+                        </label>
+                    </div>
+                    <p id="cod-disabled-notice" class="hidden text-[10px] text-amber-700 font-bold bg-amber-50 p-2 rounded-xl border border-amber-200">
+                        <i class="fa-solid fa-circle-info mr-1"></i> Cash on Delivery is disabled by this store. Please pay online via UPI.
+                    </p>
+                </div>
             </div>
 
             <!-- Cart Price Summary & Direct Checkout -->
@@ -376,7 +396,7 @@
                     </div>
                     <div class="flex justify-between items-center">
                         <span class="text-slate-500">Payment Mode:</span>
-                        <span class="font-bold text-slate-800">Cash on Delivery (COD)</span>
+                        <span id="success-payment-mode" class="font-bold text-slate-800">Cash on Delivery (COD)</span>
                     </div>
                     <div class="flex justify-between items-center text-[11px] pt-1.5 border-t border-slate-200">
                         <span class="text-slate-500">WhatsApp Push:</span>
@@ -396,6 +416,51 @@
                         Continue Shopping
                     </button>
                 </div>
+            </div>
+        </div>
+
+        <!-- 9. ONLINE UPI QR PAYMENT MODAL -->
+        <div id="qr-payment-backdrop" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-70 transition-opacity"></div>
+        <div id="qr-payment-modal" class="hidden fixed inset-0 z-75 flex items-center justify-center p-4">
+            <div class="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 p-5 text-center space-y-4 transform transition duration-300">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div class="flex items-center gap-2 text-left">
+                        <div class="w-9 h-9 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shadow-inner">
+                            <i class="fa-solid fa-qrcode"></i>
+                        </div>
+                        <div>
+                            <h4 class="text-xs font-black text-slate-900">Scan & Pay via UPI</h4>
+                            <p id="qr-store-name" class="text-[10px] text-slate-500 font-medium">WaMart Store</p>
+                        </div>
+                    </div>
+                    <button type="button" onclick="cancelOnlineQRPayment()" class="text-slate-400 hover:text-slate-600 text-sm p-1 cursor-pointer">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <div class="bg-emerald-50/70 p-3 rounded-2xl border border-emerald-100 flex items-center justify-between">
+                    <span class="text-xs text-slate-600 font-bold">Total Amount Payable:</span>
+                    <span id="qr-modal-amount" class="text-lg font-black text-emerald-600 font-mono">₹0</span>
+                </div>
+
+                <!-- QR Code Display Box -->
+                <div class="p-3 bg-white rounded-2xl border-2 border-dashed border-emerald-500/30 flex flex-col items-center justify-center space-y-2">
+                    <img id="qr-code-img" src="" alt="Scan UPI QR Code" class="w-48 h-48 rounded-xl object-contain shadow-xs border border-slate-100">
+                    <p class="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-notch fa-spin text-emerald-600"></i>
+                        <span>Waiting for payment verification...</span>
+                    </p>
+                </div>
+
+                <!-- Direct UPI Intent Button -->
+                <a id="btn-open-upi-app" href="#" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-2xl flex items-center justify-center gap-2 transition shadow-md shadow-emerald-600/20">
+                    <i class="fa-solid fa-mobile-screen-button text-sm"></i>
+                    <span>Open UPI App (GPay / PhonePe / Paytm)</span>
+                </a>
+
+                <p class="text-[10px] text-slate-400 font-medium leading-tight">
+                    Scan with GPay, PhonePe, Paytm, or BHIM. Do not close this window until payment is complete.
+                </p>
             </div>
         </div>
 
@@ -663,6 +728,9 @@
             if (annBadge) {
                 annBadge.innerText = t.delivery_charge_amount > 0 ? `₹${t.delivery_charge_amount} Delivery Fee Beyond Free Radius` : `Free Delivery`;
             }
+
+            const allowCOD = storeData.allow_cod ?? t.allow_cod ?? true;
+            applyCODSetting(allowCOD);
 
             // Store Logo
             const logoImg = document.getElementById('store-logo-img');
@@ -1261,6 +1329,54 @@
         // DIRECT WEB ORDER CHECKOUT (Omnichannel API)
         // ==========================================
         let lastPlacedOrderId = '';
+        let selectedPaymentMode = 'COD';
+        let qrPollingInterval = null;
+
+        function selectPaymentMethod(mode) {
+            selectedPaymentMode = mode;
+            const codLabel = document.getElementById('opt-cod-label');
+            const onlineLabel = document.getElementById('opt-online-label');
+            const btnLabel = document.getElementById('btn-checkout-label');
+
+            if (mode === 'ONLINE') {
+                if (codLabel) {
+                    codLabel.classList.remove('border-emerald-500', 'shadow-2xs');
+                    codLabel.classList.add('border-slate-200');
+                }
+                if (onlineLabel) {
+                    onlineLabel.classList.add('border-emerald-500', 'shadow-2xs');
+                    onlineLabel.classList.remove('border-slate-200');
+                }
+                if (btnLabel) btnLabel.innerText = 'Pay Online via UPI QR';
+            } else {
+                if (onlineLabel) {
+                    onlineLabel.classList.remove('border-emerald-500', 'shadow-2xs');
+                    onlineLabel.classList.add('border-slate-200');
+                }
+                if (codLabel) {
+                    codLabel.classList.add('border-emerald-500', 'shadow-2xs');
+                    codLabel.classList.remove('border-slate-200');
+                }
+                if (btnLabel) btnLabel.innerText = 'Place Order Now';
+            }
+        }
+
+        function applyCODSetting(allowCOD) {
+            const codOption = document.getElementById('opt-cod-label');
+            const codNotice = document.getElementById('cod-disabled-notice');
+            const codRadio = document.querySelector('input[name="payment_mode_selection"][value="COD"]');
+            const onlineRadio = document.querySelector('input[name="payment_mode_selection"][value="ONLINE"]');
+
+            if (allowCOD === false) {
+                if (codOption) codOption.classList.add('hidden');
+                if (codNotice) codNotice.classList.remove('hidden');
+                if (onlineRadio) onlineRadio.checked = true;
+                selectPaymentMethod('ONLINE');
+            } else {
+                if (codOption) codOption.classList.remove('hidden');
+                if (codNotice) codNotice.classList.add('hidden');
+            }
+        }
 
         async function placeDirectOrder() {
             const items = Object.values(cart);
@@ -1332,7 +1448,7 @@
                 customer_phone: custPhone,
                 delivery_phone: custPhone,
                 delivery_address: custAddr,
-                payment_mode: 'COD',
+                payment_mode: selectedPaymentMode,
                 items: cartItemsPayload,
                 subtotal: subtotal,
                 delivery_fee: delFee,
@@ -1356,31 +1472,28 @@
 
                 lastPlacedOrderId = data.order_id;
 
-                // Reset cart & update UI
-                cart = {};
-                updateCartUI();
-                renderProducts();
-
-                // Close cart drawer
-                toggleCartDrawer(false);
-
-                // Populate and display Order Success Modal
-                const successOrderIdEl = document.getElementById('success-order-id');
-                const successTotalEl = document.getElementById('success-order-total');
-                if (successOrderIdEl) successOrderIdEl.innerText = `#${data.order_id}`;
-                if (successTotalEl) successTotalEl.innerText = `₹${data.total_amount || totalAmount}`;
-
-                const successBackdrop = document.getElementById('order-success-backdrop');
-                const successModal = document.getElementById('order-success-modal');
-                if (successBackdrop) successBackdrop.classList.remove('hidden');
-                if (successModal) successModal.classList.remove('hidden');
-
                 // Cache order so Profile -> My Orders shows it immediately
                 if (data.order) {
                     customerOrdersCache.unshift(data.order);
                 }
 
-                console.log(`🎉 [Direct Checkout] Order #${data.order_id} placed. Confirmation & receipt delivered via WhatsApp.`);
+                if (selectedPaymentMode === 'ONLINE' || data.payment_mode === 'ONLINE') {
+                    // Open QR Payment Modal & Start Polling
+                    toggleCartDrawer(false);
+                    openQRPaymentModal(data.order_id, data.total_amount || totalAmount, data.qr_image_url, data.upi_uri);
+                    startQRPaymentPolling(data.order_id, data.total_amount || totalAmount);
+                } else {
+                    // Reset cart & update UI
+                    cart = {};
+                    updateCartUI();
+                    renderProducts();
+
+                    // Close cart drawer & show success modal
+                    toggleCartDrawer(false);
+                    showOrderSuccessModal(data.order_id, data.total_amount || totalAmount, 'Cash on Delivery (COD)');
+                }
+
+                console.log(`🎉 [Direct Checkout] Order #${data.order_id} created (${selectedPaymentMode}).`);
             } catch (err) {
                 console.error('Order checkout error:', err);
                 alert(err.message || 'Error placing order. Please try again.');
@@ -1389,10 +1502,86 @@
                     checkoutBtn.disabled = false;
                     checkoutBtn.innerHTML = `
                         <i class="fa-solid fa-bag-shopping text-sm"></i>
-                        <span id="btn-checkout-label">Place Order Now</span>
+                        <span id="btn-checkout-label">${selectedPaymentMode === 'ONLINE' ? 'Pay Online via UPI QR' : 'Place Order Now'}</span>
                     `;
                 }
             }
+        }
+
+        function openQRPaymentModal(orderId, amount, qrURL, upiURI) {
+            const storeNameEl = document.getElementById('qr-store-name');
+            const amountEl = document.getElementById('qr-modal-amount');
+            const imgEl = document.getElementById('qr-code-img');
+            const upiBtn = document.getElementById('btn-open-upi-app');
+
+            if (storeNameEl) storeNameEl.innerText = storeData.tenant?.store_name || storeData.tenant?.username || 'WaMart Store';
+            if (amountEl) amountEl.innerText = `₹${amount}`;
+            if (imgEl && qrURL) imgEl.src = qrURL;
+            if (upiBtn && upiURI) upiBtn.href = upiURI;
+
+            const backdrop = document.getElementById('qr-payment-backdrop');
+            const modal = document.getElementById('qr-payment-modal');
+            if (backdrop) backdrop.classList.remove('hidden');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeQRPaymentModal() {
+            stopQRPaymentPolling();
+            const backdrop = document.getElementById('qr-payment-backdrop');
+            const modal = document.getElementById('qr-payment-modal');
+            if (backdrop) backdrop.classList.add('hidden');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function cancelOnlineQRPayment() {
+            if (confirm('Cancel payment verification? Your order has been registered.')) {
+                closeQRPaymentModal();
+            }
+        }
+
+        function startQRPaymentPolling(orderId, totalAmount) {
+            stopQRPaymentPolling();
+            qrPollingInterval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/orders/status/${encodeURIComponent(orderId)}`);
+                    const data = await res.json();
+                    if (data.status === 'success' && (data.paid || data.payment_status === 'PAID')) {
+                        stopQRPaymentPolling();
+                        closeQRPaymentModal();
+
+                        // Reset cart & update UI
+                        cart = {};
+                        updateCartUI();
+                        renderProducts();
+
+                        showOrderSuccessModal(orderId, totalAmount, 'Online Payment (Verified ✅)');
+                    }
+                } catch (e) {
+                    console.warn('QR polling status check warning:', e);
+                }
+            }, 3000);
+        }
+
+        function stopQRPaymentPolling() {
+            if (qrPollingInterval) {
+                clearInterval(qrPollingInterval);
+                qrPollingInterval = null;
+            }
+        }
+
+        function showOrderSuccessModal(orderId, totalAmount, payModeStr = 'Cash on Delivery (COD)') {
+            const successOrderIdEl = document.getElementById('success-order-id');
+            const successTotalEl = document.getElementById('success-order-total');
+            const successPayModeEl = document.getElementById('success-payment-mode');
+
+            if (successOrderIdEl) successOrderIdEl.innerText = `#${orderId}`;
+            if (successTotalEl) successTotalEl.innerText = `₹${totalAmount}`;
+            if (successPayModeEl) successPayModeEl.innerText = payModeStr;
+
+            const successBackdrop = document.getElementById('order-success-backdrop');
+            const successModal = document.getElementById('order-success-modal');
+            if (successBackdrop) successBackdrop.classList.remove('hidden');
+            if (successModal) successModal.classList.remove('hidden');
         }
 
         function closeOrderSuccessModal() {

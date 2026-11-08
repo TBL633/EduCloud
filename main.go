@@ -102,6 +102,17 @@ func main() {
 	payment.SetPaymentVerifiedCallback(func(tenantID, orderID, amount, txnID string) {
 		whatsapp.TriggerConfirmedPaymentLead(tenantID, "", orderID, amount, txnID)
 	})
+	payment.SetWebhookPaymentReceivedCallback(func(orderID, status, amount string) error {
+		log.Printf("⚡ [Webhook Auto-Trigger] Executing SendOrderConfirmationWhatsApp for Order #%s", orderID)
+		var jid string
+		if database.DB != nil {
+			_ = database.DB.QueryRow(`SELECT COALESCE(jid, '') FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1`, orderID).Scan(&jid)
+			if jid == "" {
+				_ = database.DB.QueryRow(`SELECT COALESCE(jid, '') FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1`, orderID).Scan(&jid)
+			}
+		}
+		return whatsapp.SendOrderConfirmationWhatsApp(nil, jid, orderID)
+	})
 
 	// 2. Initialize Whatsmeow Multi-Device Store
 	dbURL := database.GetDBURL()
@@ -245,6 +256,8 @@ func main() {
 	http.HandleFunc("/api/customer/cart", corsMiddleware(api.CustomerCartHandler))
 	http.HandleFunc("/api/orders/checkout", corsMiddleware(api.CheckoutOrderHandler))
 	http.HandleFunc("/api/customer/checkout", corsMiddleware(api.CheckoutOrderHandler))
+	http.HandleFunc("/api/orders/status", corsMiddleware(api.OrderStatusHandler))
+	http.HandleFunc("/api/orders/status/", corsMiddleware(api.OrderStatusHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

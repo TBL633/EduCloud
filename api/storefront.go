@@ -50,7 +50,8 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 	var username, bName, accName, sSlug, tagline, logoURL, bannerURL, phone, notifPhone, waJid string
 	var fullAddress, localArea string
 	var maxRad, freeRad, delCharge float64
-	var reqLoc bool
+	var reqLoc, allowCOD bool
+	allowCOD = true
 
 	err := DB.QueryRow(`SELECT 
 		username, 
@@ -68,13 +69,14 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		COALESCE(max_delivery_radius_km, 15.0),
 		COALESCE(free_delivery_radius_km, 3.0),
 		COALESCE(delivery_charge_amount, 40.0),
-		COALESCE(require_customer_location, false)
+		COALESCE(require_customer_location, false),
+		COALESCE(allow_cod, true)
 		FROM users 
 		WHERE LOWER(store_slug)=LOWER($1) OR LOWER(username)=LOWER($1)
 		LIMIT 1`, cleanSlug).Scan(
 		&username, &bName, &accName, &sSlug, &tagline, &logoURL, &bannerURL,
 		&phone, &notifPhone, &waJid, &fullAddress, &localArea,
-		&maxRad, &freeRad, &delCharge, &reqLoc,
+		&maxRad, &freeRad, &delCharge, &reqLoc, &allowCOD,
 	)
 
 	if err != nil {
@@ -121,6 +123,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		"free_delivery_radius_km":   freeRad,
 		"delivery_charge_amount":    delCharge,
 		"require_customer_location": reqLoc,
+		"allow_cod":                 allowCOD,
 	}
 
 	// 2. Fetch Active Categories
@@ -197,6 +200,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, 200, map[string]interface{}{
 		"status":     "success",
+		"allow_cod":  allowCOD,
 		"tenant":     tenantInfo,
 		"categories": categories,
 		"products":   products,

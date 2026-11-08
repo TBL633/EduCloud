@@ -144,6 +144,7 @@ func migrateSchema() {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS allow_cod BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS import_catalog_details BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS automation_access BOOLEAN DEFAULT true;`,
@@ -407,6 +408,18 @@ func migrateSchema() {
 		`CREATE INDEX IF NOT EXISTS idx_orders_jid ON orders(jid);`,
 		`CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);`,
 		`CREATE INDEX IF NOT EXISTS idx_orders_tenant ON orders(tenant_id);`,
+		`CREATE TABLE IF NOT EXISTS order_items (
+			id SERIAL PRIMARY KEY,
+			order_id VARCHAR(100) NOT NULL,
+			tenant_id VARCHAR(100) NOT NULL DEFAULT '',
+			product_id VARCHAR(100) DEFAULT '',
+			product_name VARCHAR(255) NOT NULL,
+			price NUMERIC(10, 2) DEFAULT 0,
+			qty INT DEFAULT 1,
+			selected_variant VARCHAR(100) DEFAULT '',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);`,
 	}
 
 	for _, q := range queries {
