@@ -1603,6 +1603,7 @@ func GenerateAIReply(username, customerPhone, incomingText, provider, apiKey, sy
 		stableSysPrompt = BuildUniversalSystemPrompt(bName, bType, lang, "", catalogContext)
 	}
 
+	cfg := GetUserConfigRAM(cleanUsr)
 	if cfg != nil && !cfg.AllowCOD {
 		stableSysPrompt += "\n\nPAYMENT METHOD POLICY: If `allow_cod` is false, strictly tell the user that Cash on Delivery is NOT available for this store and they must pay online via UPI/QR code. Do NOT accept Cash on Delivery orders under any circumstances."
 	} else {
