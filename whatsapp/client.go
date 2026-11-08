@@ -1248,109 +1248,148 @@ func CheckAndProcessLead(username string, client *whatsmeow.Client, senderPhone 
 	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
 }
 
-// TriggerConfirmedPaymentLead is called when Paytm Soundbox / Gateway verifies a payment (TXN_SUCCESS)
-func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID string) {
-	if DB == nil {
-		return
-	}
+// ProcessAIPaymentSuccessWebhook handles asynchronous payment webhook triggers, injecting a synthetic system event into the AI brain.
+func ProcessAIPaymentSuccessWebhook(username, customerPhone, orderID, amount, txnID string) error {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	cleanPhone := FormatPhone(customerPhone)
+	cleanOrdID := strings.TrimSpace(orderID)
+	cleanAmt := strings.TrimSpace(amount)
 
-	// If customerPhone is not supplied directly, retrieve customer_phone and tenant username from customer_order_states
-	if (cleanPhone == "" || cleanUsr == "" || cleanUsr == "admin") && orderID != "" {
-		var dbPhone, dbUsr string
-		_ = DB.QueryRow(`
-			SELECT customer_phone, username 
-			FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
-		`, orderID).Scan(&dbPhone, &dbUsr)
-		if dbPhone != "" && cleanPhone == "" {
-			cleanPhone = FormatPhone(dbPhone)
-		}
-		if dbUsr != "" && (cleanUsr == "" || cleanUsr == "admin") {
-			cleanUsr = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(dbUsr), "@"))
-		}
-	}
-
-	if cleanPhone == "" && strings.HasPrefix(orderID, "ORD_") {
-		parts := strings.Split(orderID, "_")
-		if len(parts) >= 2 {
-			phoneSuffix := parts[1]
+	if DB != nil && cleanOrdID != "" {
+		if cleanPhone == "" || cleanUsr == "" || cleanUsr == "admin" {
 			var dbPhone, dbUsr string
 			_ = DB.QueryRow(`
-				SELECT wa_number, username FROM customers 
-				WHERE wa_number LIKE '%' || $1 
-				ORDER BY updated_at DESC LIMIT 1
-			`, phoneSuffix).Scan(&dbPhone, &dbUsr)
-			if dbPhone != "" {
+				SELECT customer_phone, username 
+				FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+			`, cleanOrdID).Scan(&dbPhone, &dbUsr)
+			if dbPhone != "" && cleanPhone == "" {
 				cleanPhone = FormatPhone(dbPhone)
 			}
 			if dbUsr != "" && (cleanUsr == "" || cleanUsr == "admin") {
 				cleanUsr = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(dbUsr), "@"))
 			}
 		}
+
+		// Update order state in Neon DB to PAID
+		_, _ = DB.Exec(`
+			UPDATE customer_order_states 
+			SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() 
+			WHERE LOWER(order_id) = LOWER($1)
+		`, cleanOrdID)
+
+		if cleanPhone != "" {
+			_, _ = DB.Exec(`
+				UPDATE customers 
+				SET current_state = 'ORDER_CONFIRMED', payment_status = 'PAID', updated_at = NOW() 
+				WHERE wa_number = $1
+			`, cleanPhone)
+			_, _ = DB.Exec(`
+				UPDATE active_carts 
+				SET payment_status = 'PAID' 
+				WHERE customer_phone = $1
+			`, cleanPhone)
+		}
 	}
 
-	inquiry := fmt.Sprintf("Order %s | Amount: ₹%s | TxnID: %s", orderID, amount, txnID)
-
-	// Insert into leads table as verified paid
-	var leadID int
-	err := DB.QueryRow(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at)
-		VALUES ($1, $2, $3, 'Confirmed Paid (Paytm UPI)', NOW()) RETURNING id`,
-		cleanUsr, cleanPhone, inquiry).Scan(&leadID)
-	if err == nil {
-		log.Printf("💰 [Confirmed Paid Lead #%d] +%s (@%s) -> ₹%s (Txn: %s)", leadID, cleanPhone, cleanUsr, amount, txnID)
+	if cleanUsr == "" || cleanUsr == "admin" {
+		cleanUsr = "admin"
 	}
 
+	if cleanPhone == "" {
+		log.Printf("⚠️ [ProcessAIPaymentSuccessWebhook] Cannot route AI event - customer phone missing for order #%s", cleanOrdID)
+		return fmt.Errorf("customer phone missing for order %s", cleanOrdID)
+	}
+
+	cfg := GetUserConfigRAM(cleanUsr)
+
+	// 1. Construct synthetic system message for the AI
+	syntheticMsg := fmt.Sprintf("SYSTEM EVENT: Payment of ₹%s for order %s has been successfully received via Paytm. Inform the user enthusiastically, and strictly command the system to generate the bill.", cleanAmt, cleanOrdID)
+
+	log.Printf("🤖 [Paytm Webhook AI Injection] Processing synthetic event for +%s (@%s) -> Order #%s (₹%s)", cleanPhone, cleanUsr, cleanOrdID, cleanAmt)
+
+	// Save synthetic system message to customer chat memory
+	go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "user", syntheticMsg)
+
+	// 2. Call Octopus AI Brain with the synthetic event
+	octopusResp, errAI := GenerateOctopusAIReply(cleanUsr, cleanPhone, syntheticMsg, cfg)
+
+	activeClient := GetOrCreateClient(cleanUsr)
+	if activeClient == nil || !activeClient.IsLoggedIn() {
+		activeClient = GetAnyLoggedInClient()
+	}
+
+	if errAI != nil || octopusResp == nil {
+		log.Printf("⚠️ [Paytm Webhook AI Error] AI reply failed for +%s: %v. Executing fallback order confirmation.", cleanPhone, errAI)
+		fallbackMsg := fmt.Sprintf("🎉 *ORDER CONFIRMED & PAYMENT RECEIVED* ✅\n\n• *Order ID:* #%s\n• *Amount Paid:* ₹%s\n\nAapka order safaltapurvak confirm ho gaya hai! Humne aapka PDF bill receipt neeche bhej diya hai. Dhanyawad! 🙏✨🚚", cleanOrdID, cleanAmt)
+		if activeClient != nil && activeClient.IsLoggedIn() {
+			_ = SendMessage(activeClient, cleanPhone, fallbackMsg)
+			_ = SendPDFReceiptHand(activeClient, cleanUsr, cleanPhone, cleanOrdID)
+			_ = ClearActiveCart(cleanUsr, cleanPhone)
+		}
+		PushToLiveChat(cleanUsr, cleanPhone, fallbackMsg, "outgoing_ai")
+		go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", fallbackMsg)
+		return nil
+	}
+
+	// 3. Deliver AI enthusiastic reply text
+	replyText := SanitizeAIReplyText(octopusResp.AIReplyText)
+	if replyText != "" && activeClient != nil && activeClient.IsLoggedIn() {
+		_ = SendMessage(activeClient, cleanPhone, replyText)
+		PushToLiveChat(cleanUsr, cleanPhone, replyText, "outgoing_ai")
+		go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", replyText)
+	}
+
+	// 4. Native Octopus Execution Switch
+	hasPDFHand := false
+	hasClearCartHand := false
+
+	for _, act := range octopusResp.Actions {
+		hand := strings.ToLower(strings.TrimSpace(act.Hand))
+		switch hand {
+		case "generate_bill_pdf":
+			if activeClient != nil && activeClient.IsLoggedIn() {
+				_ = SendPDFReceiptHand(activeClient, cleanUsr, cleanPhone, cleanOrdID)
+				hasPDFHand = true
+			}
+		case "clear_cart":
+			_ = ClearActiveCart(cleanUsr, cleanPhone)
+			_ = SetCustomerState(cleanUsr, cleanPhone, "chatting")
+			hasClearCartHand = true
+		}
+	}
+
+	// Safety Guarantees
+	if !hasPDFHand && activeClient != nil && activeClient.IsLoggedIn() {
+		log.Printf("⚙️ [Webhook Guarantee] Sending thermal PDF receipt for Order #%s to +%s", cleanOrdID, cleanPhone)
+		_ = SendPDFReceiptHand(activeClient, cleanUsr, cleanPhone, cleanOrdID)
+	}
+	if !hasClearCartHand {
+		_ = ClearActiveCart(cleanUsr, cleanPhone)
+		_ = SetCustomerState(cleanUsr, cleanPhone, "chatting")
+	}
+
+	// 5. Dispatch Lead Alert to merchant owner
 	locTime := time.Now().Format("02 Jan 15:04")
-	alertMsg := fmt.Sprintf("🚨 *CONFIRMED LEAD ALERT (PAYMENT VERIFIED)* 🚨\n\n"+
+	alertMsg := fmt.Sprintf("🚨 *CONFIRMED LEAD ALERT (PAYMENT WEBHOOK)* 🚨\n\n"+
 		"• *Account*: @%s\n"+
 		"• *Customer*: +%s\n"+
 		"• *Amount Paid*: ₹%s\n"+
 		"• *Order ID*: %s\n"+
 		"• *Txn ID*: %s\n"+
-		"• *Payment Method*: Paytm UPI / Soundbox Verified ✅\n"+
+		"• *Payment Method*: Paytm Webhook Verified ✅\n"+
 		"• *Status*: Payment Verified & Order Confirmed\n"+
 		"• *Time*: %s\n\n"+
-		"📲 *Chat with Customer directly*:\nhttps://wa.me/%s\n\n"+
 		"WaMart Automated Commerce Gateway",
-		cleanUsr, cleanPhone, amount, orderID, txnID, locTime, cleanPhone)
+		cleanUsr, cleanPhone, cleanAmt, cleanOrdID, txnID, locTime)
 
 	go DispatchLeadAlertWhatsAppDirect(cleanUsr, alertMsg)
 
-	// Update customer state to ORDER_CONFIRMED, payment_status to PAID, and clear active cart in DB & RAM
-	if cleanPhone != "" {
-		_ = SetCustomerState(cleanUsr, cleanPhone, "ORDER_CONFIRMED")
-		_ = SetCustomerPaymentStatus(cleanUsr, cleanPhone, "PAID")
-		_ = ClearActiveCart(cleanUsr, cleanPhone)
-		if DB != nil {
-			_, _ = DB.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, cleanPhone)
-		}
-	}
+	return nil
+}
 
-
-	// Send dynamic AI-generated WhatsApp receipt/confirmation to the customer
-	if cleanPhone != "" && len(cleanPhone) >= 10 {
-		aiPrompt := fmt.Sprintf("Payment of Rs. %s for Order %s was just confirmed via Paytm UPI. Write a joyful, polite WhatsApp order confirmation receipt for the customer with quotes (>) and emojis. Thank them warmly and inform that their order will be prepared and delivered shortly.", amount, orderID)
-		customerConfirmMsg, errAI := GenerateAIContextualReply(cleanUsr, cleanPhone, aiPrompt, nil)
-		if errAI != nil || customerConfirmMsg == "" {
-			customerConfirmMsg = fmt.Sprintf("> 🎉 *ORDER CONFIRMED & PAYMENT RECEIVED* ✅\n> 📦 *Order ID:* %s • 💵 *Amount:* ₹%s\n\nAapka order safaltapurvak confirm ho gaya hai! Hum jald hi delivery karenge. Dhanyawad! 🙏✨🚚", orderID, amount)
-		}
-
-		client := GetOrCreateClient(cleanUsr)
-		if client == nil || !client.IsLoggedIn() {
-			client = GetAnyLoggedInClient()
-		}
-		if client != nil && client.IsLoggedIn() {
-			sendErr := SendMessage(client, cleanPhone, customerConfirmMsg)
-			if sendErr != nil {
-				log.Printf("⚠️ Error sending payment confirmation to +%s: %v", cleanPhone, sendErr)
-			} else {
-				log.Printf("⚡ [Whatsmeow Payment Confirmation Delivered] +%s (@%s) -> Order: %s", cleanPhone, cleanUsr, orderID)
-				PushToLiveChat(cleanUsr, cleanPhone, customerConfirmMsg, "outgoing_ai")
-				go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", customerConfirmMsg)
-			}
-		}
-	}
+// TriggerConfirmedPaymentLead is called when Paytm Soundbox / Gateway verifies a payment (TXN_SUCCESS)
+func TriggerConfirmedPaymentLead(username, customerPhone, orderID, amount, txnID string) {
+	_ = ProcessAIPaymentSuccessWebhook(username, customerPhone, orderID, amount, txnID)
 }
 
 // DispatchLeadAlertWhatsAppDirect sends immediate notification to the configured notification_phone in AI settings
@@ -1584,17 +1623,20 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 			// Update customer profile coordinates and address in Neon DB
 			_ = UpdateCustomerCoordinates(username, senderPhone, locLat, locLng, resolvedAddr)
 
-			// Validate distance with business coordinates
-			busLat, busLng, maxRadius := GetBusinessLocation(username)
+			// Validate distance with business coordinates & logistics settings
+			busLat, busLng, maxRadius, freeRadius, deliveryCharge, _ := GetBusinessLocation(username)
 			distKM := CalculateDistance(busLat, busLng, locLat, locLng)
-			log.Printf("📍 [Delivery Radius Validation] +%s -> Distance: %.2f km (Max Allowed: %.1f km)", senderPhone, distKM, maxRadius)
+			log.Printf("📍 [Delivery Radius Validation] +%s -> Distance: %.2f km (Free <= %.1f km, Max Allowed: %.1f km, Fee: ₹%.2f)", senderPhone, distKM, freeRadius, maxRadius, deliveryCharge)
 
 			if distKM > maxRadius {
 				// Distance > MaxRadiusKM: Pass delivery constraint context to AI to reply naturally without hardcoded text
 				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km). NOTE TO AI: The store's maximum delivery radius is %.1f km. The customer is outside delivery range. Politely and warmly inform them using WhatsApp quotes (>) and emojis that home delivery is not available for this distance, and offer store pickup or counter visit.", resolvedAddr, distKM, maxRadius)
+			} else if distKM <= freeRadius {
+				// Distance <= FreeRadiusKM: Free delivery
+				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within FREE delivery radius of %.1f km). Delivery Charge: ₹0 (FREE). Coordinates: %.6f, %.6f", resolvedAddr, distKM, freeRadius, locLat, locLng)
 			} else {
-				// Distance <= MaxRadiusKM: Feed location acknowledgment into conversation history
-				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - within delivery radius). Coordinates: %.6f, %.6f", resolvedAddr, distKM, locLat, locLng)
+				// FreeRadiusKM < Distance <= MaxRadiusKM: Apply delivery charge
+				msgText = fmt.Sprintf("[Customer Shared Location Pin]: %s (Distance: %.1f km - beyond free radius %.1f km, within max radius %.1f km). Applied Delivery Charge: ₹%.2f. Coordinates: %.6f, %.6f", resolvedAddr, distKM, freeRadius, maxRadius, deliveryCharge, locLat, locLng)
 			}
 		} else {
 			// Check if customer is in PENDING payment status and sent an image (Payment Screenshot)
@@ -1940,6 +1982,22 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 							failedActionName = "escalate_to_human"
 							break
 						}
+
+					case "generate_bill_pdf":
+						ordID := ""
+						if act.Payload != nil {
+							ordID = act.Payload.OrderID
+						}
+						err := SendPDFReceiptHand(activeClient, username, senderPhone, ordID)
+						if err != nil {
+							executionErr = err
+							failedActionName = "generate_bill_pdf"
+							break
+						}
+
+					case "clear_cart":
+						_ = ClearActiveCart(username, senderPhone)
+						_ = SetCustomerState(username, senderPhone, "chatting")
 
 					case "chat_only", "":
 						// Pure conversational reply
@@ -2977,6 +3035,11 @@ func ExecuteVerifyPaymentHand(client *whatsmeow.Client, username, senderPhone st
 	}
 	PushToLiveChat(cleanUsr, cleanPhone, confMsg, "outgoing_ai")
 	go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", confMsg)
+
+	// Automatically generate and deliver dynamic thermal PDF receipt
+	go func() {
+		_ = SendPDFReceiptHand(client, username, senderPhone, savedOrderID)
+	}()
 
 	// Alert merchant phone if present
 	if cfgPay.MerchantPhone != "" {

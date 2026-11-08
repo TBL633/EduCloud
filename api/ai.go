@@ -20,8 +20,8 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var provider, apiKey, sysPrompt, aiModel, notifPhone, bName, bType, lang, pMid, pVpa, policies string
-		var temp float64
-		var autoReply, importCatalogDetails bool
+		var temp, maxRadVal, freeRadVal, delChargeVal float64
+		var autoReply, importCatalogDetails, reqLoc bool
 		importCatalogDetails = true
 
 		if DB != nil {
@@ -39,9 +39,13 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 				COALESCE(response_language, 'Hinglish'),
 				COALESCE(paytm_mid, ''),
 				COALESCE(paytm_vpa, ''),
-				COALESCE(store_policies, '')
+				COALESCE(store_policies, ''),
+				COALESCE(max_delivery_radius_km, 15.0),
+				COALESCE(free_delivery_radius_km, 3.0),
+				COALESCE(delivery_charge_amount, 40.0),
+				COALESCE(require_customer_location, false)
 				FROM users WHERE LOWER(username)=LOWER($1)`, username).
-				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang, &pMid, &pVpa, &policies)
+				Scan(&provider, &apiKey, &sysPrompt, &autoReply, &aiModel, &temp, &notifPhone, &importCatalogDetails, &bName, &bType, &lang, &pMid, &pVpa, &policies, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc)
 		}
 
 		if bName == "" {
@@ -55,50 +59,58 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		respondJSON(w, 200, map[string]interface{}{
-			"status":                 "success",
-			"business_name":          bName,
-			"business_type":          bType,
-			"response_language":      lang,
-			"language":               lang,
-			"platform":               provider,
-			"ai_provider":            provider,
-			"api_key":                apiKey,
-			"system_prompt":          sysPrompt,
-			"auto_reply":             autoReply,
-			"model":                  aiModel,
-			"ai_model":               aiModel,
-			"temperature":            temp,
-			"ai_temperature":         temp,
-			"notification_phone":     notifPhone,
-			"import_catalog_details": importCatalogDetails,
-			"paytm_mid":              pMid,
-			"paytm_vpa":              pVpa,
-			"store_policies":         policies,
+			"status":                    "success",
+			"business_name":             bName,
+			"business_type":             bType,
+			"response_language":         lang,
+			"language":                  lang,
+			"platform":                  provider,
+			"ai_provider":               provider,
+			"api_key":                   apiKey,
+			"system_prompt":             sysPrompt,
+			"auto_reply":                autoReply,
+			"model":                     aiModel,
+			"ai_model":                  aiModel,
+			"temperature":               temp,
+			"ai_temperature":            temp,
+			"notification_phone":        notifPhone,
+			"import_catalog_details":    importCatalogDetails,
+			"paytm_mid":                 pMid,
+			"paytm_vpa":                 pVpa,
+			"store_policies":            policies,
+			"max_delivery_radius_km":    maxRadVal,
+			"free_delivery_radius_km":   freeRadVal,
+			"delivery_charge_amount":    delChargeVal,
+			"require_customer_location": reqLoc,
 		})
 		return
 	}
 
 	if r.Method == "POST" {
 		var req struct {
-			Username             string  `json:"username"`
-			BusinessName         string  `json:"business_name"`
-			BusinessType         string  `json:"business_type"`
-			ResponseLanguage     string  `json:"response_language"`
-			Language             string  `json:"language"`
-			AIProvider           string  `json:"ai_provider"`
-			Platform             string  `json:"platform"`
-			APIKey               string  `json:"api_key"`
-			SystemPrompt         string  `json:"system_prompt"`
-			AutoReply            bool    `json:"auto_reply"`
-			AIModel              string  `json:"ai_model"`
-			Model                string  `json:"model"`
-			AITemperature        float64 `json:"ai_temperature"`
-			Temperature          float64 `json:"temperature"`
-			NotificationPhone    string  `json:"notification_phone"`
-			ImportCatalogDetails bool    `json:"import_catalog_details"`
-			PaytmMid             string  `json:"paytm_mid"`
-			PaytmVpa             string  `json:"paytm_vpa"`
-			StorePolicies        string  `json:"store_policies"`
+			Username                string      `json:"username"`
+			BusinessName            string      `json:"business_name"`
+			BusinessType            string      `json:"business_type"`
+			ResponseLanguage        string      `json:"response_language"`
+			Language                string      `json:"language"`
+			AIProvider              string      `json:"ai_provider"`
+			Platform                string      `json:"platform"`
+			APIKey                  string      `json:"api_key"`
+			SystemPrompt            string      `json:"system_prompt"`
+			AutoReply               bool        `json:"auto_reply"`
+			AIModel                 string      `json:"ai_model"`
+			Model                   string      `json:"model"`
+			AITemperature           float64     `json:"ai_temperature"`
+			Temperature             float64     `json:"temperature"`
+			NotificationPhone       string      `json:"notification_phone"`
+			ImportCatalogDetails    bool        `json:"import_catalog_details"`
+			PaytmMid                string      `json:"paytm_mid"`
+			PaytmVpa                string      `json:"paytm_vpa"`
+			StorePolicies           string      `json:"store_policies"`
+			MaxDeliveryRadiusKM     interface{} `json:"max_delivery_radius_km"`
+			FreeDeliveryRadiusKM    interface{} `json:"free_delivery_radius_km"`
+			DeliveryChargeAmount    interface{} `json:"delivery_charge_amount"`
+			RequireCustomerLocation *bool       `json:"require_customer_location"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -141,13 +153,22 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 		paytmMid := strings.TrimSpace(req.PaytmMid)
 		paytmVpa := strings.TrimSpace(req.PaytmVpa)
 		policies := strings.TrimSpace(req.StorePolicies)
+		maxRad := parseCoordinateVal(req.MaxDeliveryRadiusKM)
+		freeRad := parseCoordinateVal(req.FreeDeliveryRadiusKM)
+		delCharge := parseCoordinateVal(req.DeliveryChargeAmount)
 
 		if DB != nil {
+			if req.RequireCustomerLocation != nil {
+				_, _ = DB.Exec("UPDATE users SET require_customer_location=$1 WHERE LOWER(username)=LOWER($2)", *req.RequireCustomerLocation, username)
+			}
 			_, err := DB.Exec(`UPDATE users SET 
 				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10,
-				paytm_mid=$11, paytm_vpa=$12, store_policies=$13
-				WHERE LOWER(username)=LOWER($14) OR LOWER(email)=LOWER($14) OR LOWER(username)=split_part(LOWER($14), '@', 1) OR LOWER(email) LIKE LOWER($14) || '@%'`,
-				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, paytmMid, paytmVpa, policies, username)
+				paytm_mid=$11, paytm_vpa=$12, store_policies=$13,
+				max_delivery_radius_km = CASE WHEN $14 > 0 THEN $14 ELSE max_delivery_radius_km END,
+				free_delivery_radius_km = CASE WHEN $15 >= 0 THEN $15 ELSE free_delivery_radius_km END,
+				delivery_charge_amount = CASE WHEN $16 >= 0 THEN $16 ELSE delivery_charge_amount END
+				WHERE LOWER(username)=LOWER($17) OR LOWER(email)=LOWER($17) OR LOWER(username)=split_part(LOWER($17), '@', 1) OR LOWER(email) LIKE LOWER($17) || '@%'`,
+				provider, req.APIKey, bName, bType, lang, req.AutoReply, modelName, tempVal, req.NotificationPhone, req.ImportCatalogDetails, paytmMid, paytmVpa, policies, maxRad, freeRad, delCharge, username)
 
 			if err != nil {
 				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update AI settings in database: " + err.Error()})

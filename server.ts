@@ -2965,7 +2965,7 @@ app.post('/api/customer/order-state', async (req: Request, res: Response) => {
 });
 
 // --- 12K. ASYNC PAYMENT WEBHOOK RECEIVER (CLOUDFLARE WORKER) ---
-app.post('/webhook/payment', async (req: Request, res: Response) => {
+app.post(['/webhook/payment', '/api/webhook/paytm'], async (req: Request, res: Response) => {
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}

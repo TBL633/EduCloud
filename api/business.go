@@ -454,27 +454,36 @@ func UserConfigHandler(w http.ResponseWriter, r *http.Request) {
 		username = "admin"
 	}
 
-	var email, accountName, userType, phone, notificationPhone, waJid, statusStr string
-	var autoReply, automationAccess bool
+	var email, accountName, userType, phone, notificationPhone, waJid, statusStr, fullAddress, localArea string
+	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal float64
+	var autoReply, automationAccess, reqLoc bool
 
 	if DB != nil {
-		_ = DB.QueryRow(`SELECT COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(user_type, 'business_user'), COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true)
+		_ = DB.QueryRow(`SELECT COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(user_type, 'business_user'), COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true), COALESCE(full_address, ''), COALESCE(local_area, ''), COALESCE(latitude, 0.0), COALESCE(longitude, 0.0), COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false)
 			FROM users WHERE LOWER(username)=LOWER($1)`, username).
-			Scan(&email, &accountName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess)
+			Scan(&email, &accountName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc)
 	}
 
 	respondJSON(w, 200, map[string]interface{}{
-		"status":             "success",
-		"username":           username,
-		"email":              email,
-		"account_name":       accountName,
-		"user_type":          userType,
-		"phone":              phone,
-		"notification_phone": notificationPhone,
-		"wa_jid":             waJid,
-		"wa_status":          statusStr,
-		"auto_reply":         autoReply,
-		"automation_access":  automationAccess,
+		"status":                    "success",
+		"username":                  username,
+		"email":                     email,
+		"account_name":              accountName,
+		"user_type":                 userType,
+		"phone":                     phone,
+		"notification_phone":        notificationPhone,
+		"wa_jid":                    waJid,
+		"wa_status":                 statusStr,
+		"auto_reply":                autoReply,
+		"automation_access":         automationAccess,
+		"full_address":              fullAddress,
+		"local_area":                localArea,
+		"latitude":                  latVal,
+		"longitude":                 lngVal,
+		"max_delivery_radius_km":    maxRadVal,
+		"free_delivery_radius_km":   freeRadVal,
+		"delivery_charge_amount":    delChargeVal,
+		"require_customer_location": reqLoc,
 	})
 }
 

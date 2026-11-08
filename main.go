@@ -212,6 +212,7 @@ func main() {
 	http.HandleFunc("/api/payment/generate-qr", corsMiddleware(payment.GenerateQRHandler))
 	http.HandleFunc("/api/payment/verify", corsMiddleware(payment.VerifyHandler))
 	http.HandleFunc("/webhook/payment", corsMiddleware(payment.PaymentWebhookHandler))
+	http.HandleFunc("/api/webhook/paytm", corsMiddleware(payment.PaymentWebhookHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

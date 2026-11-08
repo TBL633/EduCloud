@@ -28,23 +28,27 @@ type CachedChatSession struct {
 }
 
 type UserConfigRAM struct {
-	Provider         string
-	APIKey           string
-	BusinessName     string
-	BusinessType     string
-	Language         string
-	SystemPrompt     string
-	Model            string
-	Temperature      float64
-	AutoReply        bool
-	ImportCatalog    bool
-	CatalogText      string
-	StorePolicies    string
-	HasOnlinePayment bool
-	PaytmMid         string
-	MerchantVpa      string
-	PayeeName        string
-	LastCached       time.Time
+	Provider                string
+	APIKey                  string
+	BusinessName            string
+	BusinessType            string
+	Language                string
+	SystemPrompt            string
+	Model                   string
+	Temperature             float64
+	AutoReply               bool
+	ImportCatalog           bool
+	CatalogText             string
+	StorePolicies           string
+	HasOnlinePayment        bool
+	PaytmMid                string
+	MerchantVpa             string
+	PayeeName               string
+	MaxDeliveryRadiusKM     float64
+	FreeDeliveryRadiusKM    float64
+	DeliveryChargeAmount    float64
+	RequireCustomerLocation bool
+	LastCached              time.Time
 }
 
 // Structs for AI JSON State Machine (Function Calling / Event Driven)
@@ -111,6 +115,7 @@ type AIProfileDataPayload struct {
 type AIActionPayload struct {
 	Category        string                `json:"category,omitempty"`
 	ProductCategory string                `json:"product_category,omitempty"`
+	OrderID         string                `json:"order_id,omitempty"`
 	CartItems       []AICartItemPayload   `json:"cart_items,omitempty"`
 	Profile         *AIProfileDataPayload `json:"profile,omitempty"`
 	ProfileData     *AIProfileDataPayload `json:"profile_data,omitempty"`
@@ -155,9 +160,10 @@ You are the brain. You must understand the user's intent, write a beautifully de
   "ai_reply_text": "String (Your beautifully designed reply in %s with clean headings, rich emojis, and bold styling)",
   "actions": [
     {
-      "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, cancel_order, escalate_to_human)",
+      "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, generate_bill_pdf, clear_cart, cancel_order, escalate_to_human, chat_only)",
       "payload": {
         "category": "String (Optional category name, e.g. 'all' or 'Dairy' or 'Snacks')",
+        "order_id": "String (Optional order ID for PDF generation)",
         "cart_items": [{"id": "String", "qty": 1}],
         "profile": {"name": "", "address": "", "contact": ""}
       }
@@ -205,9 +211,14 @@ PHASE 4: PAYMENT LOCK & QR GENERATION (The Handoff)
 - Only when user confirms payment via Online/UPI:
   {"ai_reply_text": "📲 *INSTANT UPI QR PAYMENT* ⚡\n\nOfficial UPI QR code upar bhej diya gaya hai. GPay, PhonePe, ya Paytm se scan karke ₹[Total] pay kar sakte hain.\n\nPayment hote hi yahan *'Ho gaya'* likhein ya screenshot share karein! 🙏✨", "actions": [{"hand": "generate_payment_qr"}]}
 
-PHASE 5: DIRECT VERIFICATION (The Moment of Truth)
-- When state is PAYMENT_PENDING or user says "Ho gaya", "Payment done", or "paid":
-  {"ai_reply_text": "⏳ *VERIFYING PAYMENT STATUS* 🔍\n\nBank se payment confirm kiya ja raha hai, kripya ek pal rukie! 🚀", "actions": [{"hand": "verify_payment"}]}
+PHASE 5: DIRECT VERIFICATION & ORDER CONFIRMATION / BILL PDF GENERATION
+- When payment is successfully verified, user confirms Cash On Delivery (COD) order, OR you receive a SYSTEM EVENT stating payment is successful (e.g. "SYSTEM EVENT: Payment of ₹..."):
+  When payment is verified, COD is confirmed, OR you receive a payment success SYSTEM EVENT, you MUST output an array of 3 actions in this exact order:
+  1. Output `chat_only` with a joyous order confirmation message confirming the order.
+  2. Output `generate_bill_pdf` to instantly send the final thermal PDF receipt.
+  3. Output `clear_cart` to reset the user's cart and state.
+  Example:
+  {"ai_reply_text": "🎉 *ORDER CONFIRMED!* ✅\n\nAapka order safaltapurvak confirm ho gaya hai! Humne aapka PDF bill receipt neeche bhej diya hai. Humari store team jald hi aapka order dispatch karegi! Dhanyawad! 🙏🚚✨", "actions": [{"hand": "chat_only"}, {"hand": "generate_bill_pdf"}, {"hand": "clear_cart"}]}
 
 PHASE 6: HUMAN ESCALATION (Owner Connection + Continuous Support)
 - When user asks for owner/malik/human (e.g. "Malik se baat karao", "owner se baat karni hai"):
@@ -216,11 +227,13 @@ PHASE 6: HUMAN ESCALATION (Owner Connection + Continuous Support)
 STRICT EXECUTION RULES:
 1. Always keep formatting visually appealing with bold headings and lively emojis, without ugly excess blockquotes.
 2. MANDATORY PRE-PAYMENT SUMMARY: Before generating a QR code, always show the full order summary.
-3. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
-4. If current_state is PAYMENT_PENDING:
+3. MANDATORY ORDER CONFIRMATION BILL GENERATION: When payment is verified, COD is confirmed, OR you receive a SYSTEM EVENT stating payment is successful, ALWAYS output `chat_only`, `generate_bill_pdf`, and `clear_cart`.
+4. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
+5. If current_state is PAYMENT_PENDING:
    - If customer says they paid ("ho gaya", "done", "paid"), return "verify_payment".
    - If customer says "cancel", return "cancel_order".
-5. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
+6. If you receive a SYSTEM EVENT stating payment is successful, you MUST output a friendly confirmation message AND execute the 'generate_bill_pdf' action, followed by the 'clear_cart' action.
+7. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
 
 // Master E-Commerce Sales Agent System Prompt Template (STRICT JSON ENFORCEMENT)
 const universalSystemPromptJSON = octopusSystemPromptJSON
@@ -285,25 +298,29 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 	userConfigLock.Unlock()
 
 	cfg := &UserConfigRAM{
-		Provider:      "groq",
-		APIKey:        "",
-		BusinessName:  cleanUsr,
-		BusinessType:  "Kirana / General Store",
-		Language:      "Hinglish",
-		SystemPrompt:  "",
-		Model:         "openai/gpt-oss-20b",
-		Temperature:   0.7,
-		AutoReply:     true,
-		ImportCatalog: true,
-		CatalogText:   "",
-		LastCached:    time.Now(),
+		Provider:                "groq",
+		APIKey:                  "",
+		BusinessName:            cleanUsr,
+		BusinessType:            "Kirana / General Store",
+		Language:                "Hinglish",
+		SystemPrompt:            "",
+		Model:                   "openai/gpt-oss-20b",
+		Temperature:             0.7,
+		AutoReply:               true,
+		ImportCatalog:           true,
+		CatalogText:             "",
+		MaxDeliveryRadiusKM:     15.0,
+		FreeDeliveryRadiusKM:    3.0,
+		DeliveryChargeAmount:    40.0,
+		RequireCustomerLocation: false,
+		LastCached:              time.Now(),
 	}
 
 	if DB != nil {
 		var p, k, s, m, bName, bType, lang, pol string
 		var pMidUser, pVpaUser string
-		var t float64
-		var ar, ic bool
+		var t, maxRad, freeRad, delCharge float64
+		var ar, ic, reqLoc bool
 		err := DB.QueryRow(`SELECT 
 			COALESCE(ai_provider, 'groq'), 
 			COALESCE(api_key, ''), 
@@ -317,8 +334,12 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			COALESCE(response_language, 'Hinglish'),
 			COALESCE(store_policies, ''),
 			COALESCE(paytm_mid, ''),
-			COALESCE(paytm_vpa, '')
-			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol, &pMidUser, &pVpaUser)
+			COALESCE(paytm_vpa, ''),
+			COALESCE(max_delivery_radius_km, 15.0),
+			COALESCE(free_delivery_radius_km, 3.0),
+			COALESCE(delivery_charge_amount, 40.0),
+			COALESCE(require_customer_location, false)
+			FROM users WHERE LOWER(username)=LOWER($1) OR LOWER(username)=LOWER($2)`, cleanUsr, cleanUsr+"@gmail.com").Scan(&p, &k, &s, &m, &t, &ar, &ic, &bName, &bType, &lang, &pol, &pMidUser, &pVpaUser, &maxRad, &freeRad, &delCharge, &reqLoc)
 		if err == nil {
 			cfg.Provider = p
 			cfg.APIKey = k
@@ -331,7 +352,13 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.AutoReply = ar
 			cfg.ImportCatalog = true
 			cfg.StorePolicies = pol
+			cfg.MaxDeliveryRadiusKM = maxRad
+			cfg.FreeDeliveryRadiusKM = freeRad
+			cfg.DeliveryChargeAmount = delCharge
+			cfg.RequireCustomerLocation = reqLoc
 			if bName != "" {
+				cfg.BusinessName = bName
+			}
 				cfg.BusinessName = bName
 			}
 			if bType != "" {
@@ -1677,11 +1704,19 @@ func GenerateOctopusAIReply(username, customerPhone, incomingText string, cfg *U
 	liveInventory := GetLiveInventoryRAG(cleanUsr)
 	inventoryPromptBlock := fmt.Sprintf("Here is the LIVE inventory you MUST use to answer the customer:\n%s\nIf the user asks what is available, list these exact items.", liveInventory)
 
-	// 2. THE CONTEXT INJECTOR (GOLANG TO AI)
+	// 2. HYPERLOCAL DELIVERY RULES INJECTION
+	deliveryRuleBlock := ""
+	if cfg.RequireCustomerLocation {
+		deliveryRuleBlock = fmt.Sprintf("HYPERLOCAL DELIVERY LOCATION RULE (STRICT ENFORCEMENT ACTIVE):\n- The tenant strictly requires the customer to attach their WhatsApp location pin (📎 Location) before checkout!\n- DO NOT place or confirm orders if only a typed text address is given! Politely instruct the customer to share their WhatsApp location pin: 'Kripya WhatsApp ke attachment button (📎) se apni Exact Location share karein taaki hum delivery distance verify kar sakein! 📍'\n- Delivery Rules: Max Radius = %.1f km. Free delivery up to %.1f km. Delivery charge beyond free radius = ₹%.2f.", cfg.MaxDeliveryRadiusKM, cfg.FreeDeliveryRadiusKM, cfg.DeliveryChargeAmount)
+	} else {
+		deliveryRuleBlock = fmt.Sprintf("HYPERLOCAL DELIVERY LOCATION RULE:\n- Typed text address is accepted for delivery.\n- Delivery Rules: Max Radius = %.1f km. Free delivery up to %.1f km. Delivery charge beyond free radius = ₹%.2f.", cfg.MaxDeliveryRadiusKM, cfg.FreeDeliveryRadiusKM, cfg.DeliveryChargeAmount)
+	}
+
+	// 3. THE CONTEXT INJECTOR (GOLANG TO AI)
 	contextStr := BuildOctopusContext(cleanUsr, cleanPhone, incomingText)
 
-	// 3. THE MASTER OCTOPUS BRAIN SYSTEM PROMPT
-	masterPrompt := fmt.Sprintf(octopusSystemPromptJSON, bName, bType, cfg.StorePolicies, lang, lang) + "\n\n" + inventoryPromptBlock + "\n\n" + contextStr
+	// 4. THE MASTER OCTOPUS BRAIN SYSTEM PROMPT
+	masterPrompt := fmt.Sprintf(octopusSystemPromptJSON, bName, bType, cfg.StorePolicies, lang, lang) + "\n\n" + deliveryRuleBlock + "\n\n" + inventoryPromptBlock + "\n\n" + contextStr
 
 	aiResponse, err := CallAIModelWithHistory(cfg.Provider, cfg.Model, cfg.Temperature, selectedApiKey, masterPrompt, history)
 	if err != nil || aiResponse == "" {

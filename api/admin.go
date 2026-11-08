@@ -225,14 +225,22 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// USER PROFILE DETAILS HANDLER
+// USER PROFILE DETAILS HANDLER (GET / POST / PUT /api/user/profile & /api/admin/profile)
 func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	if r.Method == "POST" || r.Method == "PUT" {
 		var req struct {
-			Username          string `json:"username"`
-			NotificationPhone string `json:"notification_phone"`
-			AIProvider        string `json:"ai_provider"`
-			AIModel           string `json:"ai_model"`
+			Username               string      `json:"username"`
+			NotificationPhone      string      `json:"notification_phone"`
+			AIProvider             string      `json:"ai_provider"`
+			AIModel                string      `json:"ai_model"`
+			FullAddress            string      `json:"full_address"`
+			LocalArea              string      `json:"local_area"`
+			Latitude               interface{} `json:"latitude"`
+			Longitude              interface{} `json:"longitude"`
+			MaxDeliveryRadiusKM    interface{} `json:"max_delivery_radius_km"`
+			FreeDeliveryRadiusKM   interface{} `json:"free_delivery_radius_km"`
+			DeliveryChargeAmount   interface{} `json:"delivery_charge_amount"`
+			RequireCustomerLocation *bool       `json:"require_customer_location"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -240,6 +248,12 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		if username == "" {
 			username = "admin"
 		}
+
+		latVal := parseCoordinateVal(req.Latitude)
+		lngVal := parseCoordinateVal(req.Longitude)
+		maxRadVal := parseCoordinateVal(req.MaxDeliveryRadiusKM)
+		freeRadVal := parseCoordinateVal(req.FreeDeliveryRadiusKM)
+		delChargeVal := parseCoordinateVal(req.DeliveryChargeAmount)
 
 		if DB != nil {
 			if req.NotificationPhone != "" {
@@ -251,11 +265,35 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			if req.AIProvider != "" {
 				_, _ = DB.Exec("UPDATE users SET ai_provider=$1 WHERE LOWER(username)=LOWER($2)", req.AIProvider, username)
 			}
+			if req.RequireCustomerLocation != nil {
+				_, _ = DB.Exec("UPDATE users SET require_customer_location=$1 WHERE LOWER(username)=LOWER($2)", *req.RequireCustomerLocation, username)
+			}
+			_, _ = DB.Exec(`UPDATE users SET 
+				full_address = CASE WHEN $1 != '' THEN $1 ELSE full_address END,
+				local_area = CASE WHEN $2 != '' THEN $2 ELSE local_area END,
+				latitude = CASE WHEN $3 != 0 THEN $3 ELSE latitude END,
+				longitude = CASE WHEN $4 != 0 THEN $4 ELSE longitude END,
+				business_lat = CASE WHEN $3 != 0 THEN $3 ELSE business_lat END,
+				business_lng = CASE WHEN $4 != 0 THEN $4 ELSE business_lng END,
+				max_delivery_radius_km = CASE WHEN $5 > 0 THEN $5 ELSE max_delivery_radius_km END,
+				free_delivery_radius_km = CASE WHEN $6 >= 0 THEN $6 ELSE free_delivery_radius_km END,
+				delivery_charge_amount = CASE WHEN $7 >= 0 THEN $7 ELSE delivery_charge_amount END
+				WHERE LOWER(username)=LOWER($8)`, strings.TrimSpace(req.FullAddress), strings.TrimSpace(req.LocalArea), latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, username)
+
+			whatsapp.InvalidateUserConfigCache(username)
 		}
 
-		respondJSON(w, 200, map[string]string{
-			"status":  "success",
-			"message": "User profile updated successfully!",
+		respondJSON(w, 200, map[string]interface{}{
+			"status":                    "success",
+			"message":                   "User profile and delivery settings updated successfully!",
+			"full_address":              req.FullAddress,
+			"local_area":                req.LocalArea,
+			"latitude":                  latVal,
+			"longitude":                 lngVal,
+			"max_delivery_radius_km":    maxRadVal,
+			"free_delivery_radius_km":   freeRadVal,
+			"delivery_charge_amount":    delChargeVal,
+			"require_customer_location": req.RequireCustomerLocation,
 		})
 		return
 	}
@@ -265,36 +303,73 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		username = "admin"
 	}
 
-	var email, accountName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt string
-	var autoReply, automationAccess bool
+	var email, accountName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
+	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal float64
+	var autoReply, automationAccess, reqLoc bool
 
 	if DB != nil {
-		err := DB.QueryRow(`SELECT COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(user_type, 'business_user'), COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true), COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active')
+		err := DB.QueryRow(`SELECT 
+			COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(user_type, 'business_user'), 
+			COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), 
+			COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true), 
+			COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active'),
+			COALESCE(full_address, ''), COALESCE(local_area, ''), COALESCE(latitude, 0.0), COALESCE(longitude, 0.0),
+			COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false)
 			FROM users WHERE LOWER(username)=LOWER($1)`, username).
-			Scan(&email, &accountName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt)
+			Scan(&email, &accountName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc)
 
 		if err == nil {
 			respondJSON(w, 200, map[string]interface{}{
-				"status":             "success",
-				"username":           username,
-				"email":              email,
-				"account_name":       accountName,
-				"user_type":          userType,
-				"phone":              phone,
-				"notification_phone": notificationPhone,
-				"wa_jid":             waJid,
-				"wa_status":          statusStr,
-				"auto_reply":         autoReply,
-				"automation_access":  automationAccess,
-				"ai_provider":        aiProvider,
-				"ai_model":           aiModel,
-				"created_at":         createdAt,
+				"status":                    "success",
+				"username":                  username,
+				"email":                     email,
+				"account_name":              accountName,
+				"user_type":                 userType,
+				"phone":                     phone,
+				"notification_phone":        notificationPhone,
+				"wa_jid":                    waJid,
+				"wa_status":                 statusStr,
+				"auto_reply":                autoReply,
+				"automation_access":         automationAccess,
+				"ai_provider":               aiProvider,
+				"ai_model":                  aiModel,
+				"created_at":                createdAt,
+				"full_address":              fullAddress,
+				"local_area":                localArea,
+				"latitude":                  latVal,
+				"longitude":                 lngVal,
+				"max_delivery_radius_km":    maxRadVal,
+				"free_delivery_radius_km":   freeRadVal,
+				"delivery_charge_amount":    delChargeVal,
+				"require_customer_location": reqLoc,
 			})
 			return
 		}
 	}
 
 	respondJSON(w, 404, map[string]string{"status": "error", "message": "User profile not found"})
+}
+
+func parseCoordinateVal(val interface{}) float64 {
+	if val == nil {
+		return 0.0
+	}
+	switch v := val.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		s := strings.TrimSpace(v)
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f
+		}
+	}
+	return 0.0
 }
 
 // ADMIN GET SUBSCRIBED NEWSLETTERS / CHANNELS API

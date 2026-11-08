@@ -505,34 +505,53 @@ func CalculateDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	return R * c
 }
 
-// GetBusinessLocation fetches business coordinates and max delivery radius from users table
-// Defaults: 26.8467, 80.9462 (Lucknow/Central hub) and 15.0 km radius
-func GetBusinessLocation(username string) (lat float64, lng float64, maxRadiusKM float64) {
+// GetBusinessLocation fetches business coordinates and delivery logistics parameters from users table
+// Defaults: 26.8467, 80.9462 (Lucknow/Central hub), 15.0 km max radius, 3.0 km free radius, ₹40 fee
+func GetBusinessLocation(username string) (lat float64, lng float64, maxRadiusKM float64, freeRadiusKM float64, deliveryCharge float64, requireLocation bool) {
 	// Robust defaults
 	lat = 26.8467
 	lng = 80.9462
 	maxRadiusKM = 15.0
+	freeRadiusKM = 3.0
+	deliveryCharge = 40.0
+	requireLocation = false
 
 	if DB == nil {
 		return
 	}
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 
-	var dbLat, dbLng, dbRadius sql.NullFloat64
+	var dbLat, dbLng, dbLat2, dbLng2, dbRadius, dbFreeRadius, dbCharge sql.NullFloat64
+	var dbReqLoc sql.NullBool
 	err := DB.QueryRow(`
-		SELECT business_lat, business_lng, max_delivery_radius_km 
+		SELECT COALESCE(business_lat, 0), COALESCE(business_lng, 0), COALESCE(latitude, 0), COALESCE(longitude, 0), 
+		       COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), 
+		       COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false)
 		FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1
-	`, cleanUsr).Scan(&dbLat, &dbLng, &dbRadius)
+	`, cleanUsr).Scan(&dbLat, &dbLng, &dbLat2, &dbLng2, &dbRadius, &dbFreeRadius, &dbCharge, &dbReqLoc)
 
 	if err == nil {
 		if dbLat.Valid && dbLat.Float64 != 0 {
 			lat = dbLat.Float64
+		} else if dbLat2.Valid && dbLat2.Float64 != 0 {
+			lat = dbLat2.Float64
 		}
 		if dbLng.Valid && dbLng.Float64 != 0 {
 			lng = dbLng.Float64
+		} else if dbLng2.Valid && dbLng2.Float64 != 0 {
+			lng = dbLng2.Float64
 		}
 		if dbRadius.Valid && dbRadius.Float64 > 0 {
 			maxRadiusKM = dbRadius.Float64
+		}
+		if dbFreeRadius.Valid && dbFreeRadius.Float64 >= 0 {
+			freeRadiusKM = dbFreeRadius.Float64
+		}
+		if dbCharge.Valid && dbCharge.Float64 >= 0 {
+			deliveryCharge = dbCharge.Float64
+		}
+		if dbReqLoc.Valid {
+			requireLocation = dbReqLoc.Bool
 		}
 	}
 	return

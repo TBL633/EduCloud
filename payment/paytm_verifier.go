@@ -107,6 +107,7 @@ type PaymentWebhookPayload struct {
 	OrderID string `json:"orderId"`
 	Status  string `json:"status"`
 	Amount  string `json:"amount"`
+	TxnID   string `json:"txnId"`
 }
 
 var (
@@ -532,8 +533,8 @@ func GenerateQRHandler(w http.ResponseWriter, r *http.Request) {
 // GetAppWebhookURL determines the full public URL for receiving payment webhooks
 func GetAppWebhookURL() string {
 	if hook := strings.TrimSpace(os.Getenv("WEBHOOK_URL")); hook != "" && !strings.Contains(hook, "localhost") && !strings.Contains(hook, "127.0.0.1") {
-		if !strings.HasSuffix(hook, "/webhook/payment") {
-			return strings.TrimSuffix(hook, "/") + "/webhook/payment"
+		if !strings.HasSuffix(hook, "/api/webhook/paytm") {
+			return strings.TrimSuffix(hook, "/") + "/api/webhook/paytm"
 		}
 		return hook
 	}
@@ -549,17 +550,17 @@ func GetAppWebhookURL() string {
 		}
 	}
 	if renderURL != "" && !strings.Contains(renderURL, "localhost") && !strings.Contains(renderURL, "127.0.0.1") {
-		return strings.TrimSuffix(renderURL, "/") + "/webhook/payment"
+		return strings.TrimSuffix(renderURL, "/") + "/api/webhook/paytm"
 	}
 	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
 	if appURL != "" && !strings.Contains(appURL, "localhost") && !strings.Contains(appURL, "127.0.0.1") {
-		return strings.TrimSuffix(appURL, "/") + "/webhook/payment"
+		return strings.TrimSuffix(appURL, "/") + "/api/webhook/paytm"
 	}
 	baseURL := strings.TrimSpace(os.Getenv("BASE_URL"))
 	if baseURL != "" && !strings.Contains(baseURL, "localhost") && !strings.Contains(baseURL, "127.0.0.1") {
-		return strings.TrimSuffix(baseURL, "/") + "/webhook/payment"
+		return strings.TrimSuffix(baseURL, "/") + "/api/webhook/paytm"
 	}
-	return "https://wamart.onrender.com/webhook/payment"
+	return "https://wamart.onrender.com/api/webhook/paytm"
 }
 
 // GenerateWorkerDynamicQR calls the Cloudflare Worker to dynamically generate a branded QR code
@@ -778,6 +779,7 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	orderID := strings.TrimSpace(payload.OrderID)
 	status := strings.ToUpper(strings.TrimSpace(payload.Status))
 	amount := strings.TrimSpace(payload.Amount)
+	txnID := strings.TrimSpace(payload.TxnID)
 
 	// Robust case-insensitive fallback parsing
 	for k, v := range rawMap {
@@ -792,9 +794,15 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		if (kLower == "amount" || kLower == "txnamount" || kLower == "total_amount" || kLower == "total") && amount == "" {
 			amount = strVal
 		}
+		if (kLower == "txnid" || kLower == "txn_id" || kLower == "transactionid" || kLower == "banktxnid") && txnID == "" {
+			txnID = strVal
+		}
+	}
+	if txnID == "" {
+		txnID = "WORKER_" + orderID
 	}
 
-	fmt.Printf("🔔 [Payment Webhook Received] OrderID: %s | Status: %s | Amount: %s\n", orderID, status, amount)
+	fmt.Printf("🔔 [Payment Webhook Received] OrderID: %s | Status: %s | Amount: %s | TxnID: %s\n", orderID, status, amount, txnID)
 
 	if orderID == "" {
 		http.Error(w, `{"error":"orderId is required"}`, http.StatusBadRequest)
