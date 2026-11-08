@@ -160,7 +160,7 @@ You are the brain. You must understand the user's intent, write a beautifully de
   "ai_reply_text": "String (Your beautifully designed reply in %s with clean headings, rich emojis, and bold styling)",
   "actions": [
     {
-      "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, generate_bill_pdf, clear_cart, cancel_order, escalate_to_human, chat_only)",
+      "hand": "String (Choose from: send_catalog_images, update_cart, extract_profile, generate_payment_qr, verify_payment, generate_bill_pdf, generate_store_link, clear_cart, cancel_order, escalate_to_human, chat_only)",
       "payload": {
         "category": "String (Optional category name, e.g. 'all' or 'Dairy' or 'Snacks')",
         "order_id": "String (Optional order ID for PDF generation)",
@@ -191,7 +191,7 @@ VISUAL DESIGN & BEAUTIFUL FORMATTING GUIDELINES (WHATSAPP AESTHETICS):
      b) In your reply, reassure the customer that their details and inquiry have been shared directly with the store owner.
      c) CRITICAL: DO NOT STOP HELPING! Continue assisting the customer right now warmly and attentively: ask what problem they are facing or what items they need, answer their questions, and keep their shopping or order going smoothly!
 
-MASTER WORKFLOW - 6-PHASE AGENTIC CUSTOMER JOURNEY:
+MASTER WORKFLOW - 7-PHASE AGENTIC CUSTOMER JOURNEY:
 
 PHASE 1: GREETING, CATEGORIES & BROWSING (The Welcome)
 - When user says "Hi", "Hello", "Menu", "Kya kya hai", or wants to browse:
@@ -214,9 +214,9 @@ PHASE 4: PAYMENT LOCK & QR GENERATION (The Handoff)
 PHASE 5: DIRECT VERIFICATION & ORDER CONFIRMATION / BILL PDF GENERATION
 - When payment is successfully verified, user confirms Cash On Delivery (COD) order, OR you receive a SYSTEM EVENT stating payment is successful (e.g. "SYSTEM EVENT: Payment of ₹..."):
   When payment is verified, COD is confirmed, OR you receive a payment success SYSTEM EVENT, you MUST output an array of 3 actions in this exact order:
-  1. Output `chat_only` with a joyous order confirmation message confirming the order.
-  2. Output `generate_bill_pdf` to instantly send the final thermal PDF receipt.
-  3. Output `clear_cart` to reset the user's cart and state.
+  1. Output chat_only with a joyous order confirmation message confirming the order.
+  2. Output generate_bill_pdf to instantly send the final thermal PDF receipt.
+  3. Output clear_cart to reset the user's cart and state.
   Example:
   {"ai_reply_text": "🎉 *ORDER CONFIRMED!* ✅\n\nAapka order safaltapurvak confirm ho gaya hai! Humne aapka PDF bill receipt neeche bhej diya hai. Humari store team jald hi aapka order dispatch karegi! Dhanyawad! 🙏🚚✨", "actions": [{"hand": "chat_only"}, {"hand": "generate_bill_pdf"}, {"hand": "clear_cart"}]}
 
@@ -224,16 +224,21 @@ PHASE 6: HUMAN ESCALATION (Owner Connection + Continuous Support)
 - When user asks for owner/malik/human (e.g. "Malik se baat karao", "owner se baat karni hai"):
   {"ai_reply_text": "🤝 *STORE OWNER NOTIFIED* 💬\n\nMaine aapki poori baat, cart details aur contact store ke Malik ko bhej diya hai! Woh jald hi aapse direct sampark karenge.\n\nTab tak main aapki kya sahayata kar sakta hu? Kripya apna sawal ya item batayein, hum aage ka kaam continue rakhte hain! 😊✨", "actions": [{"hand": "escalate_to_human"}]}
 
+PHASE 7: VISUAL BROWSING & WEBPAGE MAGIC LINK (Omnichannel Sync)
+- When user wants to browse visually, asks for the website, store link, or online catalog (e.g. "Website link bhejo", "store link do", "online catalog dekhna hai", "website se order karna hai"):
+  {"ai_reply_text": "🛍️ *VISUAL STOREFRONT & ONLINE CATALOG* ✨\n\nAap humari visual website par poora catalog dekh sakte hain aur live shopping kar sakte hain!\n\nMaine aapka personal secure link taiyaar kiya hai:\n👉 *Link neeche bhej diya gaya hai!*\n\n✨ *Auto-Login Active:* Is link par click karne se aapka cart aur WhatsApp details website par turant sync ho jayenge! Click karke visual browsing start karein! 🛒🚀", "actions": [{"hand": "generate_store_link"}]}
+
 STRICT EXECUTION RULES:
 1. Always keep formatting visually appealing with bold headings and lively emojis, without ugly excess blockquotes.
 2. MANDATORY PRE-PAYMENT SUMMARY: Before generating a QR code, always show the full order summary.
-3. MANDATORY ORDER CONFIRMATION BILL GENERATION: When payment is verified, COD is confirmed, OR you receive a SYSTEM EVENT stating payment is successful, ALWAYS output `chat_only`, `generate_bill_pdf`, and `clear_cart`.
+3. MANDATORY ORDER CONFIRMATION BILL GENERATION: When payment is verified, COD is confirmed, OR you receive a SYSTEM EVENT stating payment is successful, ALWAYS output chat_only, generate_bill_pdf, and clear_cart.
 4. Use the REAL-TIME DATABASE STATE (current_state, shopping_cart, customer_profile, rag_results) injected below to make informed decisions.
 5. If current_state is PAYMENT_PENDING:
    - If customer says they paid ("ho gaya", "done", "paid"), return "verify_payment".
    - If customer says "cancel", return "cancel_order".
 6. If you receive a SYSTEM EVENT stating payment is successful, you MUST output a friendly confirmation message AND execute the 'generate_bill_pdf' action, followed by the 'clear_cart' action.
-7. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
+7. OMNICHANNEL MAGIC LINK RULE: If the user wants to browse visually, requests the website or asks for the online store link, ALWAYS generate and send their unique secure web link using the 'generate_store_link' action. Tell them: 'Click here to auto-login to our website. Your cart and details will be perfectly synced!'
+8. OUTPUT ONLY THE RAW JSON OBJECT. NO PRETEXT, NO POSTTEXT, NO MARKDOWN OUTSIDE JSON.`
 
 // Master E-Commerce Sales Agent System Prompt Template (STRICT JSON ENFORCEMENT)
 const universalSystemPromptJSON = octopusSystemPromptJSON
@@ -357,8 +362,6 @@ func GetUserConfigRAM(username string) *UserConfigRAM {
 			cfg.DeliveryChargeAmount = delCharge
 			cfg.RequireCustomerLocation = reqLoc
 			if bName != "" {
-				cfg.BusinessName = bName
-			}
 				cfg.BusinessName = bName
 			}
 			if bType != "" {

@@ -1,0 +1,2003 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title id="page-title">Storefront | WaMart</title>
+    <!-- Tailwind CSS v4 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="h-full bg-slate-100 text-slate-900 antialiased selection:bg-emerald-500 selection:text-white">
+
+    <!-- Mobile-First Responsive App Canvas (100% Width on Mobile Screens) -->
+    <div id="store-app-canvas" class="w-full min-h-screen bg-white sm:max-w-md sm:mx-auto sm:shadow-xl relative flex flex-col pb-20 sm:border-x sm:border-slate-200/70">
+        
+        <!-- HOME VIEW CONTAINER -->
+        <div id="view-storefront-home" class="flex-1 flex flex-col">
+            <!-- 1. TOP ANNOUNCEMENT BAR (Dynamic Delivery Info) -->
+            <aside id="top-announcement-bar" class="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white text-[11px] font-semibold py-1.5 px-3.5 flex items-center justify-between shadow-xs shrink-0 tracking-wide">
+                <div class="flex items-center gap-1.5 truncate">
+                    <i class="fa-solid fa-truck-fast text-[11px] text-emerald-200"></i>
+                    <span id="announcement-text" class="truncate">Delivering fresh products to your doorstep</span>
+                </div>
+                <div id="announcement-badge" class="shrink-0 text-[10px] font-bold bg-white/20 px-2 py-0.5 rounded text-white flex items-center gap-1">
+                    <span>Free Delivery</span>
+                </div>
+            </aside>
+
+            <!-- 2. STORE HEADER -->
+            <header class="p-4 bg-white border-b border-slate-100 flex items-center justify-between gap-3 sticky top-0 z-20 shadow-xs/60 backdrop-blur-md bg-white/95">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div id="store-logo-container" class="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border-2 border-emerald-500/20 shadow-xs shrink-0 flex items-center justify-center">
+                        <img id="store-logo-img" src="" alt="Store Logo" class="w-full h-full object-cover hidden" onerror="this.classList.add('hidden'); document.getElementById('store-logo-placeholder').classList.remove('hidden');">
+                        <div id="store-logo-placeholder" class="text-emerald-600 font-black text-lg">
+                            <i class="fa-solid fa-store"></i>
+                        </div>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <h1 id="store-name-display" class="font-extrabold text-base text-slate-900 leading-tight truncate">
+                            Loading Store...
+                        </h1>
+                        <p id="store-tagline-display" class="text-xs text-slate-500 truncate font-normal">
+                            WhatsApp Online Storefront
+                        </p>
+                        <div id="store-location-display" class="text-[11px] text-slate-400 flex items-center gap-1 truncate mt-0.5">
+                            <i class="fa-solid fa-location-dot text-rose-500 text-[10px]"></i>
+                            <span id="store-address-text" class="truncate">Local Store</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WhatsApp Floating Contact Button -->
+                <a id="btn-header-whatsapp" href="#" target="_blank" class="w-10 h-10 rounded-full bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white flex items-center justify-center shadow-md shadow-emerald-500/30 transition shrink-0 cursor-pointer" title="Chat on WhatsApp" aria-label="Contact Merchant on WhatsApp">
+                    <i class="fa-brands fa-whatsapp text-xl"></i>
+                </a>
+            </header>
+
+            <!-- 3. SEARCH BAR -->
+            <div class="p-3 bg-white border-b border-slate-100">
+                <div class="relative flex items-center">
+                    <i class="fa-solid fa-magnifying-glass text-slate-400 absolute left-3.5 text-xs"></i>
+                    <input type="text" id="store-search-input" oninput="handleSearch(this.value)" placeholder="Search products, brands or items..." class="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/10 transition">
+                    <button type="button" id="search-clear-btn" onclick="clearSearch()" class="hidden absolute right-3 text-slate-400 hover:text-slate-600 text-xs cursor-pointer">
+                        <i class="fa-solid fa-circle-xmark"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 4. HERO BANNER -->
+            <section class="p-3" id="hero-banner-section">
+                <div id="hero-banner-wrapper" class="relative rounded-2xl overflow-hidden shadow-sm bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 min-h-[140px] flex items-center justify-between p-4 text-white">
+                    <img id="hero-banner-img" src="" alt="Store Promotion Banner" class="absolute inset-0 w-full h-full object-cover hidden" onerror="this.classList.add('hidden');">
+                    <div class="relative z-10 max-w-[70%] space-y-1">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-200" id="hero-subheading">Welcome To</span>
+                        <h2 class="text-lg font-black leading-tight drop-shadow-xs" id="hero-title">Exclusive Deals & Easy WhatsApp Ordering</h2>
+                        <p class="text-[11px] text-white/90 line-clamp-2" id="hero-desc">Choose your favorite products and checkout directly on WhatsApp.</p>
+                    </div>
+                    <div class="relative z-10 w-16 h-16 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center text-3xl shrink-0 text-white shadow-inner">
+                        <i class="fa-solid fa-bag-shopping"></i>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. DYNAMIC CATEGORIES (Circular Slider / Grid) -->
+            <section class="py-2 px-3 space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-shapes text-emerald-600 text-xs"></i>
+                        <span>Shop By Category</span>
+                    </h3>
+                    <span id="category-count-label" class="text-[11px] text-slate-400 font-medium">All items</span>
+                </div>
+
+                <div id="categories-slider" class="flex items-start gap-3.5 overflow-x-auto hide-scrollbar py-1">
+                    <!-- "All Products" Circle -->
+                    <button type="button" onclick="selectCategory('all')" id="cat-btn-all" class="flex flex-col items-center gap-1.5 shrink-0 group cursor-pointer">
+                        <div id="cat-icon-all" class="w-15 h-15 rounded-full bg-emerald-500 text-white flex items-center justify-center text-lg shadow-sm border-2 border-emerald-500 transition group-active:scale-95">
+                            <i class="fa-solid fa-border-all"></i>
+                        </div>
+                        <span class="text-[11px] font-bold text-emerald-600 text-center max-w-[68px] truncate">All Items</span>
+                    </button>
+                    <!-- Dynamic categories injected here -->
+                </div>
+            </section>
+
+            <!-- 6. PRODUCT CATALOG GRID -->
+            <section class="p-3 space-y-3 flex-1">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-1.5">
+                        <h3 id="current-category-heading" class="text-sm font-extrabold text-slate-900">All Products</h3>
+                        <span id="product-total-count" class="text-xs font-semibold text-slate-400">(0)</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-medium flex items-center gap-1">
+                        <i class="fa-solid fa-bolt text-amber-500 text-[10px]"></i>
+                        <span>Instant WhatsApp Order</span>
+                    </div>
+                </div>
+
+                <!-- Loading State -->
+                <div id="products-loading" class="py-16 text-center space-y-3">
+                    <i class="fa-solid fa-circle-notch fa-spin text-3xl text-emerald-500"></i>
+                    <p class="text-xs font-bold text-slate-500">Loading catalog items...</p>
+                </div>
+
+                <!-- Empty Products State -->
+                <div id="products-empty" class="hidden py-16 text-center space-y-3 px-4">
+                    <div class="w-16 h-16 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-2xl">
+                        <i class="fa-solid fa-box-open"></i>
+                    </div>
+                    <h4 class="text-sm font-bold text-slate-800">No Products Available</h4>
+                    <p class="text-xs text-slate-500 max-w-xs mx-auto">This store currently has no active products in this category. Please check back soon or chat with the store owner.</p>
+                    <a id="btn-empty-contact" href="#" target="_blank" class="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-xs transition">
+                        <i class="fa-brands fa-whatsapp"></i> Inquire on WhatsApp
+                    </a>
+                </div>
+
+                <!-- 2-Column Product Grid -->
+                <div id="products-grid" class="grid grid-cols-2 gap-3">
+                    <!-- Dynamic product cards injected here -->
+                </div>
+            </section>
+        </div>
+
+        <!-- PROFILE VIEW CONTAINER (Omnichannel WhatsApp Sync & Orders) -->
+        <div id="view-storefront-profile" class="hidden flex-1 flex flex-col p-4 space-y-4">
+            <!-- Profile Hero Card -->
+            <div class="bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-800 rounded-3xl p-5 text-white shadow-lg relative overflow-hidden">
+                <div class="absolute -right-4 -bottom-4 w-28 h-28 bg-white/10 rounded-full blur-xl pointer-events-none"></div>
+                <div class="flex items-center gap-3.5 relative z-10">
+                    <div id="prof-avatar-circle" class="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-2xl font-black text-white shadow-inner">
+                        <i class="fa-solid fa-user"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                            <h3 id="prof-hero-name" class="font-black text-base truncate leading-tight">Welcome Guest</h3>
+                        </div>
+                        <p id="prof-hero-phone" class="text-xs text-emerald-100 font-mono mt-0.5">WhatsApp Customer</p>
+                        <div id="prof-sync-badge" class="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/30 border border-emerald-300/40 text-emerald-100 backdrop-blur-sm">
+                            <i class="fa-brands fa-whatsapp text-xs text-emerald-300"></i>
+                            <span id="prof-sync-text">WhatsApp Sync Active</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 1. Customer Details Form Card -->
+            <div class="bg-white rounded-3xl border border-slate-200/80 p-4 shadow-xs space-y-3.5">
+                <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs">
+                            <i class="fa-solid fa-id-card"></i>
+                        </div>
+                        <h4 class="text-xs font-black text-slate-800 uppercase tracking-wider">Customer Details</h4>
+                    </div>
+                    <span class="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <i class="fa-solid fa-bolt text-[9px]"></i> Auto-Filled
+                    </span>
+                </div>
+
+                <div class="space-y-3 text-xs">
+                    <!-- Full Name -->
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-600 mb-1">Full Name</label>
+                        <div class="relative flex items-center">
+                            <i class="fa-regular fa-user absolute left-3 text-slate-400 text-xs"></i>
+                            <input type="text" id="cust-prof-name" placeholder="Enter your full name" class="w-full pl-8.5 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/10 transition">
+                        </div>
+                    </div>
+
+                    <!-- WhatsApp Number (Read-only with badge) -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-[11px] font-bold text-slate-600">WhatsApp Number</label>
+                            <span class="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                                <i class="fa-solid fa-circle-check text-emerald-500"></i> Synced with WhatsApp
+                            </span>
+                        </div>
+                        <div class="relative flex items-center">
+                            <i class="fa-brands fa-whatsapp absolute left-3 text-emerald-500 text-xs"></i>
+                            <input type="text" id="cust-prof-wa" readonly placeholder="WhatsApp Phone Number" class="w-full pl-8.5 pr-3 py-2 bg-slate-100/80 border border-slate-200 rounded-xl text-xs text-slate-700 font-mono outline-none cursor-not-allowed">
+                        </div>
+                    </div>
+
+                    <!-- Delivery Contact Number -->
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-600 mb-1">Delivery Contact Number</label>
+                        <div class="relative flex items-center">
+                            <i class="fa-solid fa-phone absolute left-3 text-slate-400 text-xs"></i>
+                            <input type="tel" id="cust-prof-phone" placeholder="Contact number for delivery partner" class="w-full pl-8.5 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-mono outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/10 transition">
+                        </div>
+                    </div>
+
+                    <!-- Full Delivery Address -->
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-600 mb-1">Full Delivery Address & Landmark</label>
+                        <div class="relative">
+                            <textarea id="cust-prof-address" rows="3" placeholder="House/Flat No., Street, Landmark, Area, City" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/10 transition resize-none"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Feedback Alert -->
+                    <div id="prof-save-feedback" class="hidden p-2.5 rounded-xl text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 flex items-center gap-2">
+                        <i class="fa-solid fa-circle-check text-emerald-600"></i>
+                        <span id="prof-save-msg">Profile updated successfully!</span>
+                    </div>
+
+                    <!-- Save Profile Button -->
+                    <button type="button" onclick="saveCustomerProfile()" id="btn-save-profile" class="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-98 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-500/20 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        <span>Save Profile</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. Order History ("My Orders") Card -->
+            <div class="bg-white rounded-3xl border border-slate-200/80 p-4 shadow-xs space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center text-xs">
+                            <i class="fa-solid fa-receipt"></i>
+                        </div>
+                        <div>
+                            <h4 class="text-xs font-black text-slate-800 uppercase tracking-wider">My Orders</h4>
+                        </div>
+                    </div>
+                    <button type="button" onclick="loadCustomerOrders()" class="text-[11px] font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer">
+                        <i class="fa-solid fa-arrows-rotate text-[10px]"></i> Refresh
+                    </button>
+                </div>
+
+                <!-- Orders List Container -->
+                <div id="orders-list-container" class="space-y-3">
+                    <div class="py-10 text-center space-y-2">
+                        <i class="fa-solid fa-circle-notch fa-spin text-2xl text-emerald-500"></i>
+                        <p class="text-xs text-slate-400">Loading your order history...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 7. CART DRAWER (Bottom Sheet Modal) -->
+        <div id="cart-drawer-backdrop" onclick="toggleCartDrawer(false)" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-40 transition-opacity"></div>
+        <div id="cart-drawer" class="fixed bottom-0 inset-x-0 w-full sm:max-w-md sm:mx-auto bg-white rounded-t-3xl shadow-2xl z-50 transform translate-y-full transition-transform duration-300 ease-out flex flex-col max-h-[85vh] border-t border-slate-200">
+            <!-- Drawer Header -->
+            <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-sm">
+                        <i class="fa-solid fa-cart-shopping"></i>
+                    </div>
+                    <div>
+                        <h4 class="text-sm font-extrabold text-slate-900">Your Shopping Cart</h4>
+                        <span id="drawer-item-count" class="text-[11px] text-slate-500">0 items</span>
+                    </div>
+                </div>
+                <button type="button" onclick="toggleCartDrawer(false)" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center text-xs cursor-pointer">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Items List -->
+            <div id="drawer-cart-items" class="p-4 overflow-y-auto space-y-3 flex-1 divide-y divide-slate-100">
+                <!-- Dynamic cart items -->
+            </div>
+
+            <!-- Customer Details Form (For Direct Omnichannel Checkout) -->
+            <div class="p-4 bg-slate-50 border-t border-slate-100 space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <h5 class="text-xs font-bold text-slate-700">Delivery Details</h5>
+                    <span class="text-[10px] text-emerald-600 font-bold bg-emerald-100/60 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <i class="fa-solid fa-bolt text-[9px]"></i> Instant Push
+                    </span>
+                </div>
+                <div class="grid grid-cols-1 gap-2">
+                    <input type="text" id="cust-name-input" placeholder="Your Full Name (Required)" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500">
+                    <div class="relative flex items-center">
+                        <i class="fa-brands fa-whatsapp text-emerald-500 absolute left-3 text-xs"></i>
+                        <input type="tel" id="cust-phone-input" placeholder="WhatsApp Phone Number (for receipt push)" class="w-full pl-8.5 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 font-mono placeholder-slate-400 outline-none focus:border-emerald-500">
+                    </div>
+                    <textarea id="cust-address-input" rows="2" placeholder="Full Delivery Address & Landmark (Required)" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500 resize-none"></textarea>
+                </div>
+            </div>
+
+            <!-- Cart Price Summary & Direct Checkout -->
+            <div class="p-4 bg-white border-t border-slate-200 space-y-3 shrink-0">
+                <div class="space-y-1.5 text-xs text-slate-600 font-medium">
+                    <div class="flex justify-between">
+                        <span>Items Subtotal</span>
+                        <span id="drawer-subtotal" class="font-bold text-slate-900 font-mono">₹0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Delivery Fee</span>
+                        <span id="drawer-delivery-fee" class="font-bold text-emerald-600 font-mono">FREE</span>
+                    </div>
+                    <div class="flex justify-between text-sm font-black text-slate-900 pt-1.5 border-t border-slate-100">
+                        <span>Total Payable</span>
+                        <span id="drawer-total-amount" class="text-base text-emerald-600 font-mono">₹0</span>
+                    </div>
+                </div>
+
+                <!-- Direct Web Checkout Button (Zero WhatsApp Redirection) -->
+                <button type="button" onclick="placeDirectOrder()" id="btn-checkout-direct" class="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold rounded-2xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 cursor-pointer">
+                    <i class="fa-solid fa-bag-shopping text-sm"></i>
+                    <span id="btn-checkout-label">Place Order Now</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 8. ORDER SUCCESS POPUP MODAL -->
+        <div id="order-success-backdrop" onclick="closeOrderSuccessModal()" class="hidden fixed inset-0 bg-slate-950/75 backdrop-blur-xs z-70 transition-opacity"></div>
+        <div id="order-success-modal" class="hidden fixed inset-0 z-75 flex items-center justify-center p-4 pointer-events-none">
+            <div class="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 text-center space-y-4 pointer-events-auto transform transition duration-300">
+                <!-- Green Celebration Icon -->
+                <div class="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 mx-auto flex items-center justify-center text-3xl shadow-inner">
+                    <i class="fa-solid fa-circle-check"></i>
+                </div>
+
+                <!-- Headline -->
+                <div class="space-y-1">
+                    <h3 class="text-lg font-black text-slate-900 leading-tight">Order Placed Successfully! 🎉</h3>
+                    <p class="text-xs text-slate-600 font-medium">
+                        We've sent the order confirmation and thermal bill receipt directly to your WhatsApp!
+                    </p>
+                </div>
+
+                <!-- Order Summary Badge -->
+                <div class="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 text-left space-y-2 text-xs font-medium">
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">Order ID:</span>
+                        <span id="success-order-id" class="font-black text-slate-900 font-mono">#ORD-000000</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">Total Payable:</span>
+                        <span id="success-order-total" class="font-black text-emerald-600 font-mono text-sm">₹0</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">Payment Mode:</span>
+                        <span class="font-bold text-slate-800">Cash on Delivery (COD)</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[11px] pt-1.5 border-t border-slate-200">
+                        <span class="text-slate-500">WhatsApp Push:</span>
+                        <span class="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md flex items-center gap-1">
+                            <i class="fa-brands fa-whatsapp text-emerald-600"></i> Receipt Sent
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="space-y-2 pt-1">
+                    <button type="button" onclick="viewOrderReceiptFromSuccess()" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold rounded-2xl text-xs transition flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer">
+                        <i class="fa-solid fa-receipt text-sm"></i>
+                        <span>View Thermal Receipt</span>
+                    </button>
+                    <button type="button" onclick="closeOrderSuccessModal()" class="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl text-xs transition cursor-pointer">
+                        Continue Shopping
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 8. PRODUCT DETAIL BOTTOM SHEET MODAL -->
+        <div id="product-detail-backdrop" onclick="closeProductDetailModal()" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 transition-opacity"></div>
+        <div id="product-detail-modal" class="fixed bottom-0 inset-x-0 w-full sm:max-w-md sm:mx-auto bg-white rounded-t-3xl shadow-2xl z-55 transform translate-y-full transition-transform duration-300 ease-out flex flex-col max-h-[90vh] border-t border-slate-200 overflow-hidden">
+            <!-- Modal Header / Drag Bar -->
+            <div class="pt-3 pb-2 px-4 flex items-center justify-between border-b border-slate-100 shrink-0">
+                <div class="flex-1 flex justify-center pl-6">
+                    <div class="w-12 h-1.5 bg-slate-200 rounded-full"></div>
+                </div>
+                <button type="button" onclick="closeProductDetailModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center text-xs cursor-pointer transition">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Modal Scrollable Content -->
+            <div class="p-4 overflow-y-auto space-y-4 flex-1">
+                <!-- Large Product Image Showcase -->
+                <div class="w-full aspect-4/3 rounded-2xl bg-slate-50 overflow-hidden relative flex items-center justify-center border border-slate-100 p-4">
+                    <img id="modal-product-img" src="" alt="Product Image" class="w-full h-full object-contain transition duration-300">
+                    <div id="modal-image-placeholder" class="hidden text-slate-300 text-4xl">
+                        <i class="fa-solid fa-image"></i>
+                    </div>
+                    <!-- Sale Tag -->
+                    <div id="modal-discount-tag" class="hidden absolute top-3 left-3 bg-rose-500 text-white text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow-xs uppercase tracking-wider">
+                        % OFF
+                    </div>
+                    <!-- Out of Stock Badge -->
+                    <div id="modal-stock-badge" class="hidden absolute inset-0 bg-slate-900/60 backdrop-blur-2xs flex items-center justify-center text-white text-xs font-black uppercase tracking-wider">
+                        Sold Out / Currently Unavailable
+                    </div>
+                </div>
+
+                <!-- Product Title & Category -->
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <span id="modal-product-category" class="text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded-md">Category</span>
+                        <span id="modal-product-brand" class="text-[10px] font-semibold text-slate-400">Authentic & Verified</span>
+                    </div>
+                    <h3 id="modal-product-title" class="text-base font-extrabold text-slate-900 leading-snug">Product Name</h3>
+                </div>
+
+                <!-- Price Row -->
+                <div class="p-3 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Special Price</div>
+                        <div class="flex items-baseline gap-2 mt-0.5">
+                            <span id="modal-sale-price" class="text-xl font-black text-slate-900 font-mono">₹0</span>
+                            <span id="modal-mrp" class="text-xs text-slate-400 line-through font-mono">₹0</span>
+                        </div>
+                    </div>
+                    <div id="modal-savings-badge" class="hidden text-[11px] font-bold text-emerald-700 bg-emerald-100/70 border border-emerald-500/20 px-2.5 py-1 rounded-xl">
+                        Save ₹0
+                    </div>
+                </div>
+
+                <!-- Variant / Weight Selector (if product has variants) -->
+                <div id="modal-variants-section" class="hidden space-y-2">
+                    <label class="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-cubes text-emerald-600 text-xs"></i>
+                        <span>Select Option / Pack Size</span>
+                    </label>
+                    <div id="modal-variants-options" class="flex flex-wrap gap-2">
+                        <!-- Variant buttons injected dynamically -->
+                    </div>
+                </div>
+
+                <!-- Product Description -->
+                <div class="space-y-1.5">
+                    <h4 class="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-info text-slate-400 text-xs"></i>
+                        <span>About This Product</span>
+                    </h4>
+                    <p id="modal-product-desc" class="text-xs text-slate-600 leading-relaxed bg-white border border-slate-100 rounded-xl p-3">
+                        Fresh quality assured. Packaged and prepared with high standards.
+                    </p>
+                </div>
+
+                <!-- Trust Highlights -->
+                <div class="grid grid-cols-2 gap-2 pt-1 text-[11px] text-slate-500">
+                    <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2">
+                        <i class="fa-solid fa-truck-fast text-emerald-600 text-sm"></i>
+                        <span>Express Delivery</span>
+                    </div>
+                    <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2">
+                        <i class="fa-solid fa-shield-check text-emerald-600 text-sm"></i>
+                        <span>100% Genuine</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Action Footer -->
+            <div id="modal-footer-container" class="p-4 bg-white border-t border-slate-100 shrink-0">
+                <div id="modal-action-wrapper" class="w-full">
+                    <!-- Dynamic Add to Cart or Quantity Controller injected here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 9. THERMAL RECEIPT MODAL (Zero-Load Thermal Printer Look) -->
+        <div id="receipt-modal-backdrop" onclick="closeThermalReceipt()" class="hidden fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-60 transition-opacity"></div>
+        <div id="receipt-modal" class="hidden fixed inset-0 z-65 flex items-center justify-center p-4 pointer-events-none">
+            <div class="w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-slate-300 overflow-hidden pointer-events-auto max-h-[90vh] flex flex-col">
+                <!-- Receipt Modal Top Bar -->
+                <div class="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between text-xs font-bold shrink-0">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-receipt text-emerald-400"></i>
+                        <span>Customer Thermal Receipt</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="printReceiptContent()" class="text-slate-300 hover:text-white px-2 py-1 rounded bg-slate-800 text-[10px] cursor-pointer">
+                            <i class="fa-solid fa-print"></i> Print
+                        </button>
+                        <button type="button" onclick="closeThermalReceipt()" class="text-slate-400 hover:text-white text-sm cursor-pointer">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Thermal Paper Roll View (Simulating 80mm roll) -->
+                <div class="p-5 overflow-y-auto bg-slate-50 font-mono text-[11px] leading-relaxed select-text" id="thermal-slip-body">
+                    <!-- Dynamic Receipt Content rendered via renderThermalSlipHTML() -->
+                </div>
+
+                <!-- Receipt Action Footer -->
+                <div class="p-3 bg-white border-t border-slate-200 shrink-0 flex gap-2">
+                    <button type="button" onclick="closeThermalReceipt()" class="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer">
+                        Close
+                    </button>
+                    <button type="button" onclick="printReceiptContent()" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs">
+                        <i class="fa-solid fa-print"></i> Print Receipt
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 10. BOTTOM STICKY NAVIGATION BAR -->
+        <nav class="fixed bottom-0 inset-x-0 w-full sm:max-w-md sm:mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 py-2 px-6 flex justify-around items-center z-30 shadow-lg">
+            <button type="button" id="nav-btn-home" onclick="switchStorefrontTab('home')" class="flex flex-col items-center gap-1 text-emerald-600 cursor-pointer">
+                <i class="fa-solid fa-house text-base"></i>
+                <span class="text-[10px] font-bold">Home</span>
+            </button>
+            <button type="button" id="nav-btn-categories" onclick="switchStorefrontTab('home'); setTimeout(scrollToCategories, 50);" class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-800 transition cursor-pointer">
+                <i class="fa-solid fa-layer-group text-base"></i>
+                <span class="text-[10px] font-medium">Categories</span>
+            </button>
+            <button type="button" id="nav-btn-cart" onclick="toggleCartDrawer(true)" class="flex flex-col items-center gap-1 text-slate-400 hover:text-emerald-600 transition relative cursor-pointer">
+                <div class="relative">
+                    <i class="fa-solid fa-cart-shopping text-base"></i>
+                    <span id="bottom-cart-badge" class="hidden absolute -top-1.5 -right-2.5 bg-rose-500 text-white text-[9px] font-black rounded-full h-4 min-w-4 px-1 flex items-center justify-center">0</span>
+                </div>
+                <span class="text-[10px] font-medium">Cart</span>
+            </button>
+            <button type="button" id="nav-btn-profile" onclick="switchStorefrontTab('profile')" class="flex flex-col items-center gap-1 text-slate-400 hover:text-emerald-600 transition cursor-pointer">
+                <i class="fa-solid fa-circle-user text-base"></i>
+                <span class="text-[10px] font-medium">Profile</span>
+            </button>
+        </nav>
+
+    </div>
+
+    <!-- JAVASCRIPT STOREFRONT LOGIC (100% Dynamic - Zero Mock Data) -->
+    <script>
+        // Global Storefront State
+        let storeData = {
+            tenant: {},
+            categories: [],
+            products: []
+        };
+        let activeCategory = 'all';
+        let searchQuery = '';
+        let cart = {}; // { productId: { item, qty, selectedVariant } }
+
+        // Helper: Extract tenant slug from URL path (e.g., /gopal_kirana or ?slug=gopal_kirana)
+        function getStoreSlugFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const querySlug = urlParams.get('slug') || urlParams.get('store') || urlParams.get('username');
+            if (querySlug) return querySlug.trim().toLowerCase();
+
+            const pathParts = window.location.pathname.split('/').filter(Boolean);
+            if (pathParts.length > 0) {
+                const firstPart = pathParts[0].toLowerCase();
+                const reserved = ['store', 'storefront', 'storefront.html', 'admin', 'business', 'dashboard', 'login'];
+                if (reserved.includes(firstPart) && pathParts.length > 1) {
+                    return pathParts[1].toLowerCase();
+                }
+                if (!reserved.includes(firstPart)) {
+                    return firstPart;
+                }
+            }
+            return 'admin'; // fallback default
+        }
+
+        // Helper: Cloudflare wsrv.nl image proxy for fast cached responsive delivery
+        function getProxyImageUrl(rawUrl, width = 400, height = 400) {
+            if (!rawUrl) return '';
+            const clean = rawUrl.trim();
+            if (clean.startsWith('data:') || clean.startsWith('/') || clean.includes('localhost') || clean.includes('127.0.0.1')) {
+                return clean;
+            }
+            return `https://wsrv.nl/?url=${encodeURIComponent(clean)}&w=${width}&h=${height}&fit=contain&output=webp`;
+        }
+
+        // Load Storefront Data from Backend API
+        async function loadStorefront() {
+            const slug = getStoreSlugFromURL();
+            const loadingEl = document.getElementById('products-loading');
+            const emptyEl = document.getElementById('products-empty');
+            const gridEl = document.getElementById('products-grid');
+
+            if (loadingEl) loadingEl.classList.remove('hidden');
+            if (emptyEl) emptyEl.classList.add('hidden');
+            if (gridEl) gridEl.innerHTML = '';
+
+            try {
+                const res = await fetch(`/api/storefront?slug=${encodeURIComponent(slug)}`);
+                const data = await res.json();
+
+                if (data.status !== 'success' || !data.tenant) {
+                    throw new Error(data.message || 'Store not found');
+                }
+
+                storeData = data;
+                renderStoreBranding();
+                renderCategories();
+                renderProducts();
+            } catch (err) {
+                console.error('Failed to load storefront:', err);
+                if (loadingEl) loadingEl.classList.add('hidden');
+                if (emptyEl) {
+                    emptyEl.classList.remove('hidden');
+                    emptyEl.querySelector('h4').innerText = "Store Not Found";
+                    emptyEl.querySelector('p').innerText = "We could not find an active store matching this link. Please confirm the store URL or contact the owner.";
+                }
+            }
+        }
+
+        // Render Store Branding & Announcement
+        function renderStoreBranding() {
+            const t = storeData.tenant || {};
+            const storeName = t.store_name || t.username || 'WaMart Store';
+            document.title = `${storeName} | Online Storefront`;
+
+            // Document elements
+            const storeNameEl = document.getElementById('store-name-display');
+            if (storeNameEl) storeNameEl.innerText = storeName;
+
+            const taglineEl = document.getElementById('store-tagline-display');
+            if (taglineEl) taglineEl.innerText = t.tagline || 'Fresh Products & WhatsApp Ordering';
+
+            const addrEl = document.getElementById('store-address-text');
+            if (addrEl) {
+                addrEl.innerText = t.local_area || t.full_address || 'Hyperlocal Delivery';
+            }
+
+            // Announcement bar
+            const annText = document.getElementById('announcement-text');
+            const annBadge = document.getElementById('announcement-badge');
+            if (annText) {
+                const maxRad = t.max_delivery_radius_km || 15;
+                const freeRad = t.free_delivery_radius_km || 3;
+                annText.innerText = `📍 Delivering within ${maxRad} km · Free Delivery up to ${freeRad} km!`;
+            }
+            if (annBadge) {
+                annBadge.innerText = t.delivery_charge_amount > 0 ? `₹${t.delivery_charge_amount} Delivery Fee Beyond Free Radius` : `Free Delivery`;
+            }
+
+            // Store Logo
+            const logoImg = document.getElementById('store-logo-img');
+            const logoPlaceholder = document.getElementById('store-logo-placeholder');
+            if (t.logo_url) {
+                logoImg.src = getProxyImageUrl(t.logo_url, 150, 150);
+                logoImg.classList.remove('hidden');
+                if (logoPlaceholder) logoPlaceholder.classList.add('hidden');
+            } else {
+                logoImg.classList.add('hidden');
+                if (logoPlaceholder) logoPlaceholder.classList.remove('hidden');
+            }
+
+            // Hero Banner
+            const heroBannerImg = document.getElementById('hero-banner-img');
+            if (heroBannerImg && t.banner_url) {
+                heroBannerImg.src = getProxyImageUrl(t.banner_url, 800, 320);
+                heroBannerImg.classList.remove('hidden');
+            }
+
+            // WhatsApp link bindings
+            const cleanPhone = t.whatsapp_number || '';
+            const defaultMsg = encodeURIComponent(`Hi ${storeName}, I am visiting your online storefront!`);
+            const waLink = cleanPhone ? `https://wa.me/${cleanPhone}?text=${defaultMsg}` : `https://wa.me/?text=${defaultMsg}`;
+
+            const headerWaBtn = document.getElementById('btn-header-whatsapp');
+            const bottomWaBtn = document.getElementById('btn-bottom-whatsapp');
+            const emptyWaBtn = document.getElementById('btn-empty-contact');
+
+            if (headerWaBtn) headerWaBtn.href = waLink;
+            if (bottomWaBtn) bottomWaBtn.href = waLink;
+            if (emptyWaBtn) emptyWaBtn.href = waLink;
+        }
+
+        // Render Circular Categories (Clickable Filters with Active Highlighting)
+        function renderCategories() {
+            const slider = document.getElementById('categories-slider');
+            if (!slider) return;
+
+            const categories = storeData.categories || [];
+            const countLabel = document.getElementById('category-count-label');
+            if (countLabel) countLabel.innerText = `${categories.length} Categories`;
+
+            const isAllActive = activeCategory === 'all';
+            const allBorderClass = isAllActive 
+                ? 'bg-emerald-600 text-white border-2 border-emerald-600 shadow-md ring-4 ring-emerald-500/20 scale-105' 
+                : 'bg-slate-100 text-slate-600 border-2 border-slate-200 hover:border-emerald-300';
+            const allTextClass = isAllActive ? 'text-emerald-700 font-extrabold' : 'text-slate-600 font-semibold';
+
+            let html = `
+                <!-- "All Items" Circle Filter Button -->
+                <button type="button" onclick="selectCategory('all')" class="flex flex-col items-center gap-1.5 shrink-0 group cursor-pointer transition select-none">
+                    <div class="w-15 h-15 rounded-full flex items-center justify-center text-lg transition duration-200 ${allBorderClass}">
+                        <i class="fa-solid fa-border-all"></i>
+                    </div>
+                    <span class="text-[11px] ${allTextClass} text-center max-w-[68px] truncate leading-tight">All Items</span>
+                </button>
+            `;
+
+            categories.forEach(cat => {
+                const catName = (cat.name || cat.category_name || '').trim();
+                const isActive = activeCategory.trim().toLowerCase() === catName.toLowerCase();
+                const borderClass = isActive 
+                    ? 'border-2 border-emerald-600 ring-4 ring-emerald-500/25 shadow-md scale-105 bg-emerald-50' 
+                    : 'border-2 border-slate-200 hover:border-emerald-300 bg-slate-50';
+                const textClass = isActive ? 'text-emerald-700 font-extrabold' : 'text-slate-600 font-semibold';
+
+                let imgHtml = '';
+                if (cat.category_image_url) {
+                    imgHtml = `<img src="${getProxyImageUrl(cat.category_image_url, 120, 120)}" class="w-full h-full object-cover rounded-full" onerror="this.onerror=null; this.parentElement.innerHTML='<i class=\\'fa-solid fa-shapes text-slate-400 text-base\\'></i>'">`;
+                } else {
+                    imgHtml = `<i class="fa-solid fa-shapes text-slate-400 text-base"></i>`;
+                }
+
+                html += `
+                    <button type="button" onclick="selectCategory('${catName.replace(/'/g, "\\'")}')" class="flex flex-col items-center gap-1.5 shrink-0 group cursor-pointer transition select-none">
+                        <div class="w-15 h-15 rounded-full flex items-center justify-center overflow-hidden transition duration-200 shadow-xs ${borderClass}">
+                            ${imgHtml}
+                        </div>
+                        <span class="text-[11px] ${textClass} text-center max-w-[68px] truncate leading-tight">${catName}</span>
+                    </button>
+                `;
+            });
+
+            slider.innerHTML = html;
+        }
+
+        function selectCategory(catName) {
+            activeCategory = (catName || 'all').trim();
+            const heading = document.getElementById('current-category-heading');
+            if (heading) {
+                if (activeCategory === 'all') {
+                    heading.innerHTML = 'All Products';
+                } else {
+                    heading.innerHTML = `<span>${activeCategory}</span> <span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full ml-1">Filtered</span>`;
+                }
+            }
+            renderCategories();
+            renderProducts();
+        }
+
+        // Render Dynamic Product Grid
+        function renderProducts() {
+            const loadingEl = document.getElementById('products-loading');
+            const emptyEl = document.getElementById('products-empty');
+            const gridEl = document.getElementById('products-grid');
+            const totalCountEl = document.getElementById('product-total-count');
+
+            if (loadingEl) loadingEl.classList.add('hidden');
+
+            const allProducts = storeData.products || [];
+            let filtered = allProducts;
+
+            // Filter by Category
+            if (activeCategory !== 'all') {
+                const target = activeCategory.toLowerCase().trim();
+                filtered = filtered.filter(p => {
+                    const c = (p.category || p.category_name || '').toLowerCase().trim();
+                    return c === target || c.includes(target) || target.includes(c);
+                });
+            }
+
+            // Filter by Search
+            if (searchQuery.trim() !== '') {
+                const q = searchQuery.toLowerCase().trim();
+                filtered = filtered.filter(p => 
+                    (p.name || '').toLowerCase().includes(q) || 
+                    (p.category || '').toLowerCase().includes(q) ||
+                    (p.description || '').toLowerCase().includes(q)
+                );
+            }
+
+            if (totalCountEl) totalCountEl.innerText = `(${filtered.length})`;
+
+            if (filtered.length === 0) {
+                if (emptyEl) {
+                    emptyEl.classList.remove('hidden');
+                    const emptyTitle = emptyEl.querySelector('h4');
+                    const emptyDesc = emptyEl.querySelector('p');
+                    if (activeCategory !== 'all') {
+                        if (emptyTitle) emptyTitle.innerText = `No Products in "${activeCategory}"`;
+                        if (emptyDesc) emptyDesc.innerHTML = `No items found under this category. <br><button type="button" onclick="selectCategory('all')" class="mt-2.5 inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"><i class="fa-solid fa-border-all text-[10px]"></i> View All Items</button>`;
+                    } else {
+                        if (emptyTitle) emptyTitle.innerText = "No Products Available";
+                        if (emptyDesc) emptyDesc.innerText = "This store currently has no active products. Please check back soon or chat with the store owner.";
+                    }
+                }
+                if (gridEl) gridEl.innerHTML = '';
+                return;
+            }
+
+            if (emptyEl) emptyEl.classList.add('hidden');
+            if (gridEl) {
+                gridEl.innerHTML = filtered.map(item => renderProductCardHTML(item)).join('');
+            }
+        }
+
+        // Active Modal Product State
+        let activeModalProductId = null;
+        let modalSelectedVariant = '';
+
+        // Product Card HTML Generation (Clickable to open Detail Modal)
+        function renderProductCardHTML(item) {
+            const mrp = Number(item.mrp) || 0;
+            const salePrice = Number(item.sale_price) || parseFloat((item.price || '0').replace(/[^0-9.]/g, '')) || 0;
+            const hasDiscount = mrp > salePrice && salePrice > 0;
+            const discountPct = hasDiscount ? Math.round(((mrp - salePrice) / mrp) * 100) : 0;
+            const inCartQty = cart[item.id]?.qty || 0;
+            const inStock = item.in_stock !== false;
+
+            const displayImg = item.image_url ? getProxyImageUrl(item.image_url, 320, 320) : '';
+
+            // Variant Options
+            let variantSelectorHtml = '';
+            if (Array.isArray(item.variants) && item.variants.length > 0) {
+                variantSelectorHtml = `
+                    <select onclick="event.stopPropagation()" onchange="updateSelectedVariant(${item.id}, this.value)" class="w-full text-[10px] font-semibold bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-slate-700 outline-none focus:border-emerald-500 mb-1.5 cursor-pointer">
+                        ${item.variants.map((v, idx) => `<option value="${v.variant || v}">${v.variant || v} ${v.price ? '- ₹' + v.price : ''}</option>`).join('')}
+                    </select>
+                `;
+            } else if (item.unit_type && item.unit_type !== 'custom') {
+                variantSelectorHtml = `<div class="text-[10px] text-slate-400 font-medium mb-1 truncate">${item.unit_type}</div>`;
+            }
+
+            return `
+                <div onclick="openProductDetailModal(${item.id})" class="bg-white rounded-2xl border border-slate-200/80 p-2.5 flex flex-col justify-between shadow-xs hover:shadow-md transition relative group cursor-pointer active:scale-[0.99] select-none">
+                    
+                    <!-- Discount Tag -->
+                    ${hasDiscount ? `
+                        <div class="absolute top-2.5 left-2.5 z-10 bg-rose-500 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-md shadow-xs tracking-wider uppercase">
+                            ${discountPct}% OFF
+                        </div>
+                    ` : ''}
+
+                    <!-- Product Image Container -->
+                    <div class="w-full aspect-square rounded-xl bg-slate-50 overflow-hidden flex items-center justify-center relative mb-2">
+                        ${displayImg ? `
+                            <img src="${displayImg}" alt="${item.name}" loading="lazy" class="w-full h-full object-contain p-1 group-hover:scale-105 transition duration-300" onerror="this.onerror=null; this.src=''; this.parentElement.innerHTML='<div class=\\'text-slate-300 text-2xl\\'><i class=\\'fa-solid fa-image\\'></i></div>';">
+                        ` : `
+                            <div class="text-slate-300 text-2xl">
+                                <i class="fa-solid fa-bag-shopping"></i>
+                            </div>
+                        `}
+                        ${!inStock ? `
+                            <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-2xs flex items-center justify-center text-white text-[11px] font-black uppercase tracking-wider">
+                                Sold Out
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- Product Details -->
+                    <div class="space-y-1 flex-1 flex flex-col justify-between">
+                        <div>
+                            <span class="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider block truncate">${item.category || 'General'}</span>
+                            <h4 class="text-xs font-bold text-slate-800 line-clamp-2 leading-snug">${item.name}</h4>
+                        </div>
+
+                        ${variantSelectorHtml}
+
+                        <div class="pt-1.5 border-t border-slate-100 flex items-center justify-between gap-1">
+                            <div>
+                                <div class="text-xs font-black text-slate-900 font-mono">₹${salePrice}</div>
+                                ${hasDiscount ? `<div class="text-[10px] text-slate-400 line-through font-mono">₹${mrp}</div>` : ''}
+                            </div>
+
+                            <!-- Cart Add / Quantity Counter Control (with stopPropagation) -->
+                            ${!inStock ? `
+                                <button disabled class="px-3 py-1.5 bg-slate-100 text-slate-400 text-[10px] font-bold rounded-xl cursor-not-allowed">
+                                    Unavailable
+                                </button>
+                            ` : inCartQty === 0 ? `
+                                <button type="button" onclick="event.stopPropagation(); addToCart(${item.id})" class="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white text-[11px] font-extrabold rounded-xl shadow-xs transition flex items-center gap-1 cursor-pointer">
+                                    <i class="fa-solid fa-plus text-[9px]"></i>
+                                    <span>ADD</span>
+                                </button>
+                            ` : `
+                                <div onclick="event.stopPropagation()" class="flex items-center gap-1.5 bg-emerald-50 border border-emerald-500/30 rounded-xl px-1.5 py-1">
+                                    <button type="button" onclick="event.stopPropagation(); changeCartQty(${item.id}, -1)" class="w-5 h-5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold flex items-center justify-center cursor-pointer transition">
+                                        <i class="fa-solid fa-minus text-[8px]"></i>
+                                    </button>
+                                    <span class="text-xs font-black text-emerald-700 min-w-[14px] text-center font-mono">${inCartQty}</span>
+                                    <button type="button" onclick="event.stopPropagation(); changeCartQty(${item.id}, 1)" class="w-5 h-5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold flex items-center justify-center cursor-pointer transition">
+                                        <i class="fa-solid fa-plus text-[8px]"></i>
+                                    </button>
+                                </div>
+                            `}
+                        </div>
+                    </div>
+
+                </div>
+            `;
+        }
+
+        // ==========================================
+        // PRODUCT DETAIL BOTTOM SHEET MODAL LOGIC
+        // ==========================================
+        function openProductDetailModal(productId) {
+            const product = (storeData.products || []).find(p => p.id === productId);
+            if (!product) return;
+
+            activeModalProductId = productId;
+            const inCart = cart[productId];
+            modalSelectedVariant = inCart?.selectedVariant || (Array.isArray(product.variants) && product.variants.length > 0 ? (product.variants[0].variant || product.variants[0]) : '');
+
+            // Populate Modal Content
+            const mrp = Number(product.mrp) || 0;
+            const salePrice = Number(product.sale_price) || parseFloat((product.price || '0').replace(/[^0-9.]/g, '')) || 0;
+            const hasDiscount = mrp > salePrice && salePrice > 0;
+            const discountPct = hasDiscount ? Math.round(((mrp - salePrice) / mrp) * 100) : 0;
+            const inStock = product.in_stock !== false;
+
+            // Image
+            const imgEl = document.getElementById('modal-product-img');
+            const imgPlaceholder = document.getElementById('modal-image-placeholder');
+            const discountTag = document.getElementById('modal-discount-tag');
+            const stockBadge = document.getElementById('modal-stock-badge');
+
+            if (product.image_url) {
+                imgEl.src = getProxyImageUrl(product.image_url, 600, 600);
+                imgEl.classList.remove('hidden');
+                if (imgPlaceholder) imgPlaceholder.classList.add('hidden');
+            } else {
+                imgEl.classList.add('hidden');
+                if (imgPlaceholder) imgPlaceholder.classList.remove('hidden');
+            }
+
+            if (discountTag) {
+                if (hasDiscount) {
+                    discountTag.innerText = `${discountPct}% OFF`;
+                    discountTag.classList.remove('hidden');
+                } else {
+                    discountTag.classList.add('hidden');
+                }
+            }
+
+            if (stockBadge) {
+                if (!inStock) stockBadge.classList.remove('hidden');
+                else stockBadge.classList.add('hidden');
+            }
+
+            // Title & Category
+            const catEl = document.getElementById('modal-product-category');
+            const titleEl = document.getElementById('modal-product-title');
+            if (catEl) catEl.innerText = product.category || 'General';
+            if (titleEl) titleEl.innerText = product.name;
+
+            // Pricing
+            const salePriceEl = document.getElementById('modal-sale-price');
+            const mrpEl = document.getElementById('modal-mrp');
+            const savingsBadge = document.getElementById('modal-savings-badge');
+
+            if (salePriceEl) salePriceEl.innerText = `₹${salePrice}`;
+            if (mrpEl) {
+                if (hasDiscount) {
+                    mrpEl.innerText = `₹${mrp}`;
+                    mrpEl.classList.remove('hidden');
+                } else {
+                    mrpEl.classList.add('hidden');
+                }
+            }
+            if (savingsBadge) {
+                if (hasDiscount) {
+                    savingsBadge.innerText = `Save ₹${mrp - salePrice}`;
+                    savingsBadge.classList.remove('hidden');
+                } else {
+                    savingsBadge.classList.add('hidden');
+                }
+            }
+
+            // Description
+            const descEl = document.getElementById('modal-product-desc');
+            if (descEl) {
+                descEl.innerText = product.description || 'Premium quality guaranteed. Direct delivery from store.';
+            }
+
+            // Variants
+            const varSection = document.getElementById('modal-variants-section');
+            const varOptions = document.getElementById('modal-variants-options');
+            if (varSection && varOptions) {
+                if (Array.isArray(product.variants) && product.variants.length > 0) {
+                    varSection.classList.remove('hidden');
+                    varOptions.innerHTML = product.variants.map(v => {
+                        const vName = v.variant || v;
+                        const vPrice = v.price ? `(₹${v.price})` : '';
+                        const isSelected = modalSelectedVariant === vName;
+                        const btnClass = isSelected 
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200';
+                        return `
+                            <button type="button" onclick="selectModalVariant('${vName.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${btnClass}">
+                                ${vName} ${vPrice}
+                            </button>
+                        `;
+                    }).join('');
+                } else {
+                    varSection.classList.add('hidden');
+                    varOptions.innerHTML = '';
+                }
+            }
+
+            // Action Button
+            updateModalActionButton();
+
+            // Open Modal with Smooth Animation
+            const backdrop = document.getElementById('product-detail-backdrop');
+            const modal = document.getElementById('product-detail-modal');
+            if (backdrop) backdrop.classList.remove('hidden');
+            if (modal) {
+                setTimeout(() => modal.classList.remove('translate-y-full'), 10);
+            }
+        }
+
+        function closeProductDetailModal() {
+            const modal = document.getElementById('product-detail-modal');
+            const backdrop = document.getElementById('product-detail-backdrop');
+            if (modal) modal.classList.add('translate-y-full');
+            setTimeout(() => {
+                if (backdrop) backdrop.classList.add('hidden');
+                activeModalProductId = null;
+            }, 250);
+        }
+
+        function selectModalVariant(vName) {
+            modalSelectedVariant = vName;
+            if (activeModalProductId && cart[activeModalProductId]) {
+                cart[activeModalProductId].selectedVariant = vName;
+                updateCartUI();
+            }
+            // Re-render variant buttons
+            const product = storeData.products.find(p => p.id === activeModalProductId);
+            if (product && Array.isArray(product.variants)) {
+                const varOptions = document.getElementById('modal-variants-options');
+                if (varOptions) {
+                    varOptions.innerHTML = product.variants.map(v => {
+                        const name = v.variant || v;
+                        const vPrice = v.price ? `(₹${v.price})` : '';
+                        const isSelected = modalSelectedVariant === name;
+                        const btnClass = isSelected 
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200';
+                        return `
+                            <button type="button" onclick="selectModalVariant('${name.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${btnClass}">
+                                ${name} ${vPrice}
+                            </button>
+                        `;
+                    }).join('');
+                }
+            }
+            updateModalActionButton();
+        }
+
+        function updateModalActionButton() {
+            if (!activeModalProductId) return;
+            const wrapper = document.getElementById('modal-action-wrapper');
+            if (!wrapper) return;
+
+            const product = storeData.products.find(p => p.id === activeModalProductId);
+            if (!product) return;
+
+            const inStock = product.in_stock !== false;
+            const inCartQty = cart[activeModalProductId]?.qty || 0;
+            const salePrice = Number(product.sale_price) || parseFloat((product.price || '0').replace(/[^0-9.]/g, '')) || 0;
+
+            if (!inStock) {
+                wrapper.innerHTML = `
+                    <button disabled class="w-full py-3.5 bg-slate-100 text-slate-400 font-bold rounded-2xl text-xs cursor-not-allowed">
+                        Currently Sold Out
+                    </button>
+                `;
+            } else if (inCartQty === 0) {
+                wrapper.innerHTML = `
+                    <button type="button" onclick="addModalToCart()" class="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 active:scale-98 text-white font-extrabold rounded-2xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 cursor-pointer">
+                        <i class="fa-solid fa-cart-plus text-base"></i>
+                        <span>Add to Cart • ₹${salePrice}</span>
+                    </button>
+                `;
+            } else {
+                wrapper.innerHTML = `
+                    <div class="flex items-center justify-between bg-emerald-50 border border-emerald-500/30 rounded-2xl p-2 gap-3">
+                        <button type="button" onclick="changeModalCartQty(-1)" class="w-10 h-10 rounded-xl bg-white text-emerald-700 hover:bg-emerald-100 font-black text-sm flex items-center justify-center shadow-xs cursor-pointer transition">
+                            <i class="fa-solid fa-minus"></i>
+                        </button>
+                        <div class="text-center flex-1">
+                            <span class="text-xs font-black text-emerald-900 font-mono">${inCartQty} in cart</span>
+                            <span class="text-[10px] text-emerald-600 font-semibold block font-mono">₹${salePrice * inCartQty} Total</span>
+                        </div>
+                        <button type="button" onclick="changeModalCartQty(1)" class="w-10 h-10 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-sm flex items-center justify-center shadow-xs cursor-pointer transition">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
+                    </div>
+                `;
+            }
+        }
+
+        function addModalToCart() {
+            if (!activeModalProductId) return;
+            addToCart(activeModalProductId);
+            if (modalSelectedVariant && cart[activeModalProductId]) {
+                cart[activeModalProductId].selectedVariant = modalSelectedVariant;
+                updateCartUI();
+            }
+            updateModalActionButton();
+        }
+
+        function changeModalCartQty(delta) {
+            if (!activeModalProductId) return;
+            changeCartQty(activeModalProductId, delta);
+            updateModalActionButton();
+        }
+
+        // Cart State Management
+        function addToCart(productId) {
+            const product = storeData.products.find(p => p.id === productId);
+            if (!product) return;
+
+            if (!cart[productId]) {
+                cart[productId] = {
+                    item: product,
+                    qty: 1,
+                    selectedVariant: Array.isArray(product.variants) && product.variants.length > 0 ? (product.variants[0].variant || product.variants[0]) : ''
+                };
+            } else {
+                cart[productId].qty++;
+            }
+            updateCartUI();
+            renderProducts();
+            if (activeModalProductId === productId) updateModalActionButton();
+        }
+
+        function changeCartQty(productId, delta) {
+            if (!cart[productId]) return;
+            cart[productId].qty += delta;
+            if (cart[productId].qty <= 0) {
+                delete cart[productId];
+            }
+            updateCartUI();
+            renderProducts();
+            if (activeModalProductId === productId) updateModalActionButton();
+        }
+
+        function updateSelectedVariant(productId, variantName) {
+            if (cart[productId]) {
+                cart[productId].selectedVariant = variantName;
+                updateCartUI();
+            }
+        }
+
+        function updateCartUI() {
+            const items = Object.values(cart);
+            const totalCount = items.reduce((sum, c) => sum + c.qty, 0);
+
+            // Update badge on bottom nav
+            const badge = document.getElementById('bottom-cart-badge');
+            if (badge) {
+                if (totalCount > 0) {
+                    badge.innerText = totalCount;
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.classList.add('hidden');
+                }
+            }
+
+            // Update Drawer
+            const drawerCount = document.getElementById('drawer-item-count');
+            if (drawerCount) drawerCount.innerText = `${totalCount} item${totalCount === 1 ? '' : 's'}`;
+
+            const itemsContainer = document.getElementById('drawer-cart-items');
+            if (itemsContainer) {
+                if (items.length === 0) {
+                    itemsContainer.innerHTML = `
+                        <div class="py-12 text-center space-y-2">
+                            <i class="fa-solid fa-cart-shopping text-2xl text-slate-300"></i>
+                            <p class="text-xs text-slate-400 font-medium">Your cart is empty. Tap ADD on products to start shopping!</p>
+                        </div>
+                    `;
+                } else {
+                    itemsContainer.innerHTML = items.map(c => {
+                        const itm = c.item;
+                        const price = Number(itm.sale_price) || parseFloat((itm.price || '0').replace(/[^0-9.]/g, '')) || 0;
+                        const itemTotal = price * c.qty;
+                        return `
+                            <div class="py-2.5 flex items-center justify-between gap-3">
+                                <div class="min-w-0 flex-1">
+                                    <h6 class="text-xs font-bold text-slate-900 truncate">${itm.name}</h6>
+                                    ${c.selectedVariant ? `<span class="text-[10px] text-slate-400 block">${c.selectedVariant}</span>` : ''}
+                                    <span class="text-xs font-black text-slate-700 font-mono">₹${price} × ${c.qty} = ₹${itemTotal}</span>
+                                </div>
+                                <div class="flex items-center gap-1.5 bg-slate-100 rounded-xl px-1.5 py-1">
+                                    <button type="button" onclick="changeCartQty(${itm.id}, -1)" class="w-5 h-5 rounded-lg bg-white text-slate-700 text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer">
+                                        <i class="fa-solid fa-minus text-[8px]"></i>
+                                    </button>
+                                    <span class="text-xs font-black text-slate-900 min-w-[14px] text-center font-mono">${c.qty}</span>
+                                    <button type="button" onclick="changeCartQty(${itm.id}, 1)" class="w-5 h-5 rounded-lg bg-emerald-500 text-white text-xs font-bold flex items-center justify-center shadow-xs cursor-pointer">
+                                        <i class="fa-solid fa-plus text-[8px]"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            // Calculations
+            const subtotal = items.reduce((sum, c) => {
+                const price = Number(c.item.sale_price) || parseFloat((c.item.price || '0').replace(/[^0-9.]/g, '')) || 0;
+                return sum + (price * c.qty);
+            }, 0);
+
+            const freeRad = storeData.tenant.free_delivery_radius_km || 3.0;
+            const delFee = 0; // Default free within free radius
+            const total = subtotal + delFee;
+
+            const subEl = document.getElementById('drawer-subtotal');
+            const feeEl = document.getElementById('drawer-delivery-fee');
+            const totEl = document.getElementById('drawer-total-amount');
+
+            if (subEl) subEl.innerText = `₹${subtotal}`;
+            if (feeEl) feeEl.innerText = subtotal > 0 ? 'FREE' : '₹0';
+            if (totEl) totEl.innerText = `₹${total}`;
+        }
+
+        function toggleCartDrawer(open) {
+            const drawer = document.getElementById('cart-drawer');
+            const backdrop = document.getElementById('cart-drawer-backdrop');
+            if (open) {
+                updateCartUI();
+                drawer.classList.remove('translate-y-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                drawer.classList.add('translate-y-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        // ==========================================
+        // DIRECT WEB ORDER CHECKOUT (Omnichannel API)
+        // ==========================================
+        let lastPlacedOrderId = '';
+
+        async function placeDirectOrder() {
+            const items = Object.values(cart);
+            if (items.length === 0) {
+                alert('Your cart is empty. Please add items to checkout.');
+                return;
+            }
+
+            const nameInput = document.getElementById('cust-name-input');
+            const phoneInput = document.getElementById('cust-phone-input');
+            const addrInput = document.getElementById('cust-address-input');
+            const checkoutBtn = document.getElementById('btn-checkout-direct');
+
+            const custName = (nameInput?.value || '').trim();
+            const custPhone = (phoneInput?.value || '').replace(/\D/g, '');
+            const custAddr = (addrInput?.value || '').trim();
+
+            if (!custName) {
+                alert('Please enter your full name for order confirmation.');
+                nameInput?.focus();
+                return;
+            }
+            if (!custPhone || custPhone.length < 8) {
+                alert('Please enter your valid WhatsApp phone number so we can deliver your bill receipt.');
+                phoneInput?.focus();
+                return;
+            }
+            if (!custAddr) {
+                alert('Please enter your complete delivery address & landmark.');
+                addrInput?.focus();
+                return;
+            }
+
+            // Set processing state on button
+            if (checkoutBtn) {
+                checkoutBtn.disabled = true;
+                checkoutBtn.innerHTML = `
+                    <i class="fa-solid fa-circle-notch fa-spin text-sm"></i>
+                    <span>Processing Order...</span>
+                `;
+            }
+
+            const token = getCustomerToken();
+            const jid = localStorage.getItem('wamart_cust_jid') || `${custPhone}@s.whatsapp.net`;
+            const tenantId = storeData.tenant?.username || getStoreSlugFromURL();
+
+            // Format items array
+            const cartItemsPayload = items.map(c => {
+                const itm = c.item;
+                const price = Number(itm.sale_price) || parseFloat((itm.price || '0').replace(/[^0-9.]/g, '')) || 0;
+                return {
+                    id: itm.id,
+                    name: itm.name,
+                    qty: c.qty,
+                    price: price,
+                    selectedVariant: c.selectedVariant || ''
+                };
+            });
+
+            const subtotal = cartItemsPayload.reduce((sum, it) => sum + (it.price * it.qty), 0);
+            const delFee = 0; // Default within free delivery radius
+            const totalAmount = subtotal + delFee;
+
+            const payload = {
+                auth_token: token,
+                jid: jid,
+                tenant_id: tenantId,
+                customer_name: custName,
+                customer_phone: custPhone,
+                delivery_phone: custPhone,
+                delivery_address: custAddr,
+                payment_mode: 'COD',
+                items: cartItemsPayload,
+                subtotal: subtotal,
+                delivery_fee: delFee,
+                total_amount: totalAmount
+            };
+
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                const res = await fetch('/api/orders/checkout', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+                if (data.status !== 'success' || !data.order_id) {
+                    throw new Error(data.message || 'Failed to place order');
+                }
+
+                lastPlacedOrderId = data.order_id;
+
+                // Reset cart & update UI
+                cart = {};
+                updateCartUI();
+                renderProducts();
+
+                // Close cart drawer
+                toggleCartDrawer(false);
+
+                // Populate and display Order Success Modal
+                const successOrderIdEl = document.getElementById('success-order-id');
+                const successTotalEl = document.getElementById('success-order-total');
+                if (successOrderIdEl) successOrderIdEl.innerText = `#${data.order_id}`;
+                if (successTotalEl) successTotalEl.innerText = `₹${data.total_amount || totalAmount}`;
+
+                const successBackdrop = document.getElementById('order-success-backdrop');
+                const successModal = document.getElementById('order-success-modal');
+                if (successBackdrop) successBackdrop.classList.remove('hidden');
+                if (successModal) successModal.classList.remove('hidden');
+
+                // Cache order so Profile -> My Orders shows it immediately
+                if (data.order) {
+                    customerOrdersCache.unshift(data.order);
+                }
+
+                console.log(`🎉 [Direct Checkout] Order #${data.order_id} placed. Confirmation & receipt delivered via WhatsApp.`);
+            } catch (err) {
+                console.error('Order checkout error:', err);
+                alert(err.message || 'Error placing order. Please try again.');
+            } finally {
+                if (checkoutBtn) {
+                    checkoutBtn.disabled = false;
+                    checkoutBtn.innerHTML = `
+                        <i class="fa-solid fa-bag-shopping text-sm"></i>
+                        <span id="btn-checkout-label">Place Order Now</span>
+                    `;
+                }
+            }
+        }
+
+        function closeOrderSuccessModal() {
+            const backdrop = document.getElementById('order-success-backdrop');
+            const modal = document.getElementById('order-success-modal');
+            if (backdrop) backdrop.classList.add('hidden');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function viewOrderReceiptFromSuccess() {
+            closeOrderSuccessModal();
+            if (lastPlacedOrderId) {
+                openThermalReceipt(lastPlacedOrderId);
+            }
+        }
+
+        // Live Search Handler
+        function handleSearch(val) {
+            searchQuery = val;
+            const clearBtn = document.getElementById('search-clear-btn');
+            if (clearBtn) {
+                if (val.trim() !== '') clearBtn.classList.remove('hidden');
+                else clearBtn.classList.add('hidden');
+            }
+            renderProducts();
+        }
+
+        function clearSearch() {
+            const input = document.getElementById('store-search-input');
+            if (input) input.value = '';
+            handleSearch('');
+        }
+
+        function scrollToTop() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function scrollToCategories() {
+            const section = document.getElementById('categories-slider');
+            if (section) {
+                section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        // ==========================================
+        // OMNICHANNEL: TAB SWITCHING (Home / Profile)
+        // ==========================================
+        let currentTab = 'home';
+        let customerOrdersCache = [];
+
+        function switchStorefrontTab(tab) {
+            currentTab = tab;
+            const homeView = document.getElementById('view-storefront-home');
+            const profileView = document.getElementById('view-storefront-profile');
+
+            const btnHome = document.getElementById('nav-btn-home');
+            const btnProfile = document.getElementById('nav-btn-profile');
+
+            if (tab === 'profile') {
+                if (homeView) homeView.classList.add('hidden');
+                if (profileView) profileView.classList.remove('hidden');
+
+                if (btnHome) btnHome.className = 'flex flex-col items-center gap-1 text-slate-400 hover:text-slate-800 transition cursor-pointer';
+                if (btnProfile) btnProfile.className = 'flex flex-col items-center gap-1 text-emerald-600 font-bold transition cursor-pointer';
+
+                loadCustomerProfile();
+                loadCustomerOrders();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+                if (homeView) homeView.classList.remove('hidden');
+                if (profileView) profileView.classList.add('hidden');
+
+                if (btnHome) btnHome.className = 'flex flex-col items-center gap-1 text-emerald-600 font-bold cursor-pointer';
+                if (btnProfile) btnProfile.className = 'flex flex-col items-center gap-1 text-slate-400 hover:text-slate-800 transition cursor-pointer';
+
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        }
+
+        // ==========================================
+        // OMNICHANNEL: MAGIC LINK AUTH & SYNC
+        // ==========================================
+        function getCustomerToken() {
+            return localStorage.getItem('wamart_cust_token') || '';
+        }
+
+        async function checkMagicLinkAuth() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const authToken = urlParams.get('auth_token') || urlParams.get('token');
+
+            if (authToken && authToken.trim()) {
+                console.log('🔗 [Omnichannel] Magic link token detected. Verifying session...');
+                try {
+                    const res = await fetch('/api/auth/verify-token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: authToken.trim() })
+                    });
+                    const data = await res.json();
+
+                    if (data.status === 'success' && data.token) {
+                        localStorage.setItem('wamart_cust_token', data.token);
+                        if (data.jid) localStorage.setItem('wamart_cust_jid', data.jid);
+                        if (data.customer) localStorage.setItem('wamart_cust_data', JSON.stringify(data.customer));
+
+                        // Pre-fill profile & checkout forms
+                        populateCustomerForms(data.customer || {});
+
+                        // Clean URL parameter without reloading page
+                        const cleanUrl = new URL(window.location.href);
+                        cleanUrl.searchParams.delete('auth_token');
+                        cleanUrl.searchParams.delete('token');
+                        window.history.replaceState({}, document.title, cleanUrl.toString());
+
+                        console.log('✅ [Omnichannel] WhatsApp session successfully verified & synced!');
+                        showSyncToast(`Welcome back, ${data.customer?.name || 'Customer'}! Synced with WhatsApp.`);
+
+                        // Sync active cart from backend
+                        syncRemoteCart();
+                        return;
+                    }
+                } catch (err) {
+                    console.warn('⚠️ [Omnichannel] Failed to verify magic token:', err);
+                }
+            }
+
+            // If token already stored, load existing profile & cart
+            const storedToken = getCustomerToken();
+            if (storedToken) {
+                loadCustomerProfile();
+                syncRemoteCart();
+            }
+        }
+
+        function populateCustomerForms(cust) {
+            const name = cust.name || cust.full_name || '';
+            const wa = cust.whatsapp_number || cust.wa_number || '';
+            const phone = cust.delivery_phone || cust.contact_phone || wa || '';
+            const addr = cust.delivery_address || cust.saved_address || '';
+
+            // Profile Tab Inputs
+            const profNameInput = document.getElementById('cust-prof-name');
+            const profWaInput = document.getElementById('cust-prof-wa');
+            const profPhoneInput = document.getElementById('cust-prof-phone');
+            const profAddrInput = document.getElementById('cust-prof-address');
+
+            if (profNameInput && !profNameInput.value) profNameInput.value = name;
+            if (profWaInput) profWaInput.value = wa ? `+${wa.replace(/\D/g, '')}` : '';
+            if (profPhoneInput && !profPhoneInput.value) profPhoneInput.value = phone;
+            if (profAddrInput && !profAddrInput.value) profAddrInput.value = addr;
+
+            // Profile Hero Badge
+            const heroName = document.getElementById('prof-hero-name');
+            const heroPhone = document.getElementById('prof-hero-phone');
+            const syncText = document.getElementById('prof-sync-text');
+
+            if (heroName) heroName.innerText = name || 'WhatsApp Customer';
+            if (heroPhone) heroPhone.innerText = wa ? `+${wa.replace(/\D/g, '')}` : 'Verified Customer';
+            if (syncText) syncText.innerText = 'WhatsApp Connected';
+
+            // Cart Drawer Checkout Inputs
+            const cartNameInput = document.getElementById('cust-name-input');
+            const cartPhoneInput = document.getElementById('cust-phone-input');
+            const cartAddrInput = document.getElementById('cust-address-input');
+            if (cartNameInput && !cartNameInput.value) cartNameInput.value = name;
+            if (cartPhoneInput && !cartPhoneInput.value) cartPhoneInput.value = phone || wa;
+            if (cartAddrInput && !cartAddrInput.value) cartAddrInput.value = addr;
+        }
+
+        // Load Customer Profile via API
+        async function loadCustomerProfile() {
+            const token = getCustomerToken();
+            if (!token) {
+                const heroName = document.getElementById('prof-hero-name');
+                const heroPhone = document.getElementById('prof-hero-phone');
+                const syncText = document.getElementById('prof-sync-text');
+                if (heroName) heroName.innerText = 'Welcome Guest';
+                if (heroPhone) heroPhone.innerText = 'Visit via WhatsApp link to sync account';
+                if (syncText) syncText.innerText = 'WhatsApp Sync Ready';
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/customer/profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.status === 401) {
+                    localStorage.removeItem('wamart_cust_token');
+                    return;
+                }
+                const data = await res.json();
+                if (data.status === 'success' && data.customer) {
+                    populateCustomerForms(data.customer);
+                }
+            } catch (e) {
+                console.warn('Customer profile load notice:', e);
+            }
+        }
+
+        // Save Customer Profile via API
+        async function saveCustomerProfile() {
+            const token = getCustomerToken();
+            const name = (document.getElementById('cust-prof-name')?.value || '').trim();
+            const deliveryPhone = (document.getElementById('cust-prof-phone')?.value || '').trim();
+            const deliveryAddress = (document.getElementById('cust-prof-address')?.value || '').trim();
+
+            const feedbackEl = document.getElementById('prof-save-feedback');
+            const msgEl = document.getElementById('prof-save-msg');
+            const saveBtn = document.getElementById('btn-save-profile');
+
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...`;
+            }
+
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                const res = await fetch('/api/customer/profile', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({
+                        name,
+                        delivery_phone: deliveryPhone,
+                        delivery_address: deliveryAddress
+                    })
+                });
+                const data = await res.json();
+
+                if (feedbackEl) {
+                    feedbackEl.classList.remove('hidden');
+                    if (data.status === 'success') {
+                        feedbackEl.className = 'p-2.5 rounded-xl text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 flex items-center gap-2';
+                        if (msgEl) msgEl.innerText = 'Profile details saved and synchronized!';
+                        // Update cart drawer inputs as well
+                        const cartName = document.getElementById('cust-name-input');
+                        const cartPhone = document.getElementById('cust-phone-input');
+                        const cartAddr = document.getElementById('cust-address-input');
+                        if (cartName) cartName.value = name;
+                        if (cartPhone) cartPhone.value = deliveryPhone;
+                        if (cartAddr) cartAddr.value = deliveryAddress;
+
+                        const heroName = document.getElementById('prof-hero-name');
+                        if (heroName && name) heroName.innerText = name;
+                    } else {
+                        feedbackEl.className = 'p-2.5 rounded-xl text-[11px] font-semibold text-rose-800 bg-rose-50 border border-rose-200 flex items-center gap-2';
+                        if (msgEl) msgEl.innerText = data.message || 'Failed to save profile.';
+                    }
+                    setTimeout(() => { if (feedbackEl) feedbackEl.classList.add('hidden'); }, 4000);
+                }
+            } catch (err) {
+                if (feedbackEl) {
+                    feedbackEl.classList.remove('hidden');
+                    feedbackEl.className = 'p-2.5 rounded-xl text-[11px] font-semibold text-rose-800 bg-rose-50 border border-rose-200 flex items-center gap-2';
+                    if (msgEl) msgEl.innerText = 'Error saving profile details.';
+                }
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>Save Profile</span>`;
+                }
+            }
+        }
+
+        // Load Customer Order History
+        async function loadCustomerOrders() {
+            const container = document.getElementById('orders-list-container');
+            if (!container) return;
+
+            const token = getCustomerToken();
+            if (!token) {
+                container.innerHTML = `
+                    <div class="py-8 text-center space-y-2.5 px-3">
+                        <div class="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-xl">
+                            <i class="fa-solid fa-link-slash"></i>
+                        </div>
+                        <h5 class="text-xs font-bold text-slate-700">Account Not Synced Yet</h5>
+                        <p class="text-[11px] text-slate-400 max-w-xs mx-auto">To see your orders and receipts, ask the WhatsApp AI assistant for your magic store link!</p>
+                        <a id="btn-sync-help-wa" href="#" target="_blank" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-500 text-white text-[11px] font-bold rounded-xl shadow-xs transition">
+                            <i class="fa-brands fa-whatsapp"></i> Chat on WhatsApp
+                        </a>
+                    </div>
+                `;
+                const t = storeData.tenant || {};
+                const waNum = t.whatsapp_number || '';
+                const btn = document.getElementById('btn-sync-help-wa');
+                if (btn && waNum) btn.href = `https://wa.me/${waNum}?text=${encodeURIComponent('Hi, please send me my store link so I can view my orders!')}`;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="py-8 text-center space-y-2">
+                    <i class="fa-solid fa-circle-notch fa-spin text-xl text-emerald-500"></i>
+                    <p class="text-xs text-slate-400 font-medium">Fetching your orders...</p>
+                </div>
+            `;
+
+            try {
+                const res = await fetch('/api/customer/orders', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                const orders = data.orders || [];
+                customerOrdersCache = orders;
+
+                if (orders.length === 0) {
+                    container.innerHTML = `
+                        <div class="py-8 text-center space-y-2 px-3">
+                            <div class="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-500 mx-auto flex items-center justify-center text-xl">
+                                <i class="fa-solid fa-bag-shopping"></i>
+                            </div>
+                            <h5 class="text-xs font-bold text-slate-700">No Orders Placed Yet</h5>
+                            <p class="text-[11px] text-slate-400 max-w-xs mx-auto">Browse our catalog, add items to cart, and checkout seamlessly!</p>
+                            <button type="button" onclick="switchStorefrontTab('home')" class="px-4 py-2 bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer">
+                                Start Shopping
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = orders.map((ord, idx) => {
+                    const statusClass = (ord.order_status === 'DELIVERED' || ord.payment_status === 'PAID')
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : ord.order_status === 'CANCELLED'
+                        ? 'bg-rose-100 text-rose-800 border-rose-300'
+                        : 'bg-blue-100 text-blue-800 border-blue-300';
+
+                    const dateStr = ord.created_at ? new Date(ord.created_at).toLocaleDateString('en-IN', {
+                        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    }) : 'Recent';
+
+                    // Parse items display summary
+                    let itemsSummary = '';
+                    if (Array.isArray(ord.items)) {
+                        itemsSummary = ord.items.map(it => `${it.qty || 1}x ${it.name || it.item_name || 'Item'}`).join(', ');
+                    } else if (typeof ord.items === 'string') {
+                        itemsSummary = ord.items;
+                    }
+
+                    return `
+                        <div class="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5 shadow-2xs hover:shadow-xs transition">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-xs font-black text-slate-900 font-mono">#${ord.order_id}</span>
+                                </div>
+                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border ${statusClass}">
+                                    ${ord.order_status || 'CONFIRMED'}
+                                </span>
+                            </div>
+
+                            <div class="text-[11px] text-slate-500 line-clamp-2">
+                                <span class="font-bold text-slate-700">Items:</span> ${itemsSummary || 'Order details'}
+                            </div>
+
+                            <div class="pt-2 border-t border-slate-200 flex items-center justify-between">
+                                <div>
+                                    <span class="text-[10px] text-slate-400 block">${dateStr}</span>
+                                    <span class="text-xs font-black text-slate-900 font-mono">₹${ord.total_amount}</span>
+                                </div>
+                                <button type="button" onclick="openThermalReceipt('${ord.order_id}')" class="px-3 py-1.5 bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-xl text-[11px] font-bold text-slate-700 flex items-center gap-1.5 transition shadow-2xs cursor-pointer">
+                                    <i class="fa-solid fa-receipt text-emerald-600"></i>
+                                    <span>View Receipt</span>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="py-6 text-center text-xs text-rose-500">
+                        Failed to load order history. Please try again.
+                    </div>
+                `;
+            }
+        }
+
+        // ==========================================
+        // THERMAL RECEIPT MODAL (80mm Thermal Printer)
+        // ==========================================
+        function openThermalReceipt(orderId) {
+            const ord = customerOrdersCache.find(o => o.order_id === orderId) || {
+                order_id: orderId,
+                total_amount: 0,
+                payment_mode: 'COD',
+                payment_status: 'CONFIRMED',
+                order_status: 'CONFIRMED',
+                items: [],
+                created_at: new Date().toISOString()
+            };
+
+            const tenant = storeData.tenant || {};
+            const storeName = tenant.store_name || tenant.username || 'WaMart Store';
+            const storeAddr = tenant.full_address || tenant.local_area || 'Local Store';
+            const storePhone = tenant.phone || tenant.whatsapp_number || '';
+
+            const dateStr = ord.created_at ? new Date(ord.created_at).toLocaleDateString('en-IN', {
+                day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+            }) : new Date().toLocaleString();
+
+            let itemsList = ord.items;
+            if (typeof itemsList === 'string') {
+                try { itemsList = JSON.parse(itemsList); } catch { itemsList = []; }
+            }
+            if (!Array.isArray(itemsList)) itemsList = [];
+
+            let itemsRowsHTML = '';
+            let subtotal = 0;
+
+            if (itemsList.length === 0) {
+                itemsRowsHTML = `
+                    <div class="flex justify-between py-1 text-slate-600">
+                        <span>1 x Order Items</span>
+                        <span>₹${ord.total_amount}</span>
+                    </div>
+                `;
+                subtotal = ord.total_amount;
+            } else {
+                itemsList.forEach(it => {
+                    const itName = it.name || it.item_name || 'Item';
+                    const itQty = it.qty || 1;
+                    const itPrice = Number(it.price || it.sale_price) || 0;
+                    const lineTotal = itPrice * itQty;
+                    subtotal += lineTotal;
+                    itemsRowsHTML += `
+                        <div class="flex justify-between py-0.5">
+                            <span class="truncate max-w-[200px]">${itQty} x ${itName}</span>
+                            <span class="font-bold">₹${lineTotal}</span>
+                        </div>
+                    `;
+                });
+            }
+
+            const slipContainer = document.getElementById('thermal-slip-body');
+            if (slipContainer) {
+                slipContainer.innerHTML = `
+                    <div class="bg-white p-4 border border-dashed border-slate-300 rounded shadow-xs text-slate-800 leading-tight">
+                        <!-- Store Header -->
+                        <div class="text-center space-y-0.5 pb-2">
+                            <h3 class="font-black text-sm uppercase tracking-wider">${storeName}</h3>
+                            <p class="text-[10px] text-slate-500">${storeAddr}</p>
+                            ${storePhone ? `<p class="text-[10px] text-slate-500">Ph: +${storePhone.replace(/\D/g, '')}</p>` : ''}
+                        </div>
+
+                        <div class="text-center font-bold py-1 text-[10px] border-y border-dashed border-slate-300 uppercase tracking-widest my-1.5">
+                            TAX INVOICE / CASH MEMO
+                        </div>
+
+                        <!-- Order Meta -->
+                        <div class="space-y-0.5 text-[10px] pb-2 border-b border-dashed border-slate-300">
+                            <div class="flex justify-between"><span>ORDER ID:</span> <span class="font-bold">#${ord.order_id}</span></div>
+                            <div class="flex justify-between"><span>DATE:</span> <span>${dateStr}</span></div>
+                            <div class="flex justify-between"><span>PAYMENT:</span> <span class="font-bold uppercase">${ord.payment_mode || 'UPI / COD'} (${ord.payment_status || 'CONFIRMED'})</span></div>
+                            <div class="flex justify-between"><span>STATUS:</span> <span class="font-bold uppercase text-emerald-600">${ord.order_status || 'CONFIRMED'}</span></div>
+                        </div>
+
+                        <!-- Items Header -->
+                        <div class="flex justify-between font-bold text-[10px] py-1 border-b border-dashed border-slate-300 my-1">
+                            <span>ITEM DESCRIPTION</span>
+                            <span>AMOUNT</span>
+                        </div>
+
+                        <!-- Items Body -->
+                        <div class="py-1 space-y-0.5 text-[10px]">
+                            ${itemsRowsHTML}
+                        </div>
+
+                        <!-- Totals Breakdown -->
+                        <div class="pt-2 border-t border-dashed border-slate-300 space-y-1 text-[10px]">
+                            <div class="flex justify-between">
+                                <span>SUBTOTAL:</span>
+                                <span>₹${subtotal || ord.total_amount}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>DELIVERY CHARGE:</span>
+                                <span>FREE</span>
+                            </div>
+                            <div class="flex justify-between text-xs font-black pt-1 border-t border-dashed border-slate-300">
+                                <span>GRAND TOTAL:</span>
+                                <span>₹${ord.total_amount}</span>
+                            </div>
+                        </div>
+
+                        <!-- Thermal Barcode Simulation -->
+                        <div class="pt-4 pb-2 text-center space-y-1">
+                            <div class="font-mono text-base tracking-widest text-slate-400 select-none">||| | ||||| || ||| |||| | ||</div>
+                            <div class="text-[9px] text-slate-400 tracking-wider">#${ord.order_id}</div>
+                            <p class="text-[10px] font-bold text-slate-700 pt-1">*** THANK YOU FOR YOUR BUSINESS! ***</p>
+                            <p class="text-[9px] text-slate-400">Powered by WaMart Omnichannel</p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const backdrop = document.getElementById('receipt-modal-backdrop');
+            const modal = document.getElementById('receipt-modal');
+            if (backdrop) backdrop.classList.remove('hidden');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeThermalReceipt() {
+            const backdrop = document.getElementById('receipt-modal-backdrop');
+            const modal = document.getElementById('receipt-modal');
+            if (backdrop) backdrop.classList.add('hidden');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function printReceiptContent() {
+            window.print();
+        }
+
+        // ==========================================
+        // OMNICHANNEL: REMOTE CART SYNC
+        // ==========================================
+        let cartSyncTimer = null;
+
+        function triggerCartSyncDebounced() {
+            const token = getCustomerToken();
+            if (!token) return;
+
+            clearTimeout(cartSyncTimer);
+            cartSyncTimer = setTimeout(async () => {
+                try {
+                    const itemsArr = Object.values(cart).map(c => ({
+                        id: c.item.id,
+                        name: c.item.name,
+                        qty: c.qty,
+                        price: Number(c.item.sale_price) || parseFloat((c.item.price || '0').replace(/[^0-9.]/g, '')) || 0,
+                        selectedVariant: c.selectedVariant || ''
+                    }));
+
+                    await fetch('/api/customer/cart', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({ cart: itemsArr })
+                    });
+                } catch (e) {
+                    console.warn('Cart sync notice:', e);
+                }
+            }, 800);
+        }
+
+        async function syncRemoteCart() {
+            const token = getCustomerToken();
+            if (!token) return;
+
+            try {
+                const res = await fetch('/api/customer/cart', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (data.status === 'success' && Array.isArray(data.cart) && data.cart.length > 0) {
+                    // Merge remote cart items with local products catalog
+                    const catalog = storeData.products || [];
+                    data.cart.forEach(rc => {
+                        const prod = catalog.find(p => p.id === rc.id || p.name === rc.name);
+                        if (prod) {
+                            cart[prod.id] = {
+                                item: prod,
+                                qty: rc.qty || 1,
+                                selectedVariant: rc.selectedVariant || ''
+                            };
+                        }
+                    });
+                    updateCartUI();
+                    renderProducts();
+                }
+            } catch (e) {
+                console.warn('Sync remote cart notice:', e);
+            }
+        }
+
+        function showSyncToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed top-4 inset-x-4 max-w-sm mx-auto bg-emerald-600 text-white text-xs font-bold py-2.5 px-4 rounded-2xl shadow-xl z-70 flex items-center gap-2 transition duration-300 transform -translate-y-2';
+            toast.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-200"></i> <span class="truncate">${msg}</span>`;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        // Hook addToCart and changeCartQty to sync with backend
+        const originalAddToCart = addToCart;
+        addToCart = function(productId) {
+            originalAddToCart(productId);
+            triggerCartSyncDebounced();
+        };
+
+        const originalChangeCartQty = changeCartQty;
+        changeCartQty = function(productId, delta) {
+            originalChangeCartQty(productId, delta);
+            triggerCartSyncDebounced();
+        };
+
+        // Initial Load on Page Ready
+        window.addEventListener('DOMContentLoaded', async () => {
+            await loadStorefront();
+            await checkMagicLinkAuth();
+        });
+    </script>
+</body>
+</html>

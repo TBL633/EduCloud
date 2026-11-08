@@ -125,9 +125,12 @@ func main() {
 	http.HandleFunc("/business-portal.html", businessHandler)
 	http.HandleFunc("/dashboard", businessHandler)
 
-	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		serveStaticFile(w, r, "index.html")
-	})
+	storefrontHandler := func(w http.ResponseWriter, r *http.Request) {
+		serveStaticFile(w, r, "storefront.html")
+	}
+	http.HandleFunc("/store", storefrontHandler)
+	http.HandleFunc("/storefront", storefrontHandler)
+	http.HandleFunc("/storefront.html", storefrontHandler)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		reqPath := strings.TrimPrefix(r.URL.Path, "/")
@@ -135,10 +138,30 @@ func main() {
 			serveStaticFile(w, r, "index.html")
 			return
 		}
-		serveStaticFile(w, r, reqPath)
+		// If requesting file with extension (.js, .css, .html, .png, etc.), serve static
+		if strings.Contains(reqPath, ".") {
+			serveStaticFile(w, r, reqPath)
+			return
+		}
+		// Reserved portal routes
+		switch strings.ToLower(reqPath) {
+		case "admin", "admin-portal":
+			serveStaticFile(w, r, "admin-portal.html")
+			return
+		case "business", "business-portal", "dashboard":
+			serveStaticFile(w, r, "business-portal.html")
+			return
+		case "login":
+			serveStaticFile(w, r, "index.html")
+			return
+		}
+		// Path-based dynamic storefront routing (e.g. /gopal_kirana)
+		serveStaticFile(w, r, "storefront.html")
 	})
 
 	// 4. API Routes
+	http.HandleFunc("/api/storefront", corsMiddleware(api.StorefrontHandler))
+	http.HandleFunc("/api/storefront/", corsMiddleware(api.StorefrontHandler))
 	http.HandleFunc("/api/db-status", corsMiddleware(api.DBStatusHandler))
 	http.HandleFunc("/api/login", corsMiddleware(api.LoginHandler))
 	http.HandleFunc("/api/auth/send-otp", corsMiddleware(api.SendOTPHandler))
@@ -213,6 +236,15 @@ func main() {
 	http.HandleFunc("/api/payment/verify", corsMiddleware(payment.VerifyHandler))
 	http.HandleFunc("/webhook/payment", corsMiddleware(payment.PaymentWebhookHandler))
 	http.HandleFunc("/api/webhook/paytm", corsMiddleware(payment.PaymentWebhookHandler))
+
+	// Omnichannel Customer Sync & Magic Link Endpoints
+	http.HandleFunc("/api/auth/verify-token", corsMiddleware(api.VerifyMagicTokenHandler))
+	http.HandleFunc("/api/customer/verify-token", corsMiddleware(api.VerifyMagicTokenHandler))
+	http.HandleFunc("/api/customer/profile", corsMiddleware(api.CustomerProfileHandler))
+	http.HandleFunc("/api/customer/orders", corsMiddleware(api.CustomerOrdersHandler))
+	http.HandleFunc("/api/customer/cart", corsMiddleware(api.CustomerCartHandler))
+	http.HandleFunc("/api/orders/checkout", corsMiddleware(api.CheckoutOrderHandler))
+	http.HandleFunc("/api/customer/checkout", corsMiddleware(api.CheckoutOrderHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {

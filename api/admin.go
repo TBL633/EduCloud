@@ -229,17 +229,22 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" || r.Method == "PUT" {
 		var req struct {
-			Username               string      `json:"username"`
-			NotificationPhone      string      `json:"notification_phone"`
-			AIProvider             string      `json:"ai_provider"`
-			AIModel                string      `json:"ai_model"`
-			FullAddress            string      `json:"full_address"`
-			LocalArea              string      `json:"local_area"`
-			Latitude               interface{} `json:"latitude"`
-			Longitude              interface{} `json:"longitude"`
-			MaxDeliveryRadiusKM    interface{} `json:"max_delivery_radius_km"`
-			FreeDeliveryRadiusKM   interface{} `json:"free_delivery_radius_km"`
-			DeliveryChargeAmount   interface{} `json:"delivery_charge_amount"`
+			Username                string      `json:"username"`
+			BusinessName            string      `json:"business_name"`
+			NotificationPhone       string      `json:"notification_phone"`
+			AIProvider              string      `json:"ai_provider"`
+			AIModel                 string      `json:"ai_model"`
+			FullAddress             string      `json:"full_address"`
+			LocalArea               string      `json:"local_area"`
+			StoreSlug               string      `json:"store_slug"`
+			LogoURL                 string      `json:"logo_url"`
+			BannerURL               string      `json:"banner_url"`
+			Tagline                 string      `json:"tagline"`
+			Latitude                interface{} `json:"latitude"`
+			Longitude               interface{} `json:"longitude"`
+			MaxDeliveryRadiusKM     interface{} `json:"max_delivery_radius_km"`
+			FreeDeliveryRadiusKM    interface{} `json:"free_delivery_radius_km"`
+			DeliveryChargeAmount    interface{} `json:"delivery_charge_amount"`
 			RequireCustomerLocation *bool       `json:"require_customer_location"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -255,7 +260,14 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		freeRadVal := parseCoordinateVal(req.FreeDeliveryRadiusKM)
 		delChargeVal := parseCoordinateVal(req.DeliveryChargeAmount)
 
+		cleanSlug := strings.ToLower(strings.TrimSpace(req.StoreSlug))
+		cleanSlug = regexp.MustCompile(`[^a-z0-9_]+`).ReplaceAllString(cleanSlug, "_")
+		cleanSlug = strings.Trim(cleanSlug, "_")
+
 		if DB != nil {
+			if req.BusinessName != "" {
+				_, _ = DB.Exec("UPDATE users SET business_name=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.BusinessName), username)
+			}
 			if req.NotificationPhone != "" {
 				_, _ = DB.Exec("UPDATE users SET notification_phone=$1 WHERE LOWER(username)=LOWER($2)", req.NotificationPhone, username)
 			}
@@ -267,6 +279,18 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if req.RequireCustomerLocation != nil {
 				_, _ = DB.Exec("UPDATE users SET require_customer_location=$1 WHERE LOWER(username)=LOWER($2)", *req.RequireCustomerLocation, username)
+			}
+			if cleanSlug != "" {
+				_, _ = DB.Exec("UPDATE users SET store_slug=$1 WHERE LOWER(username)=LOWER($2)", cleanSlug, username)
+			}
+			if req.LogoURL != "" {
+				_, _ = DB.Exec("UPDATE users SET logo_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.LogoURL), username)
+			}
+			if req.BannerURL != "" {
+				_, _ = DB.Exec("UPDATE users SET banner_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.BannerURL), username)
+			}
+			if req.Tagline != "" {
+				_, _ = DB.Exec("UPDATE users SET tagline=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.Tagline), username)
 			}
 			_, _ = DB.Exec(`UPDATE users SET 
 				full_address = CASE WHEN $1 != '' THEN $1 ELSE full_address END,
@@ -285,9 +309,13 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 
 		respondJSON(w, 200, map[string]interface{}{
 			"status":                    "success",
-			"message":                   "User profile and delivery settings updated successfully!",
+			"message":                   "User profile, storefront, and delivery settings updated successfully!",
 			"full_address":              req.FullAddress,
 			"local_area":                req.LocalArea,
+			"store_slug":                cleanSlug,
+			"logo_url":                  req.LogoURL,
+			"banner_url":                req.BannerURL,
+			"tagline":                   req.Tagline,
 			"latitude":                  latVal,
 			"longitude":                 lngVal,
 			"max_delivery_radius_km":    maxRadVal,
@@ -303,27 +331,33 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		username = "admin"
 	}
 
-	var email, accountName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
+	var email, accountName, bName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
+	var storeSlug, logoURL, bannerURL, tagline string
 	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal float64
 	var autoReply, automationAccess, reqLoc bool
 
 	if DB != nil {
 		err := DB.QueryRow(`SELECT 
-			COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(user_type, 'business_user'), 
+			COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(business_name, account_name, ''), COALESCE(user_type, 'business_user'), 
 			COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), 
 			COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true), 
 			COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active'),
 			COALESCE(full_address, ''), COALESCE(local_area, ''), COALESCE(latitude, 0.0), COALESCE(longitude, 0.0),
-			COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false)
+			COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false),
+			COALESCE(store_slug, username), COALESCE(logo_url, ''), COALESCE(banner_url, ''), COALESCE(tagline, '')
 			FROM users WHERE LOWER(username)=LOWER($1)`, username).
-			Scan(&email, &accountName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc)
+			Scan(&email, &accountName, &bName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &storeSlug, &logoURL, &bannerURL, &tagline)
 
 		if err == nil {
+			if storeSlug == "" {
+				storeSlug = username
+			}
 			respondJSON(w, 200, map[string]interface{}{
 				"status":                    "success",
 				"username":                  username,
 				"email":                     email,
 				"account_name":              accountName,
+				"business_name":             bName,
 				"user_type":                 userType,
 				"phone":                     phone,
 				"notification_phone":        notificationPhone,
@@ -342,6 +376,10 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 				"free_delivery_radius_km":   freeRadVal,
 				"delivery_charge_amount":    delChargeVal,
 				"require_customer_location": reqLoc,
+				"store_slug":                storeSlug,
+				"logo_url":                  logoURL,
+				"banner_url":                bannerURL,
+				"tagline":                   tagline,
 			})
 			return
 		}

@@ -1995,6 +1995,14 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 							break
 						}
 
+					case "generate_store_link":
+						err := ExecuteGenerateStoreLinkHand(activeClient, username, senderPhone)
+						if err != nil {
+							executionErr = err
+							failedActionName = "generate_store_link"
+							break
+						}
+
 					case "clear_cart":
 						_ = ClearActiveCart(username, senderPhone)
 						_ = SetCustomerState(username, senderPhone, "chatting")

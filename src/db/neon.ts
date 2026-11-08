@@ -28,6 +28,16 @@ export interface User {
   source_channel_jid?: string;
   target_channel_jid?: string;
   channel_forwarder_active?: boolean;
+  store_slug?: string;
+  logo_url?: string;
+  banner_url?: string;
+  tagline?: string;
+  full_address?: string;
+  local_area?: string;
+  max_delivery_radius_km?: number;
+  free_delivery_radius_km?: number;
+  delivery_charge_amount?: number;
+  require_customer_location?: boolean;
   status: 'Connected' | 'QR_Ready' | 'Disconnected';
   qr: string;
   created_at: string;
@@ -299,7 +309,77 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lat DOUBLE PRECISION DEFAULT 26.8467;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS business_lng DOUBLE PRECISION DEFAULT 80.9462;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS max_delivery_radius_km DOUBLE PRECISION DEFAULT 15.0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS free_delivery_radius_km DOUBLE PRECISION DEFAULT 3.0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS delivery_charge_amount DOUBLE PRECISION DEFAULT 40.0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS require_customer_location BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS full_address TEXT DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS local_area VARCHAR(255) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS store_slug VARCHAR(100) DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS tagline TEXT DEFAULT '';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS jid VARCHAR(100) DEFAULT '';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100) DEFAULT '';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS name VARCHAR(255) DEFAULT '';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS whatsapp_number VARCHAR(50) DEFAULT '';
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_phone VARCHAR(50) DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_customers_jid ON customers(jid);
+      CREATE INDEX IF NOT EXISTS idx_customers_tenant_jid ON customers(tenant_id, jid);
+
+      CREATE TABLE IF NOT EXISTS magic_links (
+        id SERIAL PRIMARY KEY,
+        token VARCHAR(255) UNIQUE NOT NULL,
+        jid VARCHAR(100) NOT NULL,
+        tenant_id VARCHAR(100) NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        is_used BOOLEAN DEFAULT false,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_magic_links_token ON magic_links(token);
+      CREATE INDEX IF NOT EXISTS idx_magic_links_jid ON magic_links(jid, tenant_id);
+
+      CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        order_id VARCHAR(100) UNIQUE NOT NULL,
+        jid VARCHAR(100) NOT NULL DEFAULT '',
+        customer_phone VARCHAR(50) NOT NULL DEFAULT '',
+        tenant_id VARCHAR(100) NOT NULL DEFAULT '',
+        customer_name VARCHAR(255) DEFAULT '',
+        delivery_phone VARCHAR(50) DEFAULT '',
+        delivery_address TEXT DEFAULT '',
+        items JSONB DEFAULT '[]'::jsonb,
+        total_amount NUMERIC(10, 2) DEFAULT 0,
+        payment_mode VARCHAR(50) DEFAULT 'unselected',
+        payment_status VARCHAR(50) DEFAULT 'unpaid',
+        order_status VARCHAR(50) DEFAULT 'in_progress',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_orders_jid ON orders(jid);
+      CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);
+      CREATE INDEX IF NOT EXISTS idx_orders_tenant ON orders(tenant_id);
+
+      CREATE TABLE IF NOT EXISTS active_carts (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        customer_phone VARCHAR(50) NOT NULL,
+        product_id VARCHAR(100) NOT NULL,
+        qty INT NOT NULL DEFAULT 1,
+        jid VARCHAR(100) DEFAULT '',
+        tenant_id VARCHAR(100) DEFAULT '',
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
+      );
+      ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS jid VARCHAR(100) DEFAULT '';
+      ALTER TABLE active_carts ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100) DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_active_carts_jid ON active_carts(jid);
     `);
+    try {
+      await pool.query(`
+        UPDATE users SET store_slug = LOWER(REGEXP_REPLACE(COALESCE(NULLIF(business_name, ''), username), '[^a-zA-Z0-9]+', '_', 'g')) WHERE store_slug IS NULL OR store_slug = '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_store_slug_unq ON users(LOWER(store_slug)) WHERE store_slug != '';
+      `);
+    } catch (e) {}
 
     // Campaign Bulk Message Logs table
     await pool.query(`
@@ -364,6 +444,16 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
         system_prompt: row.system_prompt || '',
         auto_reply: Boolean(row.auto_reply),
         automation_access: Boolean(row.automation_access),
+        store_slug: row.store_slug || uname,
+        logo_url: row.logo_url || '',
+        banner_url: row.banner_url || '',
+        tagline: row.tagline || '',
+        full_address: row.full_address || '',
+        local_area: row.local_area || '',
+        max_delivery_radius_km: row.max_delivery_radius_km !== undefined ? Number(row.max_delivery_radius_km) : 15.0,
+        free_delivery_radius_km: row.free_delivery_radius_km !== undefined ? Number(row.free_delivery_radius_km) : 3.0,
+        delivery_charge_amount: row.delivery_charge_amount !== undefined ? Number(row.delivery_charge_amount) : 40.0,
+        require_customer_location: Boolean(row.require_customer_location),
         status: (row.status as any) || 'QR_Ready',
         qr: row.qr || '',
         created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
@@ -386,7 +476,7 @@ export async function findUserByIdentifier(identifier: string, memoryUsers: Map<
   if (dbPool) {
     try {
       const res = await dbPool.query(
-        'SELECT * FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1 LIMIT 1',
+        'SELECT * FROM users WHERE LOWER(username) = $1 OR LOWER(email) = $1 OR LOWER(store_slug) = $1 LIMIT 1',
         [clean]
       );
       if (res.rows.length > 0) {
@@ -406,6 +496,16 @@ export async function findUserByIdentifier(identifier: string, memoryUsers: Map<
           system_prompt: row.system_prompt || '',
           auto_reply: Boolean(row.auto_reply),
           automation_access: Boolean(row.automation_access),
+          store_slug: row.store_slug || row.username,
+          logo_url: row.logo_url || '',
+          banner_url: row.banner_url || '',
+          tagline: row.tagline || '',
+          full_address: row.full_address || '',
+          local_area: row.local_area || '',
+          max_delivery_radius_km: row.max_delivery_radius_km !== undefined ? Number(row.max_delivery_radius_km) : 15.0,
+          free_delivery_radius_km: row.free_delivery_radius_km !== undefined ? Number(row.free_delivery_radius_km) : 3.0,
+          delivery_charge_amount: row.delivery_charge_amount !== undefined ? Number(row.delivery_charge_amount) : 40.0,
+          require_customer_location: Boolean(row.require_customer_location),
           status: row.status || 'QR_Ready',
           qr: row.qr || '',
           created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()

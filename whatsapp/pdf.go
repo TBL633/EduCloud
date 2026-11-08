@@ -29,28 +29,38 @@ func GenerateThermalReceiptPDF(orderID string, db *sql.DB) (*bytes.Buffer, error
 	var tenantUsername, custPhone, custName, custAddress, itemsJSON, payMode, payStatus, ordStatus, createdAtStr string
 	var totalAmt float64
 
-	// 1. Query customer_order_states for specific order details
+	// 1. First query orders table for specific order details
 	if db != nil && cleanOrderID != "" {
 		err := db.QueryRow(`
-			SELECT COALESCE(username, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_status, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
-			FROM customer_order_states
+			SELECT COALESCE(tenant_id, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_status, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
+			FROM orders
 			WHERE LOWER(order_id) = LOWER($1) OR order_id LIKE '%' || $1
-			ORDER BY updated_at DESC LIMIT 1
+			ORDER BY created_at DESC LIMIT 1
 		`, cleanOrderID).Scan(&tenantUsername, &custPhone, &custName, &custAddress, &itemsJSON, &totalAmt, &payMode, &payStatus, &ordStatus, &createdAtStr)
-		if err != nil {
-			log.Printf("⚠️ [Thermal PDF] Order #%s query check: %v", cleanOrderID, err)
+		if err != nil && tenantUsername == "" {
+			// Query customer_order_states as secondary source
+			_ = db.QueryRow(`
+				SELECT COALESCE(username, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_status, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
+				FROM customer_order_states
+				WHERE LOWER(order_id) = LOWER($1) OR order_id LIKE '%' || $1
+				ORDER BY updated_at DESC LIMIT 1
+			`, cleanOrderID).Scan(&tenantUsername, &custPhone, &custName, &custAddress, &itemsJSON, &totalAmt, &payMode, &payStatus, &ordStatus, &createdAtStr)
 		}
 	}
 
 	// Fallback query if orderID was empty or not matched
-	if (tenantUsername == "" || itemsJSON == "[]") && db != nil {
+	if (tenantUsername == "" || itemsJSON == "[]" || itemsJSON == "") && db != nil {
 		err := db.QueryRow(`
-			SELECT COALESCE(username, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_id, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
-			FROM customer_order_states
-			ORDER BY updated_at DESC LIMIT 1
+			SELECT COALESCE(tenant_id, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_id, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
+			FROM orders
+			ORDER BY created_at DESC LIMIT 1
 		`).Scan(&tenantUsername, &custPhone, &custName, &custAddress, &itemsJSON, &totalAmt, &payMode, &payStatus, &cleanOrderID, &createdAtStr)
 		if err != nil {
-			log.Printf("⚠️ [Thermal PDF] Fallback order query notice: %v", err)
+			_ = db.QueryRow(`
+				SELECT COALESCE(username, ''), COALESCE(customer_phone, ''), COALESCE(customer_name, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, ''), COALESCE(payment_status, ''), COALESCE(order_id, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '')
+				FROM customer_order_states
+				ORDER BY updated_at DESC LIMIT 1
+			`).Scan(&tenantUsername, &custPhone, &custName, &custAddress, &itemsJSON, &totalAmt, &payMode, &payStatus, &cleanOrderID, &createdAtStr)
 		}
 	}
 
@@ -312,3 +322,49 @@ func SendPDFReceiptHand(client *whatsmeow.Client, username, customerPhone, order
 	log.Printf("📄 [Thermal PDF Hand] Receipt_%s.pdf successfully delivered to +%s", dispID, cleanPhone)
 	return nil
 }
+
+// TriggerWebOrderConfirmationPush sends formatted text confirmation and thermal PDF receipt to the customer's WhatsApp upon web checkout
+func TriggerWebOrderConfirmationPush(tenantUsername, customerPhoneOrJID, orderID string, totalAmount float64) error {
+	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(tenantUsername), "@"))
+	cleanPhone := FormatPhone(customerPhoneOrJID)
+	cleanOrdID := strings.TrimSpace(orderID)
+
+	// 1. Locate active WhatsApp client instance
+	client, exists := ActiveClients[cleanUsr]
+	if !exists || client == nil || !client.IsLoggedIn() {
+		client, exists = ActiveClients["admin"]
+	}
+	if !exists || client == nil || !client.IsLoggedIn() {
+		for _, c := range ActiveClients {
+			if c != nil && c.IsLoggedIn() {
+				client = c
+				break
+			}
+		}
+	}
+
+	if client == nil || !client.IsLoggedIn() {
+		log.Printf("⚠️ [Web Checkout Push] No logged-in WhatsApp client available for tenant @%s; push queued", cleanUsr)
+		return fmt.Errorf("no logged-in WhatsApp client available")
+	}
+
+	// 2. Send active push notification text
+	confMsg := fmt.Sprintf("🎉 *Order Received!* Your web order #%s for ₹%.2f has been successfully placed. We are processing it now.", cleanOrdID, totalAmount)
+	if err := SendMessage(client, cleanPhone, confMsg); err != nil {
+		log.Printf("⚠️ [Web Checkout Push] Text message error for +%s: %v", cleanPhone, err)
+	} else {
+		log.Printf("📲 [Web Checkout Push] Text confirmation delivered to +%s for order #%s", cleanPhone, cleanOrdID)
+		go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", confMsg)
+	}
+
+	// 3. Immediately generate thermal receipt PDF and send as DocumentMessage in same thread
+	time.Sleep(300 * time.Millisecond)
+	if errPdf := SendPDFReceiptHand(client, cleanUsr, cleanPhone, cleanOrdID); errPdf != nil {
+		log.Printf("⚠️ [Web Checkout Push] PDF delivery error for +%s: %v", cleanPhone, errPdf)
+		return errPdf
+	}
+
+	log.Printf("📄 [Web Checkout Push] Thermal PDF receipt successfully delivered to +%s for order #%s", cleanPhone, cleanOrdID)
+	return nil
+}
+

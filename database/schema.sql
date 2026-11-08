@@ -198,8 +198,54 @@ CREATE TABLE IF NOT EXISTS active_carts (
     customer_phone VARCHAR(50) NOT NULL,
     product_id VARCHAR(100) NOT NULL,
     qty INT NOT NULL DEFAULT 1,
+    jid VARCHAR(100) DEFAULT '',
+    tenant_id VARCHAR(100) DEFAULT '',
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unq_cart_user_phone_product UNIQUE (username, customer_phone, product_id)
 );
 CREATE INDEX IF NOT EXISTS idx_active_carts_usr_phone ON active_carts(username, customer_phone);
+CREATE INDEX IF NOT EXISTS idx_active_carts_jid ON active_carts(jid);
+
+-- 7. Magic Links Table (WhatsApp-Web Omnichannel Sync)
+CREATE TABLE IF NOT EXISTS magic_links (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    jid VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    is_used BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_magic_links_token ON magic_links(token);
+CREATE INDEX IF NOT EXISTS idx_magic_links_jid ON magic_links(jid, tenant_id);
+
+-- 8. Universal Orders Table
+CREATE TABLE IF NOT EXISTS orders (
+    id SERIAL PRIMARY KEY,
+    order_id VARCHAR(100) UNIQUE NOT NULL,
+    jid VARCHAR(100) NOT NULL DEFAULT '',
+    customer_phone VARCHAR(50) NOT NULL DEFAULT '',
+    tenant_id VARCHAR(100) NOT NULL DEFAULT '',
+    customer_name VARCHAR(255) DEFAULT '',
+    delivery_phone VARCHAR(50) DEFAULT '',
+    delivery_address TEXT DEFAULT '',
+    items JSONB DEFAULT '[]'::jsonb,
+    total_amount NUMERIC(10, 2) DEFAULT 0,
+    payment_mode VARCHAR(50) DEFAULT 'unselected',
+    payment_status VARCHAR(50) DEFAULT 'unpaid',
+    order_status VARCHAR(50) DEFAULT 'in_progress',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_orders_jid ON orders(jid);
+CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);
+CREATE INDEX IF NOT EXISTS idx_orders_tenant ON orders(tenant_id);
+
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS jid VARCHAR(100) DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100) DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS name VARCHAR(255) DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS whatsapp_number VARCHAR(50) DEFAULT '';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_phone VARCHAR(50) DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_customers_jid ON customers(jid);
+CREATE INDEX IF NOT EXISTS idx_customers_tenant_jid ON customers(tenant_id, jid);
 

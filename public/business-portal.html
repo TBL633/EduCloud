@@ -126,10 +126,15 @@
                     <i class="fa-solid fa-paper-plane text-cyan-400 w-4"></i>
                     <span>Bulk Outreach</span>
                 </button>
-                <!-- NEW TAB: Product Catalog -->
+                <!-- TAB: Product Catalog -->
                 <button type="button" onclick="switchTab('catalog')" id="nav-tab-catalog" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
                     <i class="fa-solid fa-boxes-stacked text-amber-400 w-4"></i>
                     <span>Product Catalog</span>
+                </button>
+                <!-- NEW DEDICATED TAB: Store Management -->
+                <button type="button" onclick="switchTab('store')" id="nav-tab-store" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
+                    <i class="fa-solid fa-shop text-emerald-400 w-4"></i>
+                    <span>Store Management</span>
                 </button>
                 <button type="button" onclick="switchTab('ai')" id="nav-tab-ai" class="biz-nav w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition cursor-pointer">
                     <i class="fa-solid fa-robot text-purple-400 w-4"></i>
@@ -1185,6 +1190,268 @@
                 </div>
 
                 <!-- ========================================== -->
+                <!-- TAB 5: STORE MANAGEMENT & DIGITAL SHOPFRONT-->
+                <!-- ========================================== -->
+                <div id="view-store" class="biz-tab-content hidden max-w-3xl mx-auto space-y-6">
+                    <!-- Live Multi-Tenant Storefront Link Card -->
+                    <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6 border border-emerald-500/30 bg-gradient-to-br from-slate-900/95 to-slate-950/95">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 border-b border-slate-800 gap-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center text-lg shrink-0">
+                                    <i class="fa-solid fa-store"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                        <span>Your Live Storefront</span>
+                                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold uppercase tracking-wider font-mono">Mobile-First</span>
+                                    </h3>
+                                    <p class="text-xs text-slate-400">Share your digital storefront with customers for direct catalog browsing and WhatsApp orders.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="openStorefrontPreview()" class="px-3.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 rounded-xl text-xs font-bold border border-emerald-500/30 transition flex items-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                                    <span>Open Storefront</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Read-Only Shareable URL Box with Copy Button -->
+                        <div class="space-y-1.5 p-4 rounded-2xl bg-slate-950 border border-slate-800/80">
+                            <label class="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                                <i class="fa-solid fa-link text-emerald-400"></i>
+                                <span>Your Live Store URL (Share with Customers)</span>
+                            </label>
+                            <div class="flex items-center gap-2">
+                                <div class="relative flex-1">
+                                    <input type="text" id="prof-live-store-link-input" readonly value="" placeholder="https://..." class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-xs font-mono text-emerald-300 font-bold outline-none select-all cursor-text">
+                                </div>
+                                <button type="button" onclick="copyStorefrontLink()" id="btn-copy-store-link" class="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 shadow-md shrink-0">
+                                    <i class="fa-solid fa-copy"></i>
+                                    <span id="btn-copy-store-text">Copy Link</span>
+                                </button>
+                            </div>
+                            <p class="text-[10px] text-slate-500 mt-1">Customers can view your dynamic catalog, circular categories, prices, and place instant WhatsApp orders using this link.</p>
+                        </div>
+                    </div>
+
+                    <!-- Store Management Form (Branding, Location, Delivery Logistics) -->
+                    <form id="form-store-settings" onsubmit="saveStoreSettings(event)" class="space-y-6">
+                        <!-- 1. Storefront Branding Customization -->
+                        <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                            <div class="flex items-center gap-3 pb-4 border-b border-slate-800">
+                                <div class="w-10 h-10 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center justify-center text-lg shrink-0">
+                                    <i class="fa-solid fa-paintbrush"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-sm font-bold text-white">Store Branding Customization</h3>
+                                    <p class="text-xs text-slate-400">Configure your unique store URL path, slogan, logo and promotional hero banner.</p>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                        <i class="fa-solid fa-signature text-cyan-400"></i>
+                                        <span>Custom Store Slug (URL Path)</span>
+                                    </label>
+                                    <div class="flex items-center">
+                                        <span class="px-3 py-2 bg-slate-900 border border-r-0 border-slate-800 rounded-l-xl text-xs text-slate-500 font-mono">/</span>
+                                        <input type="text" id="prof-store-slug-input" oninput="updateStoreSlugPreview(this.value)" placeholder="e.g. gopal_kirana" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-r-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 font-mono transition">
+                                    </div>
+                                    <p class="text-[10px] text-slate-500">Only lowercase letters, numbers, and underscores allowed.</p>
+                                </div>
+
+                                <div class="space-y-1.5">
+                                    <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                        <i class="fa-solid fa-quote-left text-purple-400"></i>
+                                        <span>Store Tagline</span>
+                                    </label>
+                                    <input type="text" id="prof-tagline-input" placeholder="e.g. Best quality groceries at lowest prices" class="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 transition">
+                                </div>
+                            </div>
+
+                            <!-- Logo & Banner Upload Grid -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                                <!-- Store Logo -->
+                                <div class="space-y-2 p-3.5 bg-slate-950/60 rounded-2xl border border-slate-800">
+                                    <label class="text-xs font-bold text-slate-300 flex items-center justify-between">
+                                        <span class="flex items-center gap-1.5">
+                                            <i class="fa-solid fa-circle-user text-emerald-400"></i> Store Logo
+                                        </span>
+                                        <span class="text-[10px] text-slate-500">Circular (1:1)</span>
+                                    </label>
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-14 h-14 rounded-full overflow-hidden bg-slate-900 border-2 border-slate-700 shrink-0 flex items-center justify-center">
+                                            <img id="prof-logo-preview" src="" alt="Logo Preview" class="w-full h-full object-cover hidden">
+                                            <div id="prof-logo-placeholder" class="text-slate-600 text-lg">
+                                                <i class="fa-solid fa-store"></i>
+                                            </div>
+                                        </div>
+                                        <div class="flex-1 space-y-1.5">
+                                            <input type="text" id="prof-logo-url-input" oninput="updateLogoPreview(this.value)" placeholder="Image URL (or upload)" class="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500">
+                                            <input type="file" id="prof-logo-file" accept="image/*" onchange="handleStoreLogoUpload(event)" class="text-[11px] text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-[10px] file:font-bold file:bg-slate-800 file:text-emerald-400 hover:file:bg-slate-700 cursor-pointer">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Hero Banner -->
+                                <div class="space-y-2 p-3.5 bg-slate-950/60 rounded-2xl border border-slate-800">
+                                    <label class="text-xs font-bold text-slate-300 flex items-center justify-between">
+                                        <span class="flex items-center gap-1.5">
+                                            <i class="fa-solid fa-image text-indigo-400"></i> Hero Promotion Banner
+                                        </span>
+                                        <span class="text-[10px] text-slate-500">Wide (16:9 or 21:9)</span>
+                                    </label>
+                                    <div class="space-y-2">
+                                        <div class="w-full h-14 rounded-xl overflow-hidden bg-slate-900 border border-slate-700 flex items-center justify-center relative">
+                                            <img id="prof-banner-preview" src="" alt="Banner Preview" class="w-full h-full object-cover hidden">
+                                            <div id="prof-banner-placeholder" class="text-slate-600 text-xs font-bold flex items-center gap-1.5">
+                                                <i class="fa-solid fa-panorama"></i> No Banner Selected
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <input type="text" id="prof-banner-url-input" oninput="updateBannerPreview(this.value)" placeholder="Banner URL (or upload)" class="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500">
+                                            <input type="file" id="prof-banner-file" accept="image/*" onchange="handleStoreBannerUpload(event)" class="text-[11px] text-slate-400 file:mr-0 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-[10px] file:font-bold file:bg-slate-800 file:text-indigo-400 hover:file:bg-slate-700 cursor-pointer shrink-0">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. Store Physical Location & GPS Coordinates -->
+                        <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                            <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 border-b border-slate-800 gap-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-10 h-10 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center justify-center text-lg shrink-0">
+                                        <i class="fa-solid fa-location-dot"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="text-sm font-bold text-white">Store Location & GPS Pin</h3>
+                                        <p class="text-xs text-slate-400">Configure physical address and exact GPS coordinates for hyperlocal delivery calculation.</p>
+                                    </div>
+                                </div>
+                                <div id="gps-status-badge" class="text-[11px] font-bold text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg">
+                                    📍 Geolocation Ready
+                                </div>
+                            </div>
+
+                            <div class="space-y-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                        <i class="fa-solid fa-store text-cyan-400"></i>
+                                        <span>Full Shop / Business Address</span>
+                                    </label>
+                                    <textarea id="prof-full-address-input" rows="2" placeholder="e.g. Shop No. 12, Main Market Road, Near City Bank, Lucknow" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none"></textarea>
+                                </div>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div class="space-y-1.5">
+                                        <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                            <i class="fa-solid fa-map-pin text-amber-400"></i>
+                                            <span>Local Area / Landmark</span>
+                                        </label>
+                                        <input type="text" id="prof-local-area-input" placeholder="e.g. Hazratganj / Sector 4" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
+                                    </div>
+
+                                    <div class="space-y-1.5">
+                                        <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                                            <i class="fa-solid fa-crosshairs text-emerald-400"></i>
+                                            <span>GPS Action</span>
+                                        </label>
+                                        <button type="button" onclick="fetchCurrentGPSLocation()" id="btn-fetch-gps" class="w-full px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-cyan-600/20 border border-cyan-500/30">
+                                            <i class="fa-solid fa-location-crosshairs text-sm"></i>
+                                            <span>📍 Fetch Exact GPS Location</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                                    <div class="space-y-1.5">
+                                        <label class="text-[11px] font-bold text-slate-400 flex items-center gap-1 font-mono">
+                                            <span>Latitude</span>
+                                            <span class="text-[9px] text-slate-500">(Read-Only)</span>
+                                        </label>
+                                        <input type="text" id="prof-lat-input" readonly placeholder="0.00000000" class="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-cyan-300 outline-none select-all cursor-not-allowed">
+                                    </div>
+
+                                    <div class="space-y-1.5">
+                                        <label class="text-[11px] font-bold text-slate-400 flex items-center gap-1 font-mono">
+                                            <span>Longitude</span>
+                                            <span class="text-[9px] text-slate-500">(Read-Only)</span>
+                                        </label>
+                                        <input type="text" id="prof-lng-input" readonly placeholder="0.00000000" class="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-cyan-300 outline-none select-all cursor-not-allowed">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. Hyperlocal Delivery & Logistics Settings -->
+                        <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
+                            <div class="flex items-center gap-3 pb-4 border-b border-slate-800">
+                                <div class="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center text-lg shrink-0">
+                                    <i class="fa-solid fa-truck-ramp-box"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-sm font-bold text-white">Hyperlocal Delivery & Logistics Settings</h3>
+                                    <p class="text-xs text-slate-400">Define maximum delivery radius, free delivery distance, and fee thresholds.</p>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div class="space-y-1.5">
+                                    <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
+                                        <i class="fa-solid fa-circle-nodes text-indigo-400"></i>
+                                        <span>Max Radius (KM)</span>
+                                    </label>
+                                    <input type="number" step="0.1" min="0.5" id="prof-max-radius-input" placeholder="15.0" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
+                                </div>
+
+                                <div class="space-y-1.5">
+                                    <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
+                                        <i class="fa-solid fa-leaf text-emerald-400"></i>
+                                        <span>Free Radius (KM)</span>
+                                    </label>
+                                    <input type="number" step="0.1" min="0" id="prof-free-radius-input" placeholder="3.0" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
+                                </div>
+
+                                <div class="space-y-1.5">
+                                    <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
+                                        <i class="fa-solid fa-indian-rupee-sign text-amber-400"></i>
+                                        <span>Delivery Fee (₹)</span>
+                                    </label>
+                                    <input type="number" step="1" min="0" id="prof-delivery-charge-input" placeholder="40" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
+                                </div>
+                            </div>
+
+                            <div class="p-3.5 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center justify-between gap-4">
+                                <div class="space-y-0.5">
+                                    <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                                        <i class="fa-solid fa-location-crosshairs text-rose-400"></i>
+                                        <span>Require Exact WhatsApp Location Pin</span>
+                                    </div>
+                                    <p class="text-[11px] text-slate-400 leading-normal">
+                                        If enabled, the AI bot will refuse checkout until the customer shares their live/current WhatsApp location pin.
+                                    </p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                                    <input type="checkbox" id="prof-require-location-toggle" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="flex justify-end pt-2">
+                            <button type="submit" id="btn-save-store-settings" class="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold rounded-2xl text-xs transition cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-500/25">
+                                <i class="fa-solid fa-floppy-disk"></i>
+                                <span>Save Store Management Settings</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- ========================================== -->
                 <!-- TAB 6: PROFILE & SECURITY (REAL DATA ONLY) -->
                 <!-- ========================================== -->
                 <div id="view-profile" class="biz-tab-content hidden max-w-3xl mx-auto space-y-6">
@@ -1254,130 +1521,7 @@
                                     </button>
                                 </div>
                             </div>
-                    </div>
-
-                    <!-- Store Physical Location & GPS Coordinates Card -->
-                    <div class="glass-card rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-                        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-4 border-b border-slate-800 gap-4">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center justify-center text-lg shrink-0">
-                                    <i class="fa-solid fa-location-dot"></i>
-                                </div>
-                                <div>
-                                    <h3 class="text-sm font-bold text-white">Store Location & GPS Pin</h3>
-                                    <p class="text-xs text-slate-400">Configure physical address and exact GPS coordinates for hyperlocal delivery calculation.</p>
-                                </div>
-                            </div>
-                            <div id="gps-status-badge" class="text-[11px] font-bold text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg">
-                                📍 Geolocation Ready
-                            </div>
                         </div>
-
-                        <form id="form-store-location" onsubmit="saveStoreLocation(event)" class="space-y-5">
-                            <div class="space-y-1.5">
-                                <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                                    <i class="fa-solid fa-store text-cyan-400"></i>
-                                    <span>Full Shop / Business Address</span>
-                                </label>
-                                <textarea id="prof-full-address-input" rows="2" placeholder="e.g. Shop No. 12, Main Market Road, Near City Bank, Lucknow" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition resize-none"></textarea>
-                            </div>
-
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div class="space-y-1.5">
-                                    <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                                        <i class="fa-solid fa-map-pin text-amber-400"></i>
-                                        <span>Local Area / Landmark</span>
-                                    </label>
-                                    <input type="text" id="prof-local-area-input" placeholder="e.g. Hazratganj / Sector 4" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
-                                </div>
-
-                                <div class="space-y-1.5">
-                                    <label class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                                        <i class="fa-solid fa-crosshairs text-emerald-400"></i>
-                                        <span>GPS Action</span>
-                                    </label>
-                                    <button type="button" onclick="fetchCurrentGPSLocation()" id="btn-fetch-gps" class="w-full px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-cyan-600/20 border border-cyan-500/30">
-                                        <i class="fa-solid fa-location-crosshairs text-sm"></i>
-                                        <span>📍 Fetch Exact GPS Location</span>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                                <div class="space-y-1.5">
-                                    <label class="text-[11px] font-bold text-slate-400 flex items-center gap-1 font-mono">
-                                        <span>Latitude</span>
-                                        <span class="text-[9px] text-slate-500">(Read-Only)</span>
-                                    </label>
-                                    <input type="text" id="prof-lat-input" readonly placeholder="0.00000000" class="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-cyan-300 outline-none select-all cursor-not-allowed">
-                                </div>
-
-                                <div class="space-y-1.5">
-                                    <label class="text-[11px] font-bold text-slate-400 flex items-center gap-1 font-mono">
-                                        <span>Longitude</span>
-                                        <span class="text-[9px] text-slate-500">(Read-Only)</span>
-                                    </label>
-                                    <input type="text" id="prof-lng-input" readonly placeholder="0.00000000" class="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-cyan-300 outline-none select-all cursor-not-allowed">
-                                </div>
-                            </div>
-
-                            <!-- Hyperlocal Delivery & Logistics Settings -->
-                            <div class="pt-4 border-t border-slate-800/80 space-y-4">
-                                <div class="flex items-center gap-2">
-                                    <i class="fa-solid fa-truck-ramp-box text-cyan-400 text-sm"></i>
-                                    <h4 class="text-xs font-bold text-white uppercase tracking-wider">Hyperlocal Delivery & Logistics Settings</h4>
-                                </div>
-
-                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                    <div class="space-y-1.5">
-                                        <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
-                                            <i class="fa-solid fa-circle-nodes text-indigo-400"></i>
-                                            <span>Max Radius (KM)</span>
-                                        </label>
-                                        <input type="number" step="0.1" min="0.5" id="prof-max-radius-input" placeholder="15.0" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
-                                    </div>
-
-                                    <div class="space-y-1.5">
-                                        <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
-                                            <i class="fa-solid fa-leaf text-emerald-400"></i>
-                                            <span>Free Radius (KM)</span>
-                                        </label>
-                                        <input type="number" step="0.1" min="0" id="prof-free-radius-input" placeholder="3.0" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
-                                    </div>
-
-                                    <div class="space-y-1.5">
-                                        <label class="text-[11px] font-bold text-slate-300 flex items-center gap-1">
-                                            <i class="fa-solid fa-indian-rupee-sign text-amber-400"></i>
-                                            <span>Delivery Fee (₹)</span>
-                                        </label>
-                                        <input type="number" step="1" min="0" id="prof-delivery-charge-input" placeholder="40" class="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition">
-                                    </div>
-                                </div>
-
-                                <div class="p-3.5 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center justify-between gap-4">
-                                    <div class="space-y-0.5">
-                                        <div class="text-xs font-bold text-white flex items-center gap-1.5">
-                                            <i class="fa-solid fa-location-crosshairs text-rose-400"></i>
-                                            <span>Require Exact WhatsApp Location Pin</span>
-                                        </div>
-                                        <p class="text-[11px] text-slate-400 leading-normal">
-                                            If enabled, the AI bot will refuse checkout until the customer shares their live/current WhatsApp location pin.
-                                        </p>
-                                    </div>
-                                    <label class="relative inline-flex items-center cursor-pointer shrink-0">
-                                        <input type="checkbox" id="prof-require-location-toggle" class="sr-only peer">
-                                        <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="flex justify-end pt-2">
-                                <button type="submit" id="btn-save-location-profile" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-500/20">
-                                    <i class="fa-solid fa-floppy-disk"></i>
-                                    <span>Save Profile Location & Delivery Settings</span>
-                                </button>
-                            </div>
-                        </form>
                     </div>
 
                     <!-- Change Password Card (2-Step Verification Flow) -->
@@ -1564,6 +1708,7 @@
                 'connect': 'WhatsApp Link Setup',
                 'bulk': 'Bulk WhatsApp Outreach',
                 'catalog': 'Product Catalog & Knowledge Base',
+                'store': 'Store Management & Digital Shopfront',
                 'ai': 'AI Lead Responder',
                 'profile': 'Profile & Security Settings'
             };
@@ -1594,6 +1739,7 @@
                 loadCategories();
                 loadProductCatalog();
             }
+            if (tabId === 'store') loadStoreSettings();
             if (tabId === 'ai') loadAISettings();
             if (tabId === 'profile') loadUserProfile();
         }
@@ -3907,7 +4053,7 @@
                 if (aiProv) aiProv.innerText = `${data.ai_provider || 'Gemini'} / ${data.ai_model || 'Standard'}`;
                 if (createdAt) createdAt.innerText = data.created_at || 'Active';
 
-                // Prefill Store Location & GPS Coordinates & Delivery Logistics
+                // Prefill Store Location & GPS Coordinates & Delivery Logistics & Storefront Branding
                 const addrInput = document.getElementById('prof-full-address-input');
                 const areaInput = document.getElementById('prof-local-area-input');
                 const latInput = document.getElementById('prof-lat-input');
@@ -3917,6 +4063,26 @@
                 const freeRadInput = document.getElementById('prof-free-radius-input');
                 const delChargeInput = document.getElementById('prof-delivery-charge-input');
                 const reqLocToggle = document.getElementById('prof-require-location-toggle');
+
+                // Storefront Branding Fields
+                const storeSlug = data.store_slug || data.username || '';
+                const liveStoreLinkInput = document.getElementById('prof-live-store-link-input');
+                const storeSlugInput = document.getElementById('prof-store-slug-input');
+                const taglineInput = document.getElementById('prof-tagline-input');
+                const logoUrlInput = document.getElementById('prof-logo-url-input');
+                const bannerUrlInput = document.getElementById('prof-banner-url-input');
+
+                if (liveStoreLinkInput) liveStoreLinkInput.value = `${window.location.origin}/${storeSlug}`;
+                if (storeSlugInput) storeSlugInput.value = storeSlug;
+                if (taglineInput && data.tagline) taglineInput.value = data.tagline;
+                if (logoUrlInput && data.logo_url) {
+                    logoUrlInput.value = data.logo_url;
+                    updateLogoPreview(data.logo_url);
+                }
+                if (bannerUrlInput && data.banner_url) {
+                    bannerUrlInput.value = data.banner_url;
+                    updateBannerPreview(data.banner_url);
+                }
 
                 if (addrInput && data.full_address) addrInput.value = data.full_address;
                 if (areaInput && data.local_area) areaInput.value = data.local_area;
@@ -3934,6 +4100,97 @@
             } catch (err) {
                 console.warn('Failed to load profile details:', err);
             }
+        }
+
+        // Storefront Branding & Link Management Helpers
+        function copyStorefrontLink() {
+            const input = document.getElementById('prof-live-store-link-input');
+            if (!input || !input.value) return;
+            const textToCopy = input.value;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    const btnText = document.getElementById('btn-copy-store-text');
+                    if (btnText) {
+                        const orig = btnText.innerText;
+                        btnText.innerText = "Copied!";
+                        setTimeout(() => { btnText.innerText = orig; }, 2000);
+                    }
+                    alert("✅ Storefront link copied to clipboard!\n" + textToCopy);
+                }).catch(() => {
+                    input.select();
+                    document.execCommand('copy');
+                    alert("✅ Storefront link copied!");
+                });
+            } else {
+                input.select();
+                document.execCommand('copy');
+                alert("✅ Storefront link copied!");
+            }
+        }
+
+        function openStorefrontPreview() {
+            const link = document.getElementById('prof-live-store-link-input')?.value;
+            if (link) window.open(link, '_blank');
+        }
+
+        function updateStoreSlugPreview(val) {
+            const clean = (val || '').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+            const input = document.getElementById('prof-live-store-link-input');
+            if (input) input.value = `${window.location.origin}/${clean || 'your_store'}`;
+        }
+
+        function updateLogoPreview(url) {
+            const img = document.getElementById('prof-logo-preview');
+            const ph = document.getElementById('prof-logo-placeholder');
+            if (!img || !ph) return;
+            if (url && url.trim()) {
+                img.src = url.trim();
+                img.classList.remove('hidden');
+                ph.classList.add('hidden');
+            } else {
+                img.classList.add('hidden');
+                ph.classList.remove('hidden');
+            }
+        }
+
+        function updateBannerPreview(url) {
+            const img = document.getElementById('prof-banner-preview');
+            const ph = document.getElementById('prof-banner-placeholder');
+            if (!img || !ph) return;
+            if (url && url.trim()) {
+                img.src = url.trim();
+                img.classList.remove('hidden');
+                ph.classList.add('hidden');
+            } else {
+                img.classList.add('hidden');
+                ph.classList.remove('hidden');
+            }
+        }
+
+        function handleStoreLogoUpload(evt) {
+            const file = evt.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const base64 = e.target.result;
+                const input = document.getElementById('prof-logo-url-input');
+                if (input) input.value = base64;
+                updateLogoPreview(base64);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function handleStoreBannerUpload(evt) {
+            const file = evt.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const base64 = e.target.result;
+                const input = document.getElementById('prof-banner-url-input');
+                if (input) input.value = base64;
+                updateBannerPreview(base64);
+            };
+            reader.readAsDataURL(file);
         }
 
         // HTML5 Geolocation API Logic for Business Profile Location
@@ -3989,9 +4246,78 @@
             );
         }
 
-        async function saveStoreLocation(evt) {
+        // ==========================================
+        // STORE MANAGEMENT & DIGITAL SHOPFRONT LOGIC
+        // ==========================================
+        async function loadStoreSettings() {
+            const username = getActiveUsername();
+            if (!username) return;
+
+            try {
+                const res = await fetch(`/api/user/profile?username=${encodeURIComponent(username)}`);
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Storefront Branding Fields
+                const storeSlug = data.store_slug || data.username || '';
+                const liveStoreLinkInput = document.getElementById('prof-live-store-link-input');
+                const storeSlugInput = document.getElementById('prof-store-slug-input');
+                const taglineInput = document.getElementById('prof-tagline-input');
+                const logoUrlInput = document.getElementById('prof-logo-url-input');
+                const bannerUrlInput = document.getElementById('prof-banner-url-input');
+
+                if (liveStoreLinkInput) liveStoreLinkInput.value = `${window.location.origin}/${storeSlug}`;
+                if (storeSlugInput) storeSlugInput.value = storeSlug;
+                if (taglineInput) taglineInput.value = data.tagline || '';
+                if (logoUrlInput) {
+                    logoUrlInput.value = data.logo_url || '';
+                    updateLogoPreview(data.logo_url || '');
+                }
+                if (bannerUrlInput) {
+                    bannerUrlInput.value = data.banner_url || '';
+                    updateBannerPreview(data.banner_url || '');
+                }
+
+                // Physical Location & GPS
+                const addrInput = document.getElementById('prof-full-address-input');
+                const areaInput = document.getElementById('prof-local-area-input');
+                const latInput = document.getElementById('prof-lat-input');
+                const lngInput = document.getElementById('prof-lng-input');
+                const gpsBadge = document.getElementById('gps-status-badge');
+
+                if (addrInput) addrInput.value = data.full_address || '';
+                if (areaInput) areaInput.value = data.local_area || '';
+                if (latInput) latInput.value = data.latitude ? parseFloat(data.latitude).toFixed(8) : '';
+                if (lngInput) lngInput.value = data.longitude ? parseFloat(data.longitude).toFixed(8) : '';
+
+                if (gpsBadge && (data.latitude || data.longitude) && parseFloat(data.latitude) !== 0) {
+                    gpsBadge.innerText = "✅ Exact Location Captured!";
+                    gpsBadge.className = "text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg";
+                }
+
+                // Hyperlocal Delivery Settings
+                const maxRadInput = document.getElementById('prof-max-radius-input');
+                const freeRadInput = document.getElementById('prof-free-radius-input');
+                const delChargeInput = document.getElementById('prof-delivery-charge-input');
+                const reqLocToggle = document.getElementById('prof-require-location-toggle');
+
+                if (maxRadInput) maxRadInput.value = data.max_delivery_radius_km !== undefined ? data.max_delivery_radius_km : 15.0;
+                if (freeRadInput) freeRadInput.value = data.free_delivery_radius_km !== undefined ? data.free_delivery_radius_km : 3.0;
+                if (delChargeInput) delChargeInput.value = data.delivery_charge_amount !== undefined ? data.delivery_charge_amount : 40.0;
+                if (reqLocToggle) reqLocToggle.checked = Boolean(data.require_customer_location);
+            } catch (err) {
+                console.warn('Failed to load store settings:', err);
+            }
+        }
+
+        async function saveStoreSettings(evt) {
             if (evt) evt.preventDefault();
             const username = getActiveUsername();
+            if (!username) {
+                alert('Please sign in to update store settings');
+                return;
+            }
+
             const fullAddress = (document.getElementById('prof-full-address-input')?.value || '').trim();
             const localArea = (document.getElementById('prof-local-area-input')?.value || '').trim();
             const lat = (document.getElementById('prof-lat-input')?.value || '0').trim();
@@ -4001,12 +4327,18 @@
             const deliveryCharge = parseFloat(document.getElementById('prof-delivery-charge-input')?.value || '40');
             const requireLocation = Boolean(document.getElementById('prof-require-location-toggle')?.checked);
             const notifPhone = (document.getElementById('prof-notif-phone-input')?.value || '').trim();
-            const btn = document.getElementById('btn-save-location-profile');
 
+            // Storefront fields
+            const storeSlug = (document.getElementById('prof-store-slug-input')?.value || '').trim();
+            const tagline = (document.getElementById('prof-tagline-input')?.value || '').trim();
+            const logoUrl = (document.getElementById('prof-logo-url-input')?.value || '').trim();
+            const bannerUrl = (document.getElementById('prof-banner-url-input')?.value || '').trim();
+
+            const btn = document.getElementById('btn-save-store-settings') || document.getElementById('btn-save-location-profile');
             const originalHtml = btn ? btn.innerHTML : 'Save';
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span> Saving Location & Settings...</span>';
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span> Saving Store Management Settings...</span>';
             }
 
             try {
@@ -4023,18 +4355,23 @@
                         free_delivery_radius_km: freeRadius,
                         delivery_charge_amount: deliveryCharge,
                         require_customer_location: requireLocation,
-                        notification_phone: notifPhone
+                        notification_phone: notifPhone,
+                        store_slug: storeSlug,
+                        tagline: tagline,
+                        logo_url: logoUrl,
+                        banner_url: bannerUrl
                     })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('✅ Business profile address, GPS location & delivery settings saved successfully!');
+                    alert('✅ Store Management settings (Branding, Slug, Address, GPS & Delivery Fees) saved successfully!');
+                    loadStoreSettings();
                     loadUserProfile();
                 } else {
-                    alert(data.message || 'Failed to save location details');
+                    alert(data.message || 'Failed to save store settings');
                 }
             } catch (err) {
-                alert('Server error saving location details');
+                alert('Server error saving store settings');
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -4042,6 +4379,8 @@
                 }
             }
         }
+
+        const saveStoreLocation = saveStoreSettings;
 
         async function verifyCurrentPassword() {
             const username = getActiveUsername();

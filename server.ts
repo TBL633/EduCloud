@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import QRCode from 'qrcode';
@@ -3127,14 +3128,28 @@ app.get('/api/user/profile', async (req: Request, res: Response) => {
             status: 'success',
             username: row.username,
             account_name: row.account_name || `${row.username} Workspace`,
+            business_name: row.business_name || row.account_name || row.username,
             email: row.email || '',
             phone: row.phone || '',
+            notification_phone: row.notification_phone || '',
             wa_jid: row.wa_jid || '',
             wa_status: row.status || 'Disconnected',
             role: row.role || 'user',
             user_type: row.user_type || 'business_user',
             ai_provider: row.ai_provider || 'gemini',
             ai_model: row.ai_model || 'gemini-1.5-flash',
+            full_address: row.full_address || '',
+            local_area: row.local_area || '',
+            latitude: row.latitude ? parseFloat(row.latitude) : 0,
+            longitude: row.longitude ? parseFloat(row.longitude) : 0,
+            max_delivery_radius_km: row.max_delivery_radius_km !== undefined ? Number(row.max_delivery_radius_km) : 15.0,
+            free_delivery_radius_km: row.free_delivery_radius_km !== undefined ? Number(row.free_delivery_radius_km) : 3.0,
+            delivery_charge_amount: row.delivery_charge_amount !== undefined ? Number(row.delivery_charge_amount) : 40.0,
+            require_customer_location: Boolean(row.require_customer_location),
+            store_slug: row.store_slug || row.username,
+            logo_url: row.logo_url || '',
+            banner_url: row.banner_url || '',
+            tagline: row.tagline || '',
             created_at: row.created_at ? new Date(row.created_at).toLocaleString() : 'Active'
           });
         }
@@ -3150,15 +3165,1012 @@ app.get('/api/user/profile', async (req: Request, res: Response) => {
     status: 'success',
     username: user.username,
     account_name: user.account_name || `${user.username} Workspace`,
+    business_name: user.business_name || user.account_name || user.username,
     email: user.email || '',
     phone: user.phone || '',
+    notification_phone: user.notification_phone || '',
     wa_jid: user.wa_jid || '',
     wa_status: user.status || 'Disconnected',
     role: user.role || 'user',
     user_type: user.user_type || 'business_user',
     ai_provider: user.ai_provider || 'gemini',
     ai_model: user.model || 'gemini-1.5-flash',
+    full_address: user.full_address || '',
+    local_area: user.local_area || '',
+    max_delivery_radius_km: user.max_delivery_radius_km !== undefined ? user.max_delivery_radius_km : 15.0,
+    free_delivery_radius_km: user.free_delivery_radius_km !== undefined ? user.free_delivery_radius_km : 3.0,
+    delivery_charge_amount: user.delivery_charge_amount !== undefined ? user.delivery_charge_amount : 40.0,
+    require_customer_location: Boolean(user.require_customer_location),
+    store_slug: user.store_slug || user.username,
+    logo_url: user.logo_url || '',
+    banner_url: user.banner_url || '',
+    tagline: user.tagline || '',
     created_at: user.created_at ? new Date(user.created_at).toLocaleString() : 'Active'
+  });
+});
+
+// POST /api/user/profile to save store branding, address, GPS, delivery logistics & store slug
+app.post('/api/user/profile', async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const {
+    username,
+    business_name,
+    notification_phone,
+    full_address,
+    local_area,
+    latitude,
+    longitude,
+    max_delivery_radius_km,
+    free_delivery_radius_km,
+    delivery_charge_amount,
+    require_customer_location,
+    store_slug,
+    logo_url,
+    banner_url,
+    tagline
+  } = body || {};
+
+  if (!username) {
+    return res.status(400).json({ status: 'error', message: 'Username is required' });
+  }
+
+  const cleanUser = username.toLowerCase();
+  let cleanSlug = (store_slug || '').toLowerCase().trim();
+  cleanSlug = cleanSlug.replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const latVal = parseFloat(latitude) || 0;
+  const lngVal = parseFloat(longitude) || 0;
+  const maxRadVal = parseFloat(max_delivery_radius_km) || 15.0;
+  const freeRadVal = parseFloat(free_delivery_radius_km) >= 0 ? parseFloat(free_delivery_radius_km) : 3.0;
+  const delChargeVal = parseFloat(delivery_charge_amount) >= 0 ? parseFloat(delivery_charge_amount) : 40.0;
+  const reqLocVal = Boolean(require_customer_location);
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(
+        `UPDATE users SET 
+          business_name = CASE WHEN $1 != '' THEN $1 ELSE business_name END,
+          notification_phone = CASE WHEN $2 != '' THEN $2 ELSE notification_phone END,
+          full_address = CASE WHEN $3 != '' THEN $3 ELSE full_address END,
+          local_area = CASE WHEN $4 != '' THEN $4 ELSE local_area END,
+          latitude = CASE WHEN $5 != 0 THEN $5 ELSE latitude END,
+          longitude = CASE WHEN $6 != 0 THEN $6 ELSE longitude END,
+          business_lat = CASE WHEN $5 != 0 THEN $5 ELSE business_lat END,
+          business_lng = CASE WHEN $6 != 0 THEN $6 ELSE business_lng END,
+          max_delivery_radius_km = CASE WHEN $7 > 0 THEN $7 ELSE max_delivery_radius_km END,
+          free_delivery_radius_km = CASE WHEN $8 >= 0 THEN $8 ELSE free_delivery_radius_km END,
+          delivery_charge_amount = CASE WHEN $9 >= 0 THEN $9 ELSE delivery_charge_amount END,
+          require_customer_location = $10,
+          store_slug = CASE WHEN $11 != '' THEN $11 ELSE store_slug END,
+          logo_url = CASE WHEN $12 != '' THEN $12 ELSE logo_url END,
+          banner_url = CASE WHEN $13 != '' THEN $13 ELSE banner_url END,
+          tagline = CASE WHEN $14 != '' THEN $14 ELSE tagline END
+        WHERE LOWER(username) = LOWER($15)`,
+        [
+          (business_name || '').trim(),
+          (notification_phone || '').trim(),
+          (full_address || '').trim(),
+          (local_area || '').trim(),
+          latVal,
+          lngVal,
+          maxRadVal,
+          freeRadVal,
+          delChargeVal,
+          reqLocVal,
+          cleanSlug,
+          (logo_url || '').trim(),
+          (banner_url || '').trim(),
+          (tagline || '').trim(),
+          cleanUser
+        ]
+      );
+    } catch (err: any) {
+      console.warn('Error saving user profile in DB:', err.message);
+    }
+  }
+
+  // Update memoryUsers fallback
+  const mem = memoryUsers.get(cleanUser);
+  if (mem) {
+    if (business_name) mem.business_name = business_name;
+    if (notification_phone) mem.notification_phone = notification_phone;
+    if (full_address) mem.full_address = full_address;
+    if (local_area) mem.local_area = local_area;
+    mem.max_delivery_radius_km = maxRadVal;
+    mem.free_delivery_radius_km = freeRadVal;
+    mem.delivery_charge_amount = delChargeVal;
+    mem.require_customer_location = reqLocVal;
+    if (cleanSlug) mem.store_slug = cleanSlug;
+    if (logo_url) mem.logo_url = logo_url;
+    if (banner_url) mem.banner_url = banner_url;
+    if (tagline) mem.tagline = tagline;
+  }
+
+  return res.json({
+    status: 'success',
+    message: 'Business profile, storefront branding, and delivery settings saved successfully!',
+    store_slug: cleanSlug || cleanUser
+  });
+});
+
+// GET /api/storefront/:slug or /api/storefront?slug=... (100% Dynamic Tenant Storefront API)
+app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: Response) => {
+  const slugParam = (req.params.slug || req.query.slug || req.query.username || '') as string;
+  const cleanSlug = slugParam.trim().toLowerCase();
+
+  if (!cleanSlug) {
+    return res.status(400).json({ status: 'error', message: 'Store slug is required' });
+  }
+
+  let tenantRow: any = null;
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      const uRes = await pool.query(
+        `SELECT 
+          id, username, email, phone, notification_phone, wa_jid, 
+          COALESCE(business_name, account_name, username) as store_name,
+          COALESCE(store_slug, username) as store_slug,
+          COALESCE(tagline, '') as tagline,
+          COALESCE(logo_url, '') as logo_url,
+          COALESCE(banner_url, '') as banner_url,
+          COALESCE(full_address, '') as full_address,
+          COALESCE(local_area, '') as local_area,
+          COALESCE(max_delivery_radius_km, 15.0) as max_delivery_radius_km,
+          COALESCE(free_delivery_radius_km, 3.0) as free_delivery_radius_km,
+          COALESCE(delivery_charge_amount, 40.0) as delivery_charge_amount,
+          COALESCE(require_customer_location, false) as require_customer_location
+        FROM users 
+        WHERE LOWER(store_slug) = $1 OR LOWER(username) = $1 
+        LIMIT 1`,
+        [cleanSlug]
+      );
+      if (uRes.rows.length > 0) {
+        tenantRow = uRes.rows[0];
+      }
+    } catch (e: any) {
+      console.warn('Storefront query notice:', e.message);
+    }
+  }
+
+  if (!tenantRow) {
+    const mem = Array.from(memoryUsers.values()).find(
+      u => (u.store_slug && u.store_slug.toLowerCase() === cleanSlug) || u.username.toLowerCase() === cleanSlug
+    );
+    if (mem) {
+      tenantRow = {
+        username: mem.username,
+        store_name: mem.business_name || mem.account_name || mem.username,
+        store_slug: mem.store_slug || mem.username,
+        tagline: mem.tagline || '',
+        logo_url: mem.logo_url || '',
+        banner_url: mem.banner_url || '',
+        phone: mem.phone || '',
+        notification_phone: mem.notification_phone || '',
+        wa_jid: mem.wa_jid || '',
+        full_address: mem.full_address || '',
+        local_area: mem.local_area || '',
+        max_delivery_radius_km: mem.max_delivery_radius_km || 15.0,
+        free_delivery_radius_km: mem.free_delivery_radius_km || 3.0,
+        delivery_charge_amount: mem.delivery_charge_amount || 40.0,
+        require_customer_location: Boolean(mem.require_customer_location)
+      };
+    }
+  }
+
+  if (!tenantRow) {
+    return res.status(404).json({ status: 'error', message: `Store not found for slug: ${slugParam}` });
+  }
+
+  const tenantUsername = tenantRow.username;
+
+  // Format clean WhatsApp phone
+  let contactPhone = tenantRow.notification_phone || tenantRow.phone || '';
+  if (!contactPhone && tenantRow.wa_jid) {
+    contactPhone = tenantRow.wa_jid.split('@')[0].split(':')[0];
+  }
+  const cleanPhoneDigits = contactPhone.replace(/\D/g, '');
+
+  const tenant = {
+    username: tenantRow.username,
+    store_name: tenantRow.store_name,
+    store_slug: tenantRow.store_slug || tenantRow.username,
+    tagline: tenantRow.tagline || '',
+    logo_url: tenantRow.logo_url || '',
+    banner_url: tenantRow.banner_url || '',
+    whatsapp_number: cleanPhoneDigits,
+    full_address: tenantRow.full_address || '',
+    local_area: tenantRow.local_area || '',
+    max_delivery_radius_km: Number(tenantRow.max_delivery_radius_km || 15),
+    free_delivery_radius_km: Number(tenantRow.free_delivery_radius_km || 3),
+    delivery_charge_amount: Number(tenantRow.delivery_charge_amount || 40),
+    require_customer_location: Boolean(tenantRow.require_customer_location)
+  };
+
+  // Fetch Categories for tenant
+  let categories: any[] = [];
+  if (pool) {
+    try {
+      const cRes = await pool.query(
+        `SELECT c.id, c.category_name, COALESCE(c.category_image_url, '') as category_image_url,
+          (SELECT COUNT(*) FROM products p WHERE LOWER(p.username)=LOWER(c.username) AND (p.category_id=c.id OR LOWER(TRIM(p.category))=LOWER(TRIM(c.category_name)))) as product_count
+        FROM categories c
+        WHERE LOWER(c.username) = LOWER($1)
+        ORDER BY c.id ASC`,
+        [tenantUsername]
+      );
+      categories = cRes.rows.map(r => ({
+        id: r.id,
+        name: r.category_name,
+        category_name: r.category_name,
+        category_image_url: r.category_image_url || '',
+        product_count: parseInt(r.product_count, 10) || 0
+      }));
+    } catch (e) {}
+  } else {
+    categories = memoryCategories
+      .filter(c => c.username.toLowerCase() === tenantUsername.toLowerCase())
+      .map(c => ({
+        id: c.id,
+        name: c.category_name,
+        category_name: c.category_name,
+        category_image_url: c.category_image_url,
+        product_count: 0
+      }));
+  }
+
+  // Fetch Products for tenant
+  let products: any[] = [];
+  if (pool) {
+    try {
+      const pRes = await pool.query(
+        `SELECT id, COALESCE(category_id, 0) as category_id, name, price, COALESCE(description, '') as description,
+          COALESCE(unit_type, 'custom') as unit_type, COALESCE(variants::text, '[]') as variants,
+          COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link,
+          COALESCE(NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') as image_url,
+          COALESCE(category, 'General') as category,
+          COALESCE(in_stock, true) as in_stock,
+          COALESCE(mrp, 0) as mrp,
+          COALESCE(sale_price, 0) as sale_price
+        FROM products
+        WHERE LOWER(username) = LOWER($1)
+        ORDER BY id ASC`,
+        [tenantUsername]
+      );
+      products = pRes.rows.map(r => {
+        let parsedVariants: any = [];
+        try { parsedVariants = JSON.parse(r.variants); } catch {}
+        return {
+          id: r.id,
+          category_id: r.category_id,
+          category: r.category,
+          category_name: r.category,
+          name: r.name,
+          price: r.price,
+          mrp: parseFloat(r.mrp) || 0,
+          sale_price: parseFloat(r.sale_price) || 0,
+          description: r.description,
+          unit_type: r.unit_type,
+          variants: parsedVariants,
+          whatsapp_catalog_link: r.whatsapp_catalog_link,
+          image_url: r.image_url || '',
+          in_stock: Boolean(r.in_stock)
+        };
+      });
+    } catch (e) {}
+  }
+
+  return res.json({
+    status: 'success',
+    tenant,
+    categories,
+    products
+  });
+});
+
+// ============================================================================
+// OMNICHANNEL WHATSAPP-WEB SYNC, MAGIC LINKS & PROFILE MANAGEMENT
+// ============================================================================
+
+const CUSTOMER_JWT_SECRET = process.env.CUSTOMER_JWT_SECRET || 'wamart_omnichannel_secret_key_2026';
+
+interface MemoryMagicLink {
+  token: string;
+  jid: string;
+  tenant_id: string;
+  expires_at: Date;
+  is_used: boolean;
+}
+
+const memoryMagicLinks = new Map<string, MemoryMagicLink>();
+
+function signCustomerSession(payload: { jid: string; tenant_id: string; phone: string }): string {
+  const data = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 })).toString('base64url');
+  const sig = crypto.createHmac('sha256', CUSTOMER_JWT_SECRET).update(data).digest('base64url');
+  return `${data}.${sig}`;
+}
+
+function verifyCustomerSession(tokenStr: string): { jid: string; tenant_id: string; phone: string } | null {
+  if (!tokenStr || !tokenStr.includes('.')) return null;
+  const [data, sig] = tokenStr.split('.');
+  if (!data || !sig) return null;
+  const expectedSig = crypto.createHmac('sha256', CUSTOMER_JWT_SECRET).update(data).digest('base64url');
+  if (sig !== expectedSig) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+    if (parsed.exp && parsed.exp < Date.now()) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function extractCustomerAuth(req: Request): { jid: string; tenant_id: string; phone: string } | null {
+  let rawToken = '';
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    rawToken = authHeader.substring(7).trim();
+  }
+  if (!rawToken && req.headers.cookie) {
+    const cookies = req.headers.cookie.split(';');
+    for (const c of cookies) {
+      const [k, v] = c.trim().split('=');
+      if (k === 'wamart_cust_token') {
+        rawToken = decodeURIComponent(v);
+        break;
+      }
+    }
+  }
+  if (!rawToken && req.query.auth_token) {
+    rawToken = String(req.query.auth_token).trim();
+  }
+  if (!rawToken && (req.headers['x-auth-token'] || req.headers['x-customer-token'])) {
+    rawToken = String(req.headers['x-auth-token'] || req.headers['x-customer-token']).trim();
+  }
+  return verifyCustomerSession(rawToken);
+}
+
+// 1. GENERATE MAGIC LINK HELPER & API
+export async function createMagicLinkToken(tenantId: string, jid: string, origin: string): Promise<{ token: string; url: string }> {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const pool = getPool();
+  let storeSlug = tenantId;
+
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO magic_links (token, jid, tenant_id, expires_at, is_used) VALUES ($1, $2, $3, $4, false)`,
+        [token, jid, tenantId, expiresAt]
+      );
+      const uRes = await pool.query(
+        `SELECT COALESCE(NULLIF(store_slug, ''), username) as slug FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1`,
+        [tenantId]
+      );
+      if (uRes.rows.length > 0 && uRes.rows[0].slug) {
+        storeSlug = uRes.rows[0].slug;
+      }
+    } catch (e: any) {
+      console.warn('Magic link DB insert warning:', e.message);
+    }
+  }
+
+  memoryMagicLinks.set(token, { token, jid, tenant_id: tenantId, expires_at: expiresAt, is_used: false });
+  const cleanOrigin = origin.replace(/\/+$/, '');
+  const url = `${cleanOrigin}/${encodeURIComponent(storeSlug)}?auth_token=${token}`;
+  return { token, url };
+}
+
+// Endpoint to generate magic link (can be called by WhatsApp bot or webhook)
+app.post('/api/customer/magic-link', async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const { tenant_id, jid } = body || {};
+  if (!tenant_id || !jid) {
+    return res.status(400).json({ status: 'error', message: 'tenant_id and jid are required' });
+  }
+
+  const origin = `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+  try {
+    const magic = await createMagicLinkToken(tenant_id, jid, origin);
+    return res.json({ status: 'success', token: magic.token, url: magic.url });
+  } catch (err: any) {
+    return res.status(500).json({ status: 'error', message: err.message || 'Failed to generate magic link' });
+  }
+});
+
+// 2. VALIDATE MAGIC LINK API: POST /api/auth/verify-token
+app.all(['/api/auth/verify-token', '/api/customer/verify-token'], async (req: Request, res: Response) => {
+  let token = (req.body?.token || req.query?.token || req.query?.auth_token || req.headers['x-magic-token'] || '') as string;
+  if (typeof token !== 'string' || !token.trim()) {
+    return res.status(400).json({ status: 'error', message: 'Magic link token is required' });
+  }
+  token = token.trim();
+
+  let linkRecord: { jid: string; tenant_id: string; expires_at: Date; is_used: boolean } | null = null;
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      const qRes = await pool.query(
+        `SELECT jid, tenant_id, expires_at, is_used FROM magic_links WHERE token = $1 LIMIT 1`,
+        [token]
+      );
+      if (qRes.rows.length > 0) {
+        linkRecord = {
+          jid: qRes.rows[0].jid,
+          tenant_id: qRes.rows[0].tenant_id,
+          expires_at: new Date(qRes.rows[0].expires_at),
+          is_used: Boolean(qRes.rows[0].is_used)
+        };
+      }
+    } catch (e: any) {
+      console.warn('Verify token DB query notice:', e.message);
+    }
+  }
+
+  if (!linkRecord) {
+    const mem = memoryMagicLinks.get(token);
+    if (mem) linkRecord = mem;
+  }
+
+  if (!linkRecord) {
+    return res.status(401).json({ status: 'error', message: 'Invalid magic link token' });
+  }
+
+  if (linkRecord.is_used) {
+    // If recently used, still allow customer to retain session gracefully
+    console.log(`ℹ️ [Magic Link] Token ${token.substring(0, 8)}... was already marked used; re-verifying customer session`);
+  }
+
+  if (new Date(linkRecord.expires_at).getTime() < Date.now()) {
+    return res.status(401).json({ status: 'error', message: 'Magic link token has expired' });
+  }
+
+  // Mark token as used
+  if (pool) {
+    try {
+      await pool.query(`UPDATE magic_links SET is_used = true WHERE token = $1`, [token]);
+    } catch {}
+  }
+  linkRecord.is_used = true;
+  memoryMagicLinks.set(token, { ...linkRecord, token });
+
+  const cleanPhone = linkRecord.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  const sessionToken = signCustomerSession({
+    jid: linkRecord.jid,
+    tenant_id: linkRecord.tenant_id,
+    phone: cleanPhone
+  });
+
+  // Set secure HttpOnly cookie
+  res.cookie('wamart_cust_token', sessionToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  });
+
+  // Fetch pre-filled customer details from DB
+  let customerData = {
+    name: '',
+    whatsapp_number: cleanPhone,
+    delivery_phone: cleanPhone,
+    delivery_address: '',
+    jid: linkRecord.jid,
+    tenant_id: linkRecord.tenant_id
+  };
+
+  if (pool) {
+    try {
+      const cRes = await pool.query(
+        `SELECT 
+          COALESCE(NULLIF(name, ''), NULLIF(full_name, ''), NULLIF(saved_name, ''), '') as name,
+          COALESCE(NULLIF(whatsapp_number, ''), NULLIF(wa_number, ''), $1) as whatsapp_number,
+          COALESCE(NULLIF(delivery_phone, ''), NULLIF(contact_phone, ''), $1) as delivery_phone,
+          COALESCE(NULLIF(delivery_address, ''), NULLIF(saved_address, ''), '') as delivery_address
+        FROM customers
+        WHERE (jid = $2 OR wa_number = $1 OR wa_number = $3)
+          AND (tenant_id = $4 OR LOWER(username) = LOWER($4))
+        ORDER BY updated_at DESC LIMIT 1`,
+        [cleanPhone, linkRecord.jid, linkRecord.jid.replace('@s.whatsapp.net', ''), linkRecord.tenant_id]
+      );
+      if (cRes.rows.length > 0) {
+        const r = cRes.rows[0];
+        customerData.name = r.name || '';
+        customerData.whatsapp_number = r.whatsapp_number || cleanPhone;
+        customerData.delivery_phone = r.delivery_phone || cleanPhone;
+        customerData.delivery_address = r.delivery_address || '';
+      } else {
+        // Fallback to customer_order_states
+        const oRes = await pool.query(
+          `SELECT customer_name, delivery_phone, delivery_address 
+           FROM customer_order_states 
+           WHERE (customer_phone = $1 OR customer_phone = $2) AND LOWER(username)=LOWER($3) 
+           ORDER BY updated_at DESC LIMIT 1`,
+          [cleanPhone, linkRecord.jid, linkRecord.tenant_id]
+        );
+        if (oRes.rows.length > 0) {
+          const r = oRes.rows[0];
+          customerData.name = r.customer_name || '';
+          customerData.delivery_phone = r.delivery_phone || cleanPhone;
+          customerData.delivery_address = r.delivery_address || '';
+        }
+      }
+    } catch (e: any) {
+      console.warn('Customer lookup error:', e.message);
+    }
+  }
+
+  return res.json({
+    status: 'success',
+    token: sessionToken,
+    jid: linkRecord.jid,
+    tenant_id: linkRecord.tenant_id,
+    customer: customerData
+  });
+});
+
+// 3. CUSTOMER PROFILE APIs: GET & PUT /api/customer/profile
+app.get('/api/customer/profile', async (req: Request, res: Response) => {
+  const auth = extractCustomerAuth(req);
+  if (!auth) {
+    return res.status(401).json({ status: 'error', message: 'Authentication required. Please open your secure store link.' });
+  }
+
+  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  let customerData = {
+    jid: auth.jid,
+    tenant_id: auth.tenant_id,
+    name: '',
+    whatsapp_number: cleanPhone,
+    delivery_phone: cleanPhone,
+    delivery_address: ''
+  };
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      const cRes = await pool.query(
+        `SELECT 
+          COALESCE(NULLIF(name, ''), NULLIF(full_name, ''), NULLIF(saved_name, ''), '') as name,
+          COALESCE(NULLIF(whatsapp_number, ''), NULLIF(wa_number, ''), $1) as whatsapp_number,
+          COALESCE(NULLIF(delivery_phone, ''), NULLIF(contact_phone, ''), $1) as delivery_phone,
+          COALESCE(NULLIF(delivery_address, ''), NULLIF(saved_address, ''), '') as delivery_address
+        FROM customers
+        WHERE (jid = $2 OR wa_number = $1 OR wa_number = $3)
+          AND (tenant_id = $4 OR LOWER(username) = LOWER($4))
+        ORDER BY updated_at DESC LIMIT 1`,
+        [cleanPhone, auth.jid, auth.jid.replace('@s.whatsapp.net', ''), auth.tenant_id]
+      );
+      if (cRes.rows.length > 0) {
+        const r = cRes.rows[0];
+        customerData.name = r.name || '';
+        customerData.whatsapp_number = r.whatsapp_number || cleanPhone;
+        customerData.delivery_phone = r.delivery_phone || cleanPhone;
+        customerData.delivery_address = r.delivery_address || '';
+      } else {
+        const oRes = await pool.query(
+          `SELECT customer_name, delivery_phone, delivery_address 
+           FROM customer_order_states 
+           WHERE (customer_phone = $1 OR customer_phone = $2) AND LOWER(username)=LOWER($3) 
+           ORDER BY updated_at DESC LIMIT 1`,
+          [cleanPhone, auth.jid, auth.tenant_id]
+        );
+        if (oRes.rows.length > 0) {
+          const r = oRes.rows[0];
+          customerData.name = r.customer_name || '';
+          customerData.delivery_phone = r.delivery_phone || cleanPhone;
+          customerData.delivery_address = r.delivery_address || '';
+        }
+      }
+    } catch (e: any) {
+      console.warn('Customer profile query notice:', e.message);
+    }
+  }
+
+  return res.json({ status: 'success', profile: customerData });
+});
+
+app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
+  if (req.method !== 'PUT' && req.method !== 'POST') {
+    return res.status(405).json({ status: 'error', message: 'Method not allowed' });
+  }
+
+  const auth = extractCustomerAuth(req);
+  if (!auth) {
+    return res.status(401).json({ status: 'error', message: 'Authentication required' });
+  }
+
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+
+  const name = (body?.name || body?.full_name || '').trim();
+  const delivery_phone = (body?.delivery_phone || body?.contact_phone || '').trim();
+  const delivery_address = (body?.delivery_address || '').trim();
+
+  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      // 1. Upsert customers table
+      await pool.query(
+        `INSERT INTO customers (username, tenant_id, jid, wa_number, whatsapp_number, full_name, name, contact_phone, delivery_phone, delivery_address, saved_address, updated_at)
+         VALUES ($1, $1, $2, $3, $3, $4, $4, $5, $5, $6, $6, NOW())
+         ON CONFLICT (username, wa_number) DO UPDATE SET
+           name = EXCLUDED.name,
+           full_name = EXCLUDED.full_name,
+           delivery_phone = EXCLUDED.delivery_phone,
+           contact_phone = EXCLUDED.contact_phone,
+           delivery_address = EXCLUDED.delivery_address,
+           saved_address = EXCLUDED.saved_address,
+           jid = EXCLUDED.jid,
+           tenant_id = EXCLUDED.tenant_id,
+           updated_at = NOW()`,
+        [auth.tenant_id, auth.jid, cleanPhone, name, delivery_phone || cleanPhone, delivery_address]
+      );
+
+      // 2. Sync to customer_order_states so WhatsApp AI agent immediately knows updated info
+      await pool.query(
+        `INSERT INTO customer_order_states (username, customer_phone, jid, tenant_id, customer_name, delivery_phone, delivery_address, updated_at)
+         VALUES ($1, $2, $3, $1, $4, $5, $6, NOW())
+         ON CONFLICT (username, customer_phone) DO UPDATE SET
+           customer_name = EXCLUDED.customer_name,
+           delivery_phone = EXCLUDED.delivery_phone,
+           delivery_address = EXCLUDED.delivery_address,
+           jid = EXCLUDED.jid,
+           tenant_id = EXCLUDED.tenant_id,
+           updated_at = NOW()`,
+        [auth.tenant_id, cleanPhone, auth.jid, name, delivery_phone || cleanPhone, delivery_address]
+      );
+    } catch (e: any) {
+      console.warn('Update customer profile DB error:', e.message);
+    }
+  }
+
+  return res.json({
+    status: 'success',
+    message: 'Profile updated successfully',
+    profile: {
+      jid: auth.jid,
+      tenant_id: auth.tenant_id,
+      name,
+      whatsapp_number: cleanPhone,
+      delivery_phone: delivery_phone || cleanPhone,
+      delivery_address
+    }
+  });
+});
+
+// 4. ORDER HISTORY API: GET /api/customer/orders
+app.get('/api/customer/orders', async (req: Request, res: Response) => {
+  const auth = extractCustomerAuth(req);
+  if (!auth) {
+    return res.status(401).json({ status: 'error', message: 'Authentication required' });
+  }
+
+  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  let orders: any[] = [];
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      // 1. Fetch from orders table
+      const oRes = await pool.query(
+        `SELECT 
+          id, order_id, jid, customer_phone, tenant_id, customer_name, 
+          delivery_phone, delivery_address, items, total_amount, 
+          payment_mode, payment_status, order_status, created_at
+        FROM orders
+        WHERE (jid = $1 OR customer_phone = $2)
+        ORDER BY created_at DESC`,
+        [auth.jid, cleanPhone]
+      );
+
+      orders = oRes.rows.map(r => ({
+        id: r.id,
+        order_id: r.order_id,
+        date: r.created_at,
+        status: (r.order_status || 'in_progress').toUpperCase(),
+        payment_status: (r.payment_status || 'unpaid').toUpperCase(),
+        payment_mode: r.payment_mode || 'Cash on Delivery',
+        total_amount: Number(r.total_amount || 0),
+        items: Array.isArray(r.items) ? r.items : []
+      }));
+
+      // 2. Also check customer_order_states for current or recent order if orders table is empty
+      if (orders.length === 0) {
+        const sRes = await pool.query(
+          `SELECT 
+            id, order_id, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at
+          FROM customer_order_states
+          WHERE (customer_phone = $1 OR jid = $2) AND (order_id IS NOT NULL AND order_id != '')
+          ORDER BY updated_at DESC`,
+          [cleanPhone, auth.jid]
+        );
+        orders = sRes.rows.map(r => ({
+          id: r.id,
+          order_id: r.order_id,
+          date: r.updated_at || r.created_at,
+          status: (r.order_status || 'in_progress').toUpperCase(),
+          payment_status: (r.payment_status || 'unpaid').toUpperCase(),
+          payment_mode: r.payment_mode || 'Cash on Delivery',
+          total_amount: Number(r.total_amount || 0),
+          items: Array.isArray(r.items) ? r.items : []
+        }));
+      }
+    } catch (e: any) {
+      console.warn('Customer orders query error:', e.message);
+    }
+  }
+
+  return res.json({ status: 'success', orders });
+});
+
+// 5. OMNICHANNEL CART SYNC APIS: GET & POST /api/customer/cart
+app.get('/api/customer/cart', async (req: Request, res: Response) => {
+  const auth = extractCustomerAuth(req);
+  if (!auth) {
+    return res.status(401).json({ status: 'error', message: 'Authentication required' });
+  }
+
+  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  let cartItems: any[] = [];
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      const cRes = await pool.query(
+        `SELECT 
+          c.product_id, c.qty, 
+          p.id as prod_id, p.name, p.price, p.sale_price, p.mrp, 
+          COALESCE(NULLIF(p.image_url, ''), NULLIF(p.product_image_url, ''), '') as image_url,
+          p.category
+        FROM active_carts c
+        LEFT JOIN products p ON (p.id::text = c.product_id OR p.name = c.product_id)
+        WHERE (c.customer_phone = $1 OR c.jid = $2)
+          AND (c.tenant_id = $3 OR LOWER(c.username) = LOWER($3))
+        ORDER BY c.id ASC`,
+        [cleanPhone, auth.jid, auth.tenant_id]
+      );
+
+      cartItems = cRes.rows.map(r => ({
+        product_id: r.product_id,
+        qty: Number(r.qty || 1),
+        item: {
+          id: r.prod_id || r.product_id,
+          name: r.name || r.product_id,
+          price: r.price,
+          sale_price: r.sale_price || r.price,
+          mrp: r.mrp || 0,
+          image_url: r.image_url || '',
+          category: r.category || 'General'
+        }
+      }));
+    } catch (e: any) {
+      console.warn('Customer cart query error:', e.message);
+    }
+  }
+
+  return res.json({ status: 'success', cart: cartItems });
+});
+
+app.post('/api/customer/cart', async (req: Request, res: Response) => {
+  const auth = extractCustomerAuth(req);
+  if (!auth) {
+    return res.status(401).json({ status: 'error', message: 'Authentication required' });
+  }
+
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+
+  const items = Array.isArray(body?.items) ? body.items : Object.values(body?.cart || {});
+  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  const pool = getPool();
+
+  if (pool) {
+    try {
+      // Clear existing active carts for this customer
+      await pool.query(
+        `DELETE FROM active_carts WHERE (customer_phone = $1 OR jid = $2) AND (tenant_id = $3 OR LOWER(username) = LOWER($3))`,
+        [cleanPhone, auth.jid, auth.tenant_id]
+      );
+
+      // Insert new items
+      for (const itm of items) {
+        const prodId = String(itm.product_id || itm.id || itm.item?.id || '');
+        const qty = Number(itm.qty || 1);
+        if (prodId && qty > 0) {
+          await pool.query(
+            `INSERT INTO active_carts (username, tenant_id, customer_phone, jid, product_id, qty, updated_at)
+             VALUES ($1, $1, $2, $3, $4, $5, NOW())
+             ON CONFLICT (username, customer_phone, product_id) DO UPDATE SET qty = EXCLUDED.qty, updated_at = NOW()`,
+            [auth.tenant_id, cleanPhone, auth.jid, prodId, qty]
+          );
+        }
+      }
+    } catch (e: any) {
+      console.warn('Customer cart sync error:', e.message);
+    }
+  }
+
+  return res.json({ status: 'success', message: 'Cart synchronized with WhatsApp' });
+});
+
+// 5. DIRECT WEB ORDER CHECKOUT API: POST /api/orders/checkout & /api/customer/checkout
+app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+
+  const auth = extractCustomerAuth(req);
+  let {
+    auth_token,
+    jid,
+    tenant_id,
+    customer_name,
+    customer_phone,
+    delivery_phone,
+    delivery_address,
+    payment_mode,
+    items,
+    subtotal,
+    delivery_fee,
+    total_amount
+  } = body || {};
+
+  if (auth) {
+    if (!jid) jid = auth.jid;
+    if (!tenant_id) tenant_id = auth.tenant_id;
+    if (!customer_phone) customer_phone = auth.phone;
+  }
+
+  customer_name = (customer_name || '').trim();
+  delivery_address = (delivery_address || '').trim();
+  const rawPhone = String(customer_phone || delivery_phone || '').trim();
+  const cleanPhone = rawPhone.replace(/\D/g, '');
+
+  if (!customer_name) {
+    return res.status(400).json({ status: 'error', message: 'Customer name is required for order confirmation.' });
+  }
+  if (!cleanPhone) {
+    return res.status(400).json({ status: 'error', message: 'WhatsApp phone number is required to receive receipt.' });
+  }
+  if (!delivery_address) {
+    return res.status(400).json({ status: 'error', message: 'Delivery address & landmark is required.' });
+  }
+
+  if (!jid) jid = `${cleanPhone}@s.whatsapp.net`;
+  if (!tenant_id) tenant_id = 'admin';
+  if (!payment_mode) payment_mode = 'COD';
+
+  // Normalize items array
+  let parsedItems: any[] = [];
+  if (Array.isArray(items)) {
+    parsedItems = items;
+  } else if (items && typeof items === 'object') {
+    parsedItems = Object.values(items);
+  }
+
+  if (parsedItems.length === 0) {
+    return res.status(400).json({ status: 'error', message: 'Cart items cannot be empty.' });
+  }
+
+  // Server-side recalculation of total
+  let calculatedSubtotal = 0;
+  for (const itm of parsedItems) {
+    const qty = Number(itm.qty || 1);
+    const price = Number(itm.price || itm.sale_price) || 0;
+    calculatedSubtotal += (price * qty);
+  }
+
+  if (calculatedSubtotal <= 0 && Number(total_amount) > 0) {
+    calculatedSubtotal = Number(total_amount);
+  }
+
+  const finalDeliveryFee = Number(delivery_fee) || 0;
+  const finalTotal = calculatedSubtotal + finalDeliveryFee;
+
+  const orderId = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      // 1. Insert into orders table
+      await pool.query(
+        `INSERT INTO orders 
+         (order_id, jid, customer_phone, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', 'CONFIRMED', NOW(), NOW())
+         ON CONFLICT (order_id) DO UPDATE SET updated_at = NOW()`,
+        [orderId, jid, cleanPhone, tenant_id, customer_name, cleanPhone, delivery_address, JSON.stringify(parsedItems), finalTotal, payment_mode]
+      );
+
+      // 2. Upsert customer_order_states for WhatsApp AI and thermal receipt generator
+      await pool.query(
+        `INSERT INTO customer_order_states 
+         (username, customer_phone, jid, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, order_id, payment_mode, payment_status, order_status, updated_at)
+         VALUES ($1, $2, $3, $1, $4, $2, $5, $6, $7, $8, $9, 'PENDING', 'CONFIRMED', NOW())
+         ON CONFLICT (username, customer_phone) DO UPDATE SET
+           customer_name = EXCLUDED.customer_name,
+           delivery_phone = EXCLUDED.delivery_phone,
+           delivery_address = EXCLUDED.delivery_address,
+           items = EXCLUDED.items,
+           total_amount = EXCLUDED.total_amount,
+           order_id = EXCLUDED.order_id,
+           payment_mode = EXCLUDED.payment_mode,
+           payment_status = EXCLUDED.payment_status,
+           order_status = EXCLUDED.order_status,
+           jid = EXCLUDED.jid,
+           tenant_id = EXCLUDED.tenant_id,
+           updated_at = NOW()`,
+        [tenant_id, cleanPhone, jid, customer_name, delivery_address, JSON.stringify(parsedItems), finalTotal, orderId, payment_mode]
+      );
+
+      // 3. Clear active_carts
+      await pool.query(
+        `DELETE FROM active_carts WHERE (customer_phone = $1 OR jid = $2) AND (tenant_id = $3 OR LOWER(username) = LOWER($3))`,
+        [cleanPhone, jid, tenant_id]
+      );
+
+      // 4. Update customer profile info in customers table
+      await pool.query(
+        `INSERT INTO customers (username, tenant_id, jid, wa_number, whatsapp_number, full_name, name, contact_phone, delivery_phone, delivery_address, saved_address, updated_at)
+         VALUES ($1, $1, $2, $3, $3, $4, $4, $3, $3, $5, $5, NOW())
+         ON CONFLICT (username, wa_number) DO UPDATE SET
+           name = EXCLUDED.name,
+           full_name = EXCLUDED.full_name,
+           delivery_phone = EXCLUDED.delivery_phone,
+           delivery_address = EXCLUDED.delivery_address,
+           saved_address = EXCLUDED.saved_address,
+           updated_at = NOW()`,
+        [tenant_id, jid, cleanPhone, customer_name, delivery_address]
+      );
+
+      // 5. Record outbound order message in customer_chats
+      const confText = `🎉 *Order Received!* Your web order #${orderId} for ₹${finalTotal} has been successfully placed. We are processing it now.`;
+      await pool.query(
+        `INSERT INTO customer_chats (username, customer_phone, role, message_text, sender_type, created_at)
+         VALUES ($1, $2, 'assistant', $3, 'outgoing', NOW())`,
+        [tenant_id, cleanPhone, confText]
+      );
+    } catch (e: any) {
+      console.warn('Checkout order DB warning:', e.message);
+    }
+  }
+
+  return res.json({
+    status: 'success',
+    message: "Order Placed Successfully! We've sent the confirmation and receipt to your WhatsApp.",
+    order_id: orderId,
+    total_amount: finalTotal,
+    order: {
+      order_id: orderId,
+      jid,
+      customer_name,
+      customer_phone: cleanPhone,
+      delivery_address,
+      items: parsedItems,
+      subtotal: calculatedSubtotal,
+      delivery_fee: finalDeliveryFee,
+      total_amount: finalTotal,
+      payment_mode,
+      payment_status: 'PENDING',
+      order_status: 'CONFIRMED',
+      created_at: new Date().toISOString()
+    }
   });
 });
 
@@ -3531,6 +4543,25 @@ app.get(['/admin', '/admin-portal', '/admin-portal.html'], (_req: Request, res: 
 
 app.get(['/business', '/business-portal', '/business-portal.html', '/dashboard'], (_req: Request, res: Response) => {
   res.sendFile(path.join(publicDir, 'business-portal.html'));
+});
+
+app.get(['/store', '/storefront', '/storefront.html'], (_req: Request, res: Response) => {
+  res.sendFile(path.join(publicDir, 'storefront.html'));
+});
+
+// Dynamic tenant storefront route: e.g. /:store_slug (e.g. /gopal_kirana)
+app.get('/:store_slug', (req: Request, res: Response, next) => {
+  const slug = (req.params.store_slug as string) || '';
+  const reserved = [
+    'admin', 'admin-portal', 'admin-portal.html',
+    'business', 'business-portal', 'business-portal.html', 'dashboard',
+    'login', 'index.html', 'api', 'temp_uploads', 'favicon.ico',
+    'store', 'storefront', 'storefront.html'
+  ];
+  if (!slug || reserved.includes(slug.toLowerCase()) || slug.includes('.')) {
+    return next();
+  }
+  res.sendFile(path.join(publicDir, 'storefront.html'));
 });
 
 app.get(['/', '/index.html', '/login'], (_req: Request, res: Response) => {
