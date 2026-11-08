@@ -93,7 +93,11 @@ func ExecuteGenerateStoreLinkHand(client *whatsmeow.Client, username, customerPh
 	)
 
 	if client != nil && client.IsLoggedIn() {
-		return SendPlainMessage(client, cleanPhone, msgText)
+		err := SendMessage(client, cleanPhone, msgText)
+		if err == nil {
+			go SaveCustomerChatAndPrune(cleanUsr, cleanPhone, "assistant", msgText)
+		}
+		return err
 	}
 	return nil
 }
