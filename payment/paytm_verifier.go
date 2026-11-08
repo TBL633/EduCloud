@@ -811,7 +811,7 @@ func PaymentWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	isSuccess := status == "SUCCESS" || status == "TXN_SUCCESS" || status == "PAID" || status == "COMPLETED" || status == "CONFIRMED"
 
-	var jid, tenantID string
+	var jid, tenantID, username, customerPhone string
 	var totalAmount float64
 
 	// Update Neon DB
