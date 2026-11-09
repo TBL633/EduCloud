@@ -2924,10 +2924,8 @@ func ExecuteGeneratePaymentQRHand(client *whatsmeow.Client, username, senderPhon
 	}
 	PushToLiveChat(cleanUsr, cleanPhone, caption, "outgoing_ai")
 
-	// 5. Trigger async polling worker check
-	go func(oID, mID string) {
-		_ = payment.StartWorkerPaymentCheck(mID, oID, payment.GetAppWebhookURL())
-	}(newOrderID, mid)
+	// 5. Dispatch zero-blocking background Goroutine payment polling loop
+	go PollPaymentStatusBackground(context.Background(), DB, client, cleanPhone+"@s.whatsapp.net", cleanUsr, newOrderID)
 
 	log.Printf("⚡ [Octopus Hand: generate_qr] Dispatched dynamic QR for Order %s (₹%s) to +%s", newOrderID, amtStr, cleanPhone)
 	return nil

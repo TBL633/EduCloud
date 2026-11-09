@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"wa-server/payment"
+
 	"go.mau.fi/whatsmeow"
 )
 
@@ -327,4 +329,113 @@ func SendOrderConfirmationWhatsApp(waClient *whatsmeow.Client, jid string, order
 
 	log.Printf("📄 [WhatsApp Notification] Thermal PDF receipt delivered to +%s for order #%s", cleanPhone, cleanOrdID)
 	return nil
+}
+
+// PollPaymentStatusBackground runs an asynchronous, zero-CPU-blocking Goroutine background loop
+// to poll Paytm payment status for an order up to 3 minutes (60 iterations x 3 seconds).
+func PollPaymentStatusBackground(ctx context.Context, db *sql.DB, waClient *whatsmeow.Client, jid string, tenantID string, orderID string) {
+	cleanOrdID := strings.TrimSpace(orderID)
+	cleanTenant := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(tenantID), "@"))
+	if cleanTenant == "" {
+		cleanTenant = "admin"
+	}
+	cleanJID := strings.TrimSpace(jid)
+	reg := regexp.MustCompile(`\D`)
+	cleanPhone := FormatPhone(reg.ReplaceAllString(strings.Split(cleanJID, "@")[0], ""))
+
+	if cleanOrdID == "" {
+		log.Printf("⚠️ [Goroutine Payment Poller] Aborted: Empty orderID")
+		return
+	}
+
+	if db == nil {
+		db = DB
+	}
+
+	payCfg := payment.GetPaymentConfig(cleanTenant)
+	mid := strings.TrimSpace(payCfg.PaytmMID)
+	if mid == "" && db != nil {
+		_ = db.QueryRow(`SELECT COALESCE(paytm_mid, '') FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`, cleanTenant).Scan(&mid)
+	}
+
+	if mid == "" {
+		log.Printf("⚠️ [Goroutine Payment Poller] Notice: Paytm MID not configured for tenant '@%s'. Poller sleeping.", cleanTenant)
+		return
+	}
+
+	log.Printf("🚀 [Goroutine Payment Poller Started] Polling Order #%s for tenant '@%s' (Target Phone: +%s) up to 3 mins...", cleanOrdID, cleanTenant, cleanPhone)
+
+	maxIterations := 60 // 60 iterations * 3 sec delay = 180 seconds (3 minutes)
+
+	for i := 1; i <= maxIterations; i++ {
+		select {
+		case <-ctx.Done():
+			log.Printf("🛑 [Goroutine Payment Poller] Stopped for Order #%s due to context cancellation", cleanOrdID)
+			return
+		default:
+		}
+
+		var currentPayStatus string
+		if db != nil {
+			_ = db.QueryRow(`SELECT COALESCE(payment_status, '') FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1`, cleanOrdID).Scan(&currentPayStatus)
+			if strings.EqualFold(currentPayStatus, "PAID") {
+				log.Printf("✅ [Goroutine Payment Poller] Order #%s is already marked PAID. Exiting poller goroutine.", cleanOrdID)
+				return
+			}
+		}
+
+		statusResp, err := payment.VerifyPaytmPayment(mid, cleanOrdID)
+		if err == nil && statusResp != nil && (statusResp.Status == "TXN_SUCCESS" || statusResp.Status == "SUCCESS" || statusResp.Status == "PAID") {
+			log.Printf("🎉 [Goroutine Payment Poller SUCCESS] Order #%s verified PAID! (Amount: ₹%s, TxnID: %s)", cleanOrdID, statusResp.TxnAmount, statusResp.TxnID)
+
+			if db != nil {
+				_, _ = db.Exec(`UPDATE orders SET payment_status = 'PAID', order_status = 'CONFIRMED', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1) OR order_id = $1`, cleanOrdID)
+				_, _ = db.Exec(`UPDATE customer_order_states SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1) OR order_id = $1`, cleanOrdID)
+				if cleanPhone != "" {
+					_, _ = db.Exec(`UPDATE customers SET current_state = 'ORDER_CONFIRMED', payment_status = 'PAID', current_order_id = '', updated_at = NOW() WHERE wa_number = $1 OR wa_number LIKE '%' || $1`, cleanPhone)
+					_, _ = db.Exec(`DELETE FROM active_carts WHERE customer_phone = $1 OR customer_phone LIKE '%' || $1`, cleanPhone)
+				}
+				leadInquiry := fmt.Sprintf("Order %s | Amount: ₹%s | TxnID: %s (Background Goroutine Verified)", cleanOrdID, statusResp.TxnAmount, statusResp.TxnID)
+				_, _ = db.Exec(`INSERT INTO leads (username, customer_phone, inquiry_text, status, created_at) VALUES ($1, $2, $3, 'Confirmed Paid (Goroutine Poller)', NOW())`, cleanTenant, cleanPhone, leadInquiry)
+			}
+
+			_ = SetCustomerState(cleanTenant, cleanPhone, "ORDER_CONFIRMED")
+			_ = SetCustomerPaymentStatus(cleanTenant, cleanPhone, "PAID")
+			_ = SetCustomerCurrentOrderID(cleanTenant, cleanPhone, "")
+
+			go func() {
+				_ = SendOrderConfirmationWhatsApp(waClient, cleanJID, cleanOrdID)
+			}()
+
+			return
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+	log.Printf("⏳ [Goroutine Payment Poller Timeout] Order #%s reached 3 min timeout without payment.", cleanOrdID)
+
+	var finalStatus string
+	if db != nil {
+		_ = db.QueryRow(`SELECT COALESCE(payment_status, '') FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1`, cleanOrdID).Scan(&finalStatus)
+	}
+
+	if !strings.EqualFold(finalStatus, "PAID") {
+		if db != nil {
+			_, _ = db.Exec(`UPDATE orders SET payment_status = 'PAYMENT_FAILED_OR_TIMEOUT', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1) AND payment_status != 'PAID'`, cleanOrdID)
+			_, _ = db.Exec(`UPDATE customer_order_states SET payment_status = 'PAYMENT_FAILED_OR_TIMEOUT', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1) AND payment_status != 'paid'`, cleanOrdID)
+		}
+
+		timeoutMsg := fmt.Sprintf("⏳ *Payment Verification Timeout*\n\nYour order #%s status check timed out after 3 minutes. If money was deducted from your bank account, please contact our support team or send us your payment screenshot so we can verify and confirm your order manually! 🙏✨", cleanOrdID)
+
+		client := waClient
+		if client == nil || !client.IsLoggedIn() {
+			client = GetOrCreateClient(cleanTenant)
+		}
+		if client != nil && client.IsLoggedIn() && cleanPhone != "" {
+			_ = SendMessage(client, cleanPhone, timeoutMsg)
+			PushToLiveChat(cleanTenant, cleanPhone, timeoutMsg, "outgoing_ai")
+			go SaveCustomerChatAndPrune(cleanTenant, cleanPhone, "assistant", timeoutMsg)
+		}
+	}
 }

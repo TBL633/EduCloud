@@ -672,9 +672,8 @@ func CheckoutOrderHandler(w http.ResponseWriter, r *http.Request) {
 			qrURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=450x450&data=%s", upiURI)
 		}
 
-		if mid != "" {
-			_ = payment.StartWorkerPaymentCheck(mid, orderID, payment.GetAppWebhookURL())
-		}
+		// Dispatch zero-blocking background Goroutine payment polling loop
+		go whatsapp.PollPaymentStatusBackground(r.Context(), DB, nil, reqBody.JID, reqBody.TenantID, orderID)
 
 		respondJSON(w, 200, map[string]interface{}{
 			"status":         "success",

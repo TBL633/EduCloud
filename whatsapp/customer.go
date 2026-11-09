@@ -1115,15 +1115,8 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 		}
 	}
 
-	// 3. Immediately trigger Worker's /start-check endpoint for background polling
-	webhookURL := payment.GetAppWebhookURL()
-	fmt.Println("🚀 [Cloudflare Worker Poll] Dispatching start-check with live Webhook URL:", webhookURL, "for Order:", ordID)
-	go func() {
-		errCheck := payment.StartWorkerPaymentCheck(pMid, ordID, webhookURL)
-		if errCheck != nil {
-			log.Printf("⚠️ [Worker Start-Check Error] for %s: %v", ordID, errCheck)
-		}
-	}()
+	// 3. Immediately dispatch zero-blocking background Goroutine payment polling loop
+	go PollPaymentStatusBackground(context.Background(), DB, nil, cleanPhone+"@s.whatsapp.net", cleanUsr, ordID)
 
 	return qrURL, nil
 }
