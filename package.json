@@ -1,21 +1,21 @@
 {
   "name": "wamart",
   "version": "1.0.0",
-  "private": true,
+  "description": "WaMart - Multi-Tenant WhatsApp Marketing & Automation Gateway with Dynamic QR Payments, AI Lead Responder, Smart Multi-Number Import, Anti-Ban Protection, and Auto-Expiring Media.",
+  "main": "server.ts",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "tsc",
-    "lint": "tsc --noEmit",
-    "start": "tsx server.ts"
+    "build": "tsc --noEmit",
+    "start": "node server.ts",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@types/nodemailer": "^8.0.2",
     "@types/qrcode": "^1.5.6",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "nodemailer": "^10.2.1",
+    "nodemailer": "^6.9.16",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4"
   },
@@ -24,6 +24,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.23.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

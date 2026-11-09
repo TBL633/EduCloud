@@ -32,6 +32,11 @@ type DeliveryInfo struct {
 	TotalAmount     float64 `json:"total_amount,omitempty"`
 }
 
+// GenerateStandardOrderID returns a single unified, strict hyphen-less Order ID format (e.g. ORD + 16-19 digit timestamp string)
+func GenerateStandardOrderID() string {
+	return fmt.Sprintf("ORD%d", time.Now().UnixNano())
+}
+
 // ProcessAndConfirmOrder handles centralized order creation:
 // 1. Calculates final totals (subtotal, delivery fee).
 // 2. Inserts order into orders table.
@@ -120,7 +125,7 @@ func ProcessAndConfirmOrder(ctx context.Context, db *sql.DB, waClient *whatsmeow
 		finalTotal = deliveryDetails.TotalAmount
 	}
 
-	orderID := fmt.Sprintf("ORD-%d-%04d", time.Now().Unix()%1000000, time.Now().Nanosecond()%10000)
+	orderID := GenerateStandardOrderID()
 
 	itemsBytes, _ := json.Marshal(cartItems)
 	itemsJSON := string(itemsBytes)
@@ -232,12 +237,40 @@ func SendOrderConfirmationWhatsApp(waClient *whatsmeow.Client, jid string, order
 	// Fetch order details from DB if needed
 	if DB != nil {
 		if cleanOrdID != "" {
+			var fetchedJID, fetchedPhone, fetchedTenant string
 			_ = DB.QueryRow(`
-				SELECT COALESCE(total_amount, 0), COALESCE(tenant_id, 'admin')
+				SELECT COALESCE(total_amount, 0), COALESCE(tenant_id, 'admin'), COALESCE(jid, ''), COALESCE(customer_phone, '')
 				FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1
-			`, cleanOrdID).Scan(&totalAmt, &tenantID)
+			`, cleanOrdID).Scan(&totalAmt, &fetchedTenant, &fetchedJID, &fetchedPhone)
+			if fetchedTenant != "" {
+				tenantID = fetchedTenant
+			}
+			if cleanJID == "" && fetchedJID != "" {
+				cleanJID = fetchedJID
+			}
+			if cleanPhone == "" && fetchedPhone != "" {
+				cleanPhone = FormatPhone(fetchedPhone)
+			}
+			if cleanJID == "" && cleanPhone != "" {
+				cleanJID = cleanPhone + "@s.whatsapp.net"
+			}
+			if (cleanJID == "" || cleanPhone == "") {
+				_ = DB.QueryRow(`
+					SELECT COALESCE(total_amount, 0), COALESCE(username, 'admin'), COALESCE(jid, ''), COALESCE(customer_phone, '')
+					FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+				`, cleanOrdID).Scan(&totalAmt, &fetchedTenant, &fetchedJID, &fetchedPhone)
+				if fetchedTenant != "" && tenantID == "admin" {
+					tenantID = fetchedTenant
+				}
+				if cleanJID == "" && fetchedJID != "" {
+					cleanJID = fetchedJID
+				}
+				if cleanPhone == "" && fetchedPhone != "" {
+					cleanPhone = FormatPhone(fetchedPhone)
+				}
+			}
 		}
-		if cleanOrdID == "" || totalAmt <= 0 {
+		if (cleanOrdID == "" || totalAmt <= 0) && (cleanPhone != "" || cleanJID != "") {
 			_ = DB.QueryRow(`
 				SELECT COALESCE(order_id, ''), COALESCE(total_amount, 0), COALESCE(tenant_id, 'admin')
 				FROM orders WHERE (customer_phone = $1 OR jid = $2) ORDER BY created_at DESC LIMIT 1
@@ -246,7 +279,7 @@ func SendOrderConfirmationWhatsApp(waClient *whatsmeow.Client, jid string, order
 	}
 
 	if cleanOrdID == "" {
-		cleanOrdID = fmt.Sprintf("ORD-%d", time.Now().Unix()%100000)
+		cleanOrdID = GenerateStandardOrderID()
 	}
 
 	// 1. Locate active WhatsApp client instance

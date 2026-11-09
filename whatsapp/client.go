@@ -1733,7 +1733,7 @@ func handleWhatsAppEvents(username string, client *whatsmeow.Client, evt interfa
 					_ = DB.QueryRow(`SELECT COALESCE(total_amount, 0) FROM customer_order_states WHERE customer_phone=$1 ORDER BY updated_at DESC LIMIT 1`, senderPhone).Scan(&totalAmt)
 				}
 				if orderID == "" {
-					orderID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+					orderID = GenerateStandardOrderID()
 					_ = SetCustomerCurrentOrderID(username, senderPhone, orderID)
 				}
 
@@ -2851,7 +2851,7 @@ func ExecuteGeneratePaymentQRHand(client *whatsmeow.Client, username, senderPhon
 	cleanPhone := FormatPhone(senderPhone)
 
 	// 1. DYNAMIC UNIQUE ORDER ID GENERATION (Strictly alphanumeric: ORD + UnixNano)
-	newOrderID := fmt.Sprintf("ORD%d", time.Now().UnixNano())
+	newOrderID := GenerateStandardOrderID()
 
 	// 2. Calculate cart total and fetch merchant payment credentials
 	calcRes, errCalc := CalculateCartTotalAndFetchCredentials(cleanUsr, cleanPhone)

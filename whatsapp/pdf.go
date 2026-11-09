@@ -65,7 +65,7 @@ func GenerateThermalReceiptPDF(orderID string, db *sql.DB) (*bytes.Buffer, error
 	}
 
 	if cleanOrderID == "" {
-		cleanOrderID = fmt.Sprintf("ORD-%d", time.Now().Unix()%100000)
+		cleanOrderID = GenerateStandardOrderID()
 	}
 	if createdAtStr == "" {
 		createdAtStr = time.Now().Format("02 Jan 2006 15:04")

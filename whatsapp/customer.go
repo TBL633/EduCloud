@@ -973,7 +973,7 @@ func CalculateCartTotalAndFetchCredentials(username, customerPhone string) (*Car
 	// Reuse existing saved current_order_id if present, otherwise generate a new one EXACTLY ONCE
 	ordID := GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
 	if ordID == "" {
-		ordID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+		ordID = GenerateStandardOrderID()
 		_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, ordID)
 	}
 	res.OrderID = ordID
@@ -1018,7 +1018,7 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 			orderIDStr = savedOrdID
 		}
 		if orderIDStr == "" {
-			orderIDStr = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+			orderIDStr = GenerateStandardOrderID()
 			_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, orderIDStr)
 		}
 		log.Printf("🧮 [ResolveOrderAmountAndID Math Engine Success]: Real Total ₹%s for Order %s (@%s, +%s)", amountStr, orderIDStr, cleanUsr, cleanPhone)
@@ -1035,7 +1035,7 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 				dbOrd = savedOrdID
 			}
 			if dbOrd == "" {
-				dbOrd = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+				dbOrd = GenerateStandardOrderID()
 				_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, dbOrd)
 			}
 			return fmt.Sprintf("%.2f", dbAmt), dbOrd
@@ -1043,7 +1043,7 @@ func ResolveOrderAmountAndID(username, senderPhone, replyText, incomingText stri
 	}
 
 	if savedOrdID == "" {
-		savedOrdID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+		savedOrdID = GenerateStandardOrderID()
 		_ = SetCustomerCurrentOrderID(cleanUsr, cleanPhone, savedOrdID)
 	}
 	return "0.00", savedOrdID
@@ -1074,7 +1074,7 @@ func DispatchCloudflareWorkerQR(username, customerPhone string, calcRes *CartCal
 		ordID = GetCustomerCurrentOrderID(cleanUsr, cleanPhone)
 	}
 	if ordID == "" {
-		ordID = fmt.Sprintf("ORD%d", time.Now().UnixNano())
+		ordID = GenerateStandardOrderID()
 		calcRes.OrderID = ordID
 	}
 
