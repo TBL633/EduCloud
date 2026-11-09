@@ -663,7 +663,6 @@ func CheckoutOrderHandler(w http.ResponseWriter, r *http.Request) {
 		if payee == "" {
 			payee = reqBody.TenantID
 		}
-		mid := payConfig.PaytmMID
 
 		upiURI := payment.GenerateUPIString(payConfig, deliveryDetails.TotalAmount, orderID)
 		amtStr := fmt.Sprintf("%.2f", deliveryDetails.TotalAmount)
