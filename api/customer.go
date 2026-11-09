@@ -333,7 +333,7 @@ func CustomerProfileHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// CustomerOrdersHandler handles GET /api/customer/orders
+// CustomerOrdersHandler handles GET /api/customer/orders (Strictly returns last 5 customer orders from DB)
 func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -352,6 +352,7 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		cleanPhone = reg.ReplaceAllString(strings.Split(claims.JID, "@")[0], "")
 	}
 
+	seenOrderIDs := make(map[string]bool)
 	orders := make([]map[string]interface{}, 0)
 
 	if DB != nil {
@@ -365,8 +366,8 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 			COALESCE(delivery_address, ''),
 			created_at
 			FROM orders
-			WHERE (jid = $1 OR customer_phone = $2) AND (tenant_id = $3 OR LOWER(username) = LOWER($3))
-			ORDER BY created_at DESC LIMIT 50`, claims.JID, cleanPhone, claims.TenantID)
+			WHERE jid = $1 OR customer_phone = $2 OR delivery_phone = $2
+			ORDER BY created_at DESC LIMIT 5`, claims.JID, cleanPhone)
 
 		if err == nil {
 			defer rows.Close()
@@ -379,6 +380,7 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 					if err := json.Unmarshal([]byte(itemsStr), &parsedItems); err != nil {
 						parsedItems = itemsStr
 					}
+					seenOrderIDs[strings.ToLower(orderID)] = true
 					orders = append(orders, map[string]interface{}{
 						"order_id":         orderID,
 						"total_amount":     totalAmt,
@@ -389,6 +391,51 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 						"delivery_address": delAddr,
 						"created_at":       createdAt.Format(time.RFC3339),
 					})
+				}
+			}
+		}
+
+		// Fallback/backfill from customer_order_states if fewer than 5 orders found
+		if len(orders) < 5 {
+			limitNeeded := 5 - len(orders)
+			stRows, stErr := DB.Query(`SELECT 
+				order_id, 
+				COALESCE(total_amount, 0), 
+				COALESCE(payment_mode, 'COD'), 
+				COALESCE(payment_status, 'PENDING'), 
+				COALESCE(order_status, 'CONFIRMED'), 
+				COALESCE(items::text, '[]'), 
+				COALESCE(delivery_address, ''),
+				updated_at
+				FROM customer_order_states
+				WHERE jid = $1 OR customer_phone = $2 OR delivery_phone = $2
+				ORDER BY updated_at DESC LIMIT $3`, claims.JID, cleanPhone, limitNeeded)
+
+			if stErr == nil {
+				defer stRows.Close()
+				for stRows.Next() {
+					var orderID, payMode, payStatus, ordStatus, itemsStr, delAddr string
+					var totalAmt float64
+					var updatedAt time.Time
+					if err := stRows.Scan(&orderID, &totalAmt, &payMode, &payStatus, &ordStatus, &itemsStr, &delAddr, &updatedAt); err == nil && orderID != "" {
+						if !seenOrderIDs[strings.ToLower(orderID)] {
+							var parsedItems interface{}
+							if err := json.Unmarshal([]byte(itemsStr), &parsedItems); err != nil {
+								parsedItems = itemsStr
+							}
+							seenOrderIDs[strings.ToLower(orderID)] = true
+							orders = append(orders, map[string]interface{}{
+								"order_id":         orderID,
+								"total_amount":     totalAmt,
+								"payment_mode":     payMode,
+								"payment_status":   payStatus,
+								"order_status":     ordStatus,
+								"items":            parsedItems,
+								"delivery_address": delAddr,
+								"created_at":       updatedAt.Format(time.RFC3339),
+							})
+						}
+					}
 				}
 			}
 		}

@@ -91,9 +91,10 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func main() {
 	log.Println("🚀 Starting WaMart Multi-Tenant SaaS & Marketing Gateway...")
 
-	// Aggressive GC tuning for Render Free Tier (512MB RAM constraint)
-	// Triggers GC when heap expands by 20% to keep memory < 25MB
+	// Aggressive GC & Memory Ceiling tuning for Render Free Tier (512MB RAM constraint)
+	// Triggers GC when heap expands by 20% and caps runtime memory ceiling at 400MB
 	debug.SetGCPercent(20)
+	debug.SetMemoryLimit(400 * 1024 * 1024)
 
 	// 1. Initialize Neon Postgres Database
 	database.InitDB()
