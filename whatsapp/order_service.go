@@ -334,6 +334,9 @@ func SendOrderConfirmationWhatsApp(waClient *whatsmeow.Client, jid string, order
 // PollPaymentStatusBackground runs an asynchronous, zero-CPU-blocking Goroutine background loop
 // to poll Paytm payment status for an order up to 3 minutes (60 iterations x 3 seconds).
 func PollPaymentStatusBackground(ctx context.Context, db *sql.DB, waClient *whatsmeow.Client, jid string, tenantID string, orderID string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cleanOrdID := strings.TrimSpace(orderID)
 	cleanTenant := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(tenantID), "@"))
 	if cleanTenant == "" {
@@ -363,9 +366,9 @@ func PollPaymentStatusBackground(ctx context.Context, db *sql.DB, waClient *what
 		return
 	}
 
-	log.Printf("🚀 [Goroutine Payment Poller Started] Polling Order #%s for tenant '@%s' (Target Phone: +%s) up to 3 mins...", cleanOrdID, cleanTenant, cleanPhone)
+	log.Printf("🚀 [Goroutine Payment Poller Started] Polling Order #%s for tenant '@%s' (Target Phone: +%s) up to 5 mins...", cleanOrdID, cleanTenant, cleanPhone)
 
-	maxIterations := 60 // 60 iterations * 3 sec delay = 180 seconds (3 minutes)
+	maxIterations := 100 // 100 iterations * 3 sec delay = 300 seconds (5 minutes)
 
 	for i := 1; i <= maxIterations; i++ {
 		select {
@@ -413,7 +416,7 @@ func PollPaymentStatusBackground(ctx context.Context, db *sql.DB, waClient *what
 		time.Sleep(3 * time.Second)
 	}
 
-	log.Printf("⏳ [Goroutine Payment Poller Timeout] Order #%s reached 3 min timeout without payment.", cleanOrdID)
+	log.Printf("⏳ [Goroutine Payment Poller Timeout] Order #%s reached 5 min timeout without payment.", cleanOrdID)
 
 	var finalStatus string
 	if db != nil {

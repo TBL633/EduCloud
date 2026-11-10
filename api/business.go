@@ -66,13 +66,15 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 			CategoryName     string `json:"category_name"`
 			Name             string `json:"name"`
 			CategoryImageURL string `json:"category_image_url"`
+			ParentID         int    `json:"parent_id"`
+			ParentName       string `json:"parent_name"`
 			ProductCount     int    `json:"product_count"`
 		}
 
 		var categories []CategoryItem
 
 		if DB != nil {
-			rows, err := DB.Query(`SELECT c.id, c.category_name, COALESCE(c.category_image_url, ''),
+			rows, err := DB.Query(`SELECT c.id, c.category_name, COALESCE(c.category_image_url, ''), COALESCE(c.parent_id, 0), COALESCE(c.parent_name, ''),
 				(SELECT COUNT(*) FROM products p WHERE LOWER(p.username)=LOWER(c.username) AND (p.category_id=c.id OR LOWER(TRIM(p.category))=LOWER(TRIM(c.category_name))))
 				FROM categories c WHERE LOWER(c.username)=LOWER($1) ORDER BY c.id ASC`, username)
 
@@ -80,7 +82,7 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 				defer rows.Close()
 				for rows.Next() {
 					var item CategoryItem
-					if err := rows.Scan(&item.ID, &item.CategoryName, &item.CategoryImageURL, &item.ProductCount); err == nil {
+					if err := rows.Scan(&item.ID, &item.CategoryName, &item.CategoryImageURL, &item.ParentID, &item.ParentName, &item.ProductCount); err == nil {
 						item.Name = item.CategoryName
 						categories = append(categories, item)
 					}
@@ -102,6 +104,9 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 			CategoryName     string `json:"category_name"`
 			Name             string `json:"name"`
 			CategoryImageURL string `json:"category_image_url"`
+			ParentID         int    `json:"parent_id"`
+			ParentName       string `json:"parent_name"`
+			ParentCategory   string `json:"parent_category"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -120,14 +125,20 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		imgURL := strings.TrimSpace(req.CategoryImageURL)
+		pName := strings.TrimSpace(req.ParentName)
+		if pName == "" {
+			pName = strings.TrimSpace(req.ParentCategory)
+		}
 
 		if DB != nil {
 			var newID int
-			err := DB.QueryRow(`INSERT INTO categories (username, category_name, category_image_url)
-				VALUES ($1, $2, $3)
+			err := DB.QueryRow(`INSERT INTO categories (username, category_name, category_image_url, parent_id, parent_name)
+				VALUES ($1, $2, $3, $4, $5)
 				ON CONFLICT (username, category_name) DO UPDATE SET
-					category_image_url = CASE WHEN EXCLUDED.category_image_url != '' THEN EXCLUDED.category_image_url ELSE categories.category_image_url END
-				RETURNING id`, username, catName, imgURL).Scan(&newID)
+					category_image_url = CASE WHEN EXCLUDED.category_image_url != '' THEN EXCLUDED.category_image_url ELSE categories.category_image_url END,
+					parent_id = EXCLUDED.parent_id,
+					parent_name = EXCLUDED.parent_name
+				RETURNING id`, username, catName, imgURL, req.ParentID, pName).Scan(&newID)
 
 			if err != nil {
 				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to save category in database: " + err.Error()})
@@ -141,6 +152,8 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 				"id":                 newID,
 				"category_name":      catName,
 				"category_image_url": imgURL,
+				"parent_id":          req.ParentID,
+				"parent_name":        pName,
 				"message":            "Category saved successfully!",
 			})
 			return
@@ -183,6 +196,8 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			CategoryID          int         `json:"category_id"`
 			Category            string      `json:"category"`
 			CategoryName        string      `json:"category_name"`
+			SubCategory         string      `json:"sub_category"`
+			SubCategoryID       int         `json:"sub_category_id"`
 			Name                string      `json:"name"`
 			Price               string      `json:"price"`
 			MRP                 float64     `json:"mrp"`
@@ -195,13 +210,14 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			WhatsAppURL         string      `json:"whatsapp_url"`
 			ImageURL            string      `json:"image_url"`
 			ProductImageURL     string      `json:"product_image_url"`
+			Images              []string    `json:"images"`
 			InStock             bool        `json:"in_stock"`
 		}
 
 		var items []ProductItem
 
 		if DB != nil {
-			rows, err := DB.Query(`SELECT id, COALESCE(category_id, 0), name, price, COALESCE(description, ''), COALESCE(item_type, 'product'), COALESCE(unit_type, 'custom'), COALESCE(variants::text, '[]'), COALESCE(whatsapp_catalog_link, ''), COALESCE(image_url, ''), COALESCE(category, ''), COALESCE(in_stock, true), COALESCE(mrp, 0), COALESCE(sale_price, 0), COALESCE(product_image_url, '')
+			rows, err := DB.Query(`SELECT id, COALESCE(category_id, 0), name, price, COALESCE(description, ''), COALESCE(item_type, 'product'), COALESCE(unit_type, 'custom'), COALESCE(variants::text, '[]'), COALESCE(whatsapp_catalog_link, ''), COALESCE(image_url, ''), COALESCE(category, ''), COALESCE(in_stock, true), COALESCE(mrp, 0), COALESCE(sale_price, 0), COALESCE(product_image_url, ''), COALESCE(images::text, '[]'), COALESCE(sub_category, ''), COALESCE(sub_category_id, 0)
 				FROM products WHERE LOWER(username)=LOWER($1) ORDER BY id ASC`, username)
 
 			if err == nil {
@@ -209,20 +225,27 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 				for rows.Next() {
 					var item ProductItem
 					var variantsStr string
-					if err := rows.Scan(&item.ID, &item.CategoryID, &item.Name, &item.Price, &item.Description, &item.ItemType, &item.UnitType, &variantsStr, &item.WhatsAppCatalogLink, &item.ImageURL, &item.Category, &item.InStock, &item.MRP, &item.SalePrice, &item.ProductImageURL); err == nil {
+					var imagesStr string
+					if err := rows.Scan(&item.ID, &item.CategoryID, &item.Name, &item.Price, &item.Description, &item.ItemType, &item.UnitType, &variantsStr, &item.WhatsAppCatalogLink, &item.ImageURL, &item.Category, &item.InStock, &item.MRP, &item.SalePrice, &item.ProductImageURL, &imagesStr, &item.SubCategory, &item.SubCategoryID); err == nil {
 						item.CategoryName = item.Category
 						item.WhatsAppURL = item.WhatsAppCatalogLink
-						if item.ProductImageURL == "" {
-							item.ProductImageURL = item.ImageURL
+						_ = json.Unmarshal([]byte(imagesStr), &item.Images)
+						if item.Images == nil {
+							item.Images = []string{}
 						}
-						if item.ImageURL == "" {
-							item.ImageURL = item.ProductImageURL
+						if len(item.Images) == 0 && item.ProductImageURL != "" {
+							item.Images = []string{item.ProductImageURL}
+						} else if len(item.Images) == 0 && item.ImageURL != "" {
+							item.Images = []string{item.ImageURL}
 						}
+
+						if len(item.Images) > 0 {
+							item.ProductImageURL = item.Images[0]
+							item.ImageURL = item.Images[0]
+						}
+
 						if item.SalePrice > 0 && (item.Price == "" || item.Price == "Standard Pricing") {
 							item.Price = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(item.Price, "₹", ""), "Rs.", ""))
-							if item.Price == "" {
-								item.Price = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(item.Price, "₹", ""), "Rs.", ""))
-							}
 						}
 						var parsedVariants interface{}
 						if json.Unmarshal([]byte(variantsStr), &parsedVariants) == nil {
@@ -244,7 +267,7 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == "POST" {
+	if r.Method == "POST" || r.Method == "PUT" {
 		var req struct {
 			ID                  int         `json:"id"`
 			Username            string      `json:"username"`
@@ -264,6 +287,7 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			WhatsAppURL         string      `json:"whatsapp_url"`
 			ImageURL            string      `json:"image_url"`
 			ProductImageURL     string      `json:"product_image_url"`
+			Images              []string    `json:"images"`
 			InStock             *bool       `json:"in_stock"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -303,10 +327,29 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 			catName = strings.TrimSpace(req.Category)
 		}
 
+		images := req.Images
+		if images == nil {
+			images = []string{}
+		}
+
 		imgURL := strings.TrimSpace(req.ProductImageURL)
 		if imgURL == "" {
 			imgURL = strings.TrimSpace(req.ImageURL)
 		}
+
+		if len(images) > 0 {
+			imgURL = images[0]
+		} else if imgURL != "" {
+			images = []string{imgURL}
+		}
+
+		// Ensure max 3 images
+		if len(images) > 3 {
+			images = images[:3]
+		}
+
+		imagesBytes, _ := json.Marshal(images)
+		imagesJSON := string(imagesBytes)
 
 		waLink := strings.TrimSpace(req.WhatsAppCatalogLink)
 		if waLink == "" {
@@ -352,34 +395,35 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 		if DB != nil {
 			if req.ID > 0 {
-				_, err := DB.Exec(`UPDATE products SET category_id=$1, category=$2, name=$3, description=$4, mrp=$5, sale_price=$6, price=$7, item_type=$8, unit_type=$9, variants=$10::jsonb, whatsapp_catalog_link=$11, image_url=$12, product_image_url=$12, in_stock=$13 WHERE id=$14 AND LOWER(username)=LOWER($15)`,
-					req.CategoryID, catName, req.Name, descStr, mrpVal, salePriceVal, priceStr, itemType, unitType, variantsStr, waLink, imgURL, inStockVal, req.ID, username)
+				_, err := DB.Exec(`UPDATE products SET category_id=$1, category=$2, name=$3, description=$4, mrp=$5, sale_price=$6, price=$7, item_type=$8, unit_type=$9, variants=$10::jsonb, whatsapp_catalog_link=$11, image_url=$12, product_image_url=$12, in_stock=$13, images=$14::jsonb WHERE id=$15 AND LOWER(username)=LOWER($16)`,
+					req.CategoryID, catName, req.Name, descStr, mrpVal, salePriceVal, priceStr, itemType, unitType, variantsStr, waLink, imgURL, inStockVal, imagesJSON, req.ID, username)
 				if err != nil {
 					respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to update product in database: " + err.Error()})
 					return
 				}
 				whatsapp.InvalidateUserConfigCache(username)
-				respondJSON(w, 200, map[string]interface{}{"status": "success", "id": req.ID, "message": "Product updated successfully!"})
+				respondJSON(w, 200, map[string]interface{}{"status": "success", "id": req.ID, "image_url": imgURL, "images": images, "message": "Product updated successfully!"})
 				return
 			}
 
 			var newID int
-			err := DB.QueryRow(`INSERT INTO products (username, category_id, category, name, description, mrp, sale_price, price, item_type, unit_type, variants, whatsapp_catalog_link, image_url, product_image_url, in_stock)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $13, $14) RETURNING id`,
-				username, req.CategoryID, catName, req.Name, descStr, mrpVal, salePriceVal, priceStr, itemType, unitType, variantsStr, waLink, imgURL, inStockVal).Scan(&newID)
+			err := DB.QueryRow(`INSERT INTO products (username, category_id, category, name, description, mrp, sale_price, price, item_type, unit_type, variants, whatsapp_catalog_link, image_url, product_image_url, in_stock, images)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $13, $14, $15::jsonb) RETURNING id`,
+				username, req.CategoryID, catName, req.Name, descStr, mrpVal, salePriceVal, priceStr, itemType, unitType, variantsStr, waLink, imgURL, inStockVal, imagesJSON).Scan(&newID)
 
 			if err != nil {
 				respondJSON(w, 500, map[string]string{"status": "error", "message": "Failed to save product in database: " + err.Error()})
 				return
 			}
 
-			// Invalidate RAM cache so updated product catalog updates in AI memory immediately
 			whatsapp.InvalidateUserConfigCache(username)
 
 			respondJSON(w, 200, map[string]interface{}{
-				"status":  "success",
-				"id":      newID,
-				"message": "Product saved to catalog and Neon PostgreSQL database!",
+				"status":    "success",
+				"id":        newID,
+				"image_url": imgURL,
+				"images":    images,
+				"message":   "Product saved to catalog and Neon PostgreSQL database!",
 			})
 			return
 		}
@@ -393,10 +437,20 @@ func ProductsHandler(w http.ResponseWriter, r *http.Request) {
 		username := cleanUsername(r.URL.Query().Get("username"))
 
 		if idStr != "" && DB != nil {
+			var imagesStr string
+			var imgURL string
+			_ = DB.QueryRow("SELECT COALESCE(images::text, '[]'), COALESCE(image_url, '') FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username).Scan(&imagesStr, &imgURL)
+
+			var deletedImages []string
+			_ = json.Unmarshal([]byte(imagesStr), &deletedImages)
+			if len(deletedImages) == 0 && imgURL != "" {
+				deletedImages = append(deletedImages, imgURL)
+			}
+
 			_, err := DB.Exec("DELETE FROM products WHERE id=$1 AND LOWER(username)=LOWER($2)", idStr, username)
 			if err == nil {
 				whatsapp.InvalidateUserConfigCache(username)
-				respondJSON(w, 200, map[string]string{"status": "success", "message": "Product deleted from database"})
+				respondJSON(w, 200, map[string]interface{}{"status": "success", "message": "Product deleted from database", "deleted_images": deletedImages})
 				return
 			}
 		}

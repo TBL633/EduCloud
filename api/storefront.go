@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -47,7 +49,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Fetch Tenant Profile & Branding
-	var username, bName, accName, sSlug, tagline, logoURL, bannerURL, phone, notifPhone, waJid string
+	var username, bName, accName, sSlug, tagline, logoURL, bannerURL, phone, notifPhone, waJid, bannersJSON string
 	var fullAddress, localArea string
 	var maxRad, freeRad, delCharge float64
 	var reqLoc, allowCOD bool
@@ -61,6 +63,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		COALESCE(tagline, ''), 
 		COALESCE(logo_url, ''), 
 		COALESCE(banner_url, ''),
+		COALESCE(promotional_banners::text, '[]'),
 		COALESCE(phone, ''),
 		COALESCE(notification_phone, ''),
 		COALESCE(wa_jid, ''),
@@ -74,7 +77,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		FROM users 
 		WHERE LOWER(store_slug)=LOWER($1) OR LOWER(username)=LOWER($1)
 		LIMIT 1`, cleanSlug).Scan(
-		&username, &bName, &accName, &sSlug, &tagline, &logoURL, &bannerURL,
+		&username, &bName, &accName, &sSlug, &tagline, &logoURL, &bannerURL, &bannersJSON,
 		&phone, &notifPhone, &waJid, &fullAddress, &localArea,
 		&maxRad, &freeRad, &delCharge, &reqLoc, &allowCOD,
 	)
@@ -109,6 +112,20 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		bName = username
 	}
 
+	var parsedBanners []interface{}
+	if errJSON := json.Unmarshal([]byte(bannersJSON), &parsedBanners); errJSON != nil || len(parsedBanners) == 0 {
+		if bannerURL != "" {
+			parsedBanners = []interface{}{
+				map[string]interface{}{
+					"image_url":   bannerURL,
+					"target_link": "",
+				},
+			}
+		} else {
+			parsedBanners = []interface{}{}
+		}
+	}
+
 	tenantInfo := map[string]interface{}{
 		"username":                  username,
 		"store_name":                bName,
@@ -116,6 +133,7 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		"tagline":                   tagline,
 		"logo_url":                  logoURL,
 		"banner_url":                bannerURL,
+		"promotional_banners":       parsedBanners,
 		"whatsapp_number":           contactDigits,
 		"full_address":              fullAddress,
 		"local_area":                localArea,
@@ -167,6 +185,8 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		Variants            interface{} `json:"variants"`
 		WhatsAppCatalogLink string      `json:"whatsapp_catalog_link"`
 		ImageURL            string      `json:"image_url"`
+		ThumbURL            string      `json:"thumb_url"`
+		Images              []string    `json:"images"`
 		InStock             bool        `json:"in_stock"`
 	}
 
@@ -174,7 +194,9 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 	prodRows, prodErr := DB.Query(`SELECT id, COALESCE(category_id, 0), name, price, COALESCE(description, ''), 
 		COALESCE(unit_type, 'custom'), COALESCE(variants::text, '[]'), COALESCE(whatsapp_catalog_link, ''), 
 		COALESCE(NULLIF(image_url, ''), NULLIF(product_image_url, ''), ''), 
-		COALESCE(category, 'General'), COALESCE(in_stock, true), COALESCE(mrp, 0), COALESCE(sale_price, 0)
+		COALESCE(category, 'General'), COALESCE(in_stock, true), COALESCE(mrp, 0), COALESCE(sale_price, 0),
+		COALESCE(NULLIF(thumb_url, ''), NULLIF(image_url, ''), ''),
+		COALESCE(images::text, '[]')
 		FROM products 
 		WHERE LOWER(username)=LOWER($1) 
 		ORDER BY id ASC`, username)
@@ -184,8 +206,25 @@ func StorefrontHandler(w http.ResponseWriter, r *http.Request) {
 		for prodRows.Next() {
 			var pi ProductItem
 			var variantsStr string
-			if err := prodRows.Scan(&pi.ID, &pi.CategoryID, &pi.Name, &pi.Price, &pi.Description, &pi.UnitType, &variantsStr, &pi.WhatsAppCatalogLink, &pi.ImageURL, &pi.Category, &pi.InStock, &pi.MRP, &pi.SalePrice); err == nil {
+			var imagesStr string
+			if err := prodRows.Scan(&pi.ID, &pi.CategoryID, &pi.Name, &pi.Price, &pi.Description, &pi.UnitType, &variantsStr, &pi.WhatsAppCatalogLink, &pi.ImageURL, &pi.Category, &pi.InStock, &pi.MRP, &pi.SalePrice, &pi.ThumbURL, &imagesStr); err == nil {
 				pi.CategoryName = pi.Category
+				_ = json.Unmarshal([]byte(imagesStr), &pi.Images)
+				if pi.Images == nil {
+					pi.Images = []string{}
+				}
+				if len(pi.Images) == 0 && pi.ImageURL != "" {
+					pi.Images = []string{pi.ImageURL}
+				}
+				if len(pi.Images) > 0 && pi.ImageURL == "" {
+					pi.ImageURL = pi.Images[0]
+				}
+
+				if strings.TrimSpace(pi.ThumbURL) == "" && len(pi.Images) > 0 {
+					pi.ThumbURL = fmt.Sprintf("https://wsrv.nl/?url=%s&w=200&q=80", url.QueryEscape(pi.Images[0]))
+				} else if strings.TrimSpace(pi.ThumbURL) == "" && strings.TrimSpace(pi.ImageURL) != "" {
+					pi.ThumbURL = fmt.Sprintf("https://wsrv.nl/?url=%s&w=200&q=80", url.QueryEscape(pi.ImageURL))
+				}
 
 				var parsedVariants interface{}
 				if json.Unmarshal([]byte(variantsStr), &parsedVariants) == nil {

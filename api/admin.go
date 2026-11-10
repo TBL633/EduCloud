@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"wa-server/whatsapp"
 )
@@ -238,14 +240,30 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			FullAddress             string      `json:"full_address"`
 			LocalArea               string      `json:"local_area"`
 			StoreSlug               string      `json:"store_slug"`
-			LogoURL                 string      `json:"logo_url"`
-			BannerURL               string      `json:"banner_url"`
+			LogoURL                 *string     `json:"logo_url"`
+			BannerURL               *string     `json:"banner_url"`
+			PromotionalBanners      interface{} `json:"promotional_banners"`
 			Tagline                 string      `json:"tagline"`
+			ThemeColor              string      `json:"theme_color"`
+			SocialInstagram         string      `json:"social_instagram"`
+			SocialFacebook          string      `json:"social_facebook"`
+			SocialWhatsApp          string      `json:"social_whatsapp"`
+			GSTINNumber             string      `json:"gstin_number"`
+			PrivacyPolicy           string      `json:"privacy_policy"`
+			TermsConditions         string      `json:"terms_conditions"`
+			RefundPolicy            string      `json:"refund_policy"`
+			ShippingPolicy          string      `json:"shipping_policy"`
 			Latitude                interface{} `json:"latitude"`
 			Longitude               interface{} `json:"longitude"`
 			MaxDeliveryRadiusKM     interface{} `json:"max_delivery_radius_km"`
 			FreeDeliveryRadiusKM    interface{} `json:"free_delivery_radius_km"`
 			DeliveryChargeAmount    interface{} `json:"delivery_charge_amount"`
+			MinFreeDeliveryOrder    interface{} `json:"min_free_delivery_order"`
+			StoreOpenStatus         *bool       `json:"store_open_status"`
+			OperatingHours          string      `json:"operating_hours"`
+			DeliveryModes           interface{} `json:"delivery_modes"`
+			CustomDomain            string      `json:"custom_domain"`
+			DomainStatus            string      `json:"domain_status"`
 			RequireCustomerLocation *bool       `json:"require_customer_location"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -260,6 +278,7 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		maxRadVal := parseCoordinateVal(req.MaxDeliveryRadiusKM)
 		freeRadVal := parseCoordinateVal(req.FreeDeliveryRadiusKM)
 		delChargeVal := parseCoordinateVal(req.DeliveryChargeAmount)
+		minFreeOrderVal := parseCoordinateVal(req.MinFreeDeliveryOrder)
 
 		cleanSlug := strings.ToLower(strings.TrimSpace(req.StoreSlug))
 		cleanSlug = regexp.MustCompile(`[^a-z0-9_]+`).ReplaceAllString(cleanSlug, "_")
@@ -281,18 +300,76 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			if req.RequireCustomerLocation != nil {
 				_, _ = DB.Exec("UPDATE users SET require_customer_location=$1 WHERE LOWER(username)=LOWER($2)", *req.RequireCustomerLocation, username)
 			}
+			if req.StoreOpenStatus != nil {
+				_, _ = DB.Exec("UPDATE users SET store_open_status=$1 WHERE LOWER(username)=LOWER($2)", *req.StoreOpenStatus, username)
+			}
 			if cleanSlug != "" {
 				_, _ = DB.Exec("UPDATE users SET store_slug=$1 WHERE LOWER(username)=LOWER($2)", cleanSlug, username)
 			}
-			if req.LogoURL != "" {
-				_, _ = DB.Exec("UPDATE users SET logo_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.LogoURL), username)
+			if req.LogoURL != nil {
+				_, _ = DB.Exec("UPDATE users SET logo_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(*req.LogoURL), username)
 			}
-			if req.BannerURL != "" {
-				_, _ = DB.Exec("UPDATE users SET banner_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.BannerURL), username)
+			if req.BannerURL != nil {
+				_, _ = DB.Exec("UPDATE users SET banner_url=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(*req.BannerURL), username)
+			}
+			if req.PromotionalBanners != nil {
+				bannersBytes, errPB := json.Marshal(req.PromotionalBanners)
+				if errPB == nil {
+					_, _ = DB.Exec("UPDATE users SET promotional_banners=$1::jsonb WHERE LOWER(username)=LOWER($2)", string(bannersBytes), username)
+					_, _ = DB.Exec("UPDATE business_profiles SET promotional_banners=$1::jsonb WHERE LOWER(username)=LOWER($2)", string(bannersBytes), username)
+					var bList []map[string]interface{}
+					if json.Unmarshal(bannersBytes, &bList) == nil && len(bList) > 0 {
+						if firstImg, ok := bList[0]["image_url"].(string); ok && firstImg != "" {
+							_, _ = DB.Exec("UPDATE users SET banner_url=$1 WHERE LOWER(username)=LOWER($2)", firstImg, username)
+						}
+					}
+				}
+			}
+			if req.DeliveryModes != nil {
+				modesBytes, errDM := json.Marshal(req.DeliveryModes)
+				if errDM == nil {
+					_, _ = DB.Exec("UPDATE users SET delivery_modes=$1::jsonb WHERE LOWER(username)=LOWER($2)", string(modesBytes), username)
+				}
 			}
 			if req.Tagline != "" {
 				_, _ = DB.Exec("UPDATE users SET tagline=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.Tagline), username)
 			}
+			if req.ThemeColor != "" {
+				_, _ = DB.Exec("UPDATE users SET theme_color=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.ThemeColor), username)
+			}
+			if req.SocialInstagram != "" || req.SocialFacebook != "" || req.SocialWhatsApp != "" {
+				_, _ = DB.Exec("UPDATE users SET social_instagram=$1, social_facebook=$2, social_whatsapp=$3 WHERE LOWER(username)=LOWER($4)", strings.TrimSpace(req.SocialInstagram), strings.TrimSpace(req.SocialFacebook), strings.TrimSpace(req.SocialWhatsApp), username)
+			}
+			if req.GSTINNumber != "" {
+				_, _ = DB.Exec("UPDATE users SET gstin_number=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.GSTINNumber), username)
+			}
+			if req.PrivacyPolicy != "" {
+				_, _ = DB.Exec("UPDATE users SET privacy_policy=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.PrivacyPolicy), username)
+			}
+			if req.TermsConditions != "" {
+				_, _ = DB.Exec("UPDATE users SET terms_conditions=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.TermsConditions), username)
+			}
+			if req.RefundPolicy != "" {
+				_, _ = DB.Exec("UPDATE users SET refund_policy=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.RefundPolicy), username)
+			}
+			if req.ShippingPolicy != "" {
+				_, _ = DB.Exec("UPDATE users SET shipping_policy=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.ShippingPolicy), username)
+			}
+			if req.OperatingHours != "" {
+				_, _ = DB.Exec("UPDATE users SET operating_hours=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.OperatingHours), username)
+			}
+			if req.CustomDomain != "" {
+				cleanDomain := strings.ToLower(strings.TrimSpace(req.CustomDomain))
+				cleanDomain = strings.TrimPrefix(cleanDomain, "https://")
+				cleanDomain = strings.TrimPrefix(cleanDomain, "http://")
+				cleanDomain = strings.TrimSuffix(cleanDomain, "/")
+				domStat := req.DomainStatus
+				if domStat == "" {
+					domStat = "pending_dns"
+				}
+				_, _ = DB.Exec("UPDATE users SET custom_domain=$1, domain_status=$2 WHERE LOWER(username)=LOWER($3)", cleanDomain, domStat, username)
+			}
+
 			_, _ = DB.Exec(`UPDATE users SET 
 				full_address = CASE WHEN $1 != '' THEN $1 ELSE full_address END,
 				local_area = CASE WHEN $2 != '' THEN $2 ELSE local_area END,
@@ -302,27 +379,29 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 				business_lng = CASE WHEN $4 != 0 THEN $4 ELSE business_lng END,
 				max_delivery_radius_km = CASE WHEN $5 > 0 THEN $5 ELSE max_delivery_radius_km END,
 				free_delivery_radius_km = CASE WHEN $6 >= 0 THEN $6 ELSE free_delivery_radius_km END,
-				delivery_charge_amount = CASE WHEN $7 >= 0 THEN $7 ELSE delivery_charge_amount END
-				WHERE LOWER(username)=LOWER($8)`, strings.TrimSpace(req.FullAddress), strings.TrimSpace(req.LocalArea), latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, username)
+				delivery_charge_amount = CASE WHEN $7 >= 0 THEN $7 ELSE delivery_charge_amount END,
+				min_free_delivery_order = CASE WHEN $8 >= 0 THEN $8 ELSE min_free_delivery_order END
+				WHERE LOWER(username)=LOWER($9)`, strings.TrimSpace(req.FullAddress), strings.TrimSpace(req.LocalArea), latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, minFreeOrderVal, username)
 
 			whatsapp.InvalidateUserConfigCache(username)
 		}
 
 		respondJSON(w, 200, map[string]interface{}{
 			"status":                    "success",
-			"message":                   "User profile, storefront, and delivery settings updated successfully!",
+			"message":                   "Store management settings saved successfully!",
 			"full_address":              req.FullAddress,
 			"local_area":                req.LocalArea,
 			"store_slug":                cleanSlug,
-			"logo_url":                  req.LogoURL,
-			"banner_url":                req.BannerURL,
 			"tagline":                   req.Tagline,
 			"latitude":                  latVal,
 			"longitude":                 lngVal,
 			"max_delivery_radius_km":    maxRadVal,
 			"free_delivery_radius_km":   freeRadVal,
 			"delivery_charge_amount":    delChargeVal,
+			"min_free_delivery_order":   minFreeOrderVal,
 			"require_customer_location": req.RequireCustomerLocation,
+			"store_open_status":         req.StoreOpenStatus,
+			"custom_domain":             req.CustomDomain,
 		})
 		return
 	}
@@ -333,9 +412,10 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var email, accountName, bName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
-	var storeSlug, logoURL, bannerURL, tagline string
-	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal float64
-	var autoReply, automationAccess, reqLoc bool
+	var storeSlug, logoURL, bannerURL, tagline, bannersJSON string
+	var themeColor, socialInsta, socialFb, socialWa, gstinNum, privacyPol, termsCond, refundPol, shippingPol, opHours, deliveryModesJSON, customDomain, domainStatus string
+	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, minFreeOrder float64
+	var autoReply, automationAccess, reqLoc, storeOpen bool
 
 	if DB != nil {
 		err := DB.QueryRow(`SELECT 
@@ -345,14 +425,37 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active'),
 			COALESCE(full_address, ''), COALESCE(local_area, ''), COALESCE(latitude, 0.0), COALESCE(longitude, 0.0),
 			COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false),
-			COALESCE(store_slug, username), COALESCE(logo_url, ''), COALESCE(banner_url, ''), COALESCE(tagline, '')
+			COALESCE(store_slug, username), COALESCE(logo_url, ''), COALESCE(banner_url, ''), COALESCE(tagline, ''),
+			COALESCE(promotional_banners::text, '[]'),
+			COALESCE(theme_color, 'emerald'), COALESCE(social_instagram, ''), COALESCE(social_facebook, ''), COALESCE(social_whatsapp, ''),
+			COALESCE(gstin_number, ''), COALESCE(privacy_policy, ''), COALESCE(terms_conditions, ''), COALESCE(refund_policy, ''), COALESCE(shipping_policy, ''),
+			COALESCE(min_free_delivery_order, 0.0), COALESCE(store_open_status, true), COALESCE(operating_hours, '9:00 AM - 10:00 PM'),
+			COALESCE(delivery_modes::text, '["doorstep", "pickup"]'), COALESCE(custom_domain, ''), COALESCE(domain_status, 'not_configured')
 			FROM users WHERE LOWER(username)=LOWER($1)`, username).
-			Scan(&email, &accountName, &bName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &storeSlug, &logoURL, &bannerURL, &tagline)
+			Scan(&email, &accountName, &bName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &storeSlug, &logoURL, &bannerURL, &tagline, &bannersJSON, &themeColor, &socialInsta, &socialFb, &socialWa, &gstinNum, &privacyPol, &termsCond, &refundPol, &shippingPol, &minFreeOrder, &storeOpen, &opHours, &deliveryModesJSON, &customDomain, &domainStatus)
 
 		if err == nil {
 			if storeSlug == "" {
 				storeSlug = username
 			}
+
+			var parsedBanners []interface{}
+			if errJSON := json.Unmarshal([]byte(bannersJSON), &parsedBanners); errJSON != nil || len(parsedBanners) == 0 {
+				if bannerURL != "" {
+					parsedBanners = []interface{}{
+						map[string]interface{}{
+							"image_url":   bannerURL,
+							"target_link": "",
+						},
+					}
+				} else {
+					parsedBanners = []interface{}{}
+				}
+			}
+
+			var parsedModes []interface{}
+			_ = json.Unmarshal([]byte(deliveryModesJSON), &parsedModes)
+
 			respondJSON(w, 200, map[string]interface{}{
 				"status":                    "success",
 				"username":                  username,
@@ -376,17 +479,184 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 				"max_delivery_radius_km":    maxRadVal,
 				"free_delivery_radius_km":   freeRadVal,
 				"delivery_charge_amount":    delChargeVal,
+				"min_free_delivery_order":   minFreeOrder,
 				"require_customer_location": reqLoc,
+				"store_open_status":         storeOpen,
+				"operating_hours":          opHours,
+				"delivery_modes":           parsedModes,
 				"store_slug":                storeSlug,
 				"logo_url":                  logoURL,
 				"banner_url":                bannerURL,
+				"promotional_banners":       parsedBanners,
 				"tagline":                   tagline,
+				"theme_color":               themeColor,
+				"social_instagram":          socialInsta,
+				"social_facebook":           socialFb,
+				"social_whatsapp":           socialWa,
+				"gstin_number":              gstinNum,
+				"privacy_policy":            privacyPol,
+				"terms_conditions":          termsCond,
+				"refund_policy":             refundPol,
+				"shipping_policy":           shippingPol,
+				"custom_domain":             customDomain,
+				"domain_status":             domainStatus,
 			})
 			return
 		}
 	}
 
 	respondJSON(w, 404, map[string]string{"status": "error", "message": "User profile not found"})
+}
+
+// MEDIA IMAGE CLEAR HANDLER: DELETE or POST /api/media/image (Sets image_url to null/empty in DB)
+func MediaImageClearHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" && r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Type     string `json:"type"` // "product", "logo", "banner"
+		ID       int    `json:"id"`
+		Username string `json:"username"`
+		Index    int    `json:"index"` // for promotional_banners
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Username == "" {
+		req.Username = r.URL.Query().Get("username")
+	}
+	if req.Type == "" {
+		req.Type = r.URL.Query().Get("type")
+	}
+	username := cleanUsername(req.Username)
+	if username == "" {
+		username = "admin"
+	}
+
+	if DB == nil {
+		respondJSON(w, 500, map[string]string{"status": "error", "message": "Database not connected"})
+		return
+	}
+
+	switch strings.ToLower(req.Type) {
+	case "product":
+		if req.ID > 0 {
+			_, _ = DB.Exec(`UPDATE products SET image_url = '', product_image_url = '' WHERE id = $1 AND LOWER(username) = LOWER($2)`, req.ID, username)
+		}
+	case "logo":
+		_, _ = DB.Exec(`UPDATE users SET logo_url = '' WHERE LOWER(username) = LOWER($1)`, username)
+	case "banner":
+		var curBannersJSON string
+		_ = DB.QueryRow(`SELECT COALESCE(promotional_banners::text, '[]') FROM users WHERE LOWER(username) = LOWER($1)`, username).Scan(&curBannersJSON)
+		var bList []map[string]interface{}
+		if json.Unmarshal([]byte(curBannersJSON), &bList) == nil && len(bList) > 0 {
+			if req.Index >= 0 && req.Index < len(bList) {
+				bList = append(bList[:req.Index], bList[req.Index+1:]...)
+				updatedBytes, _ := json.Marshal(bList)
+				_, _ = DB.Exec(`UPDATE users SET promotional_banners = $1::jsonb WHERE LOWER(username) = LOWER($2)`, string(updatedBytes), username)
+				_, _ = DB.Exec(`UPDATE business_profiles SET promotional_banners = $1::jsonb WHERE LOWER(username) = LOWER($2)`, string(updatedBytes), username)
+			}
+			if len(bList) == 0 {
+				_, _ = DB.Exec(`UPDATE users SET banner_url = '' WHERE LOWER(username) = LOWER($1)`, username)
+			} else {
+				if firstImg, ok := bList[0]["image_url"].(string); ok {
+					_, _ = DB.Exec(`UPDATE users SET banner_url = $1 WHERE LOWER(username) = LOWER($2)`, firstImg, username)
+				}
+			}
+		} else {
+			_, _ = DB.Exec(`UPDATE users SET banner_url = '' WHERE LOWER(username) = LOWER($1)`, username)
+		}
+	}
+
+	whatsapp.InvalidateUserConfigCache(username)
+	respondJSON(w, 200, map[string]interface{}{
+		"status":  "success",
+		"message": "Image reference cleared from database",
+	})
+}
+
+// BULK STORE DELETION: DELETE /api/admin/store/:tenant_slug
+func AdminStoreDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" && r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract slug from URL or query parameter
+	slug := strings.TrimSpace(r.URL.Query().Get("slug"))
+	if slug == "" {
+		slug = strings.TrimSpace(r.URL.Query().Get("tenant_slug"))
+	}
+	if slug == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) >= 4 { // /api/admin/store/{tenant_slug}
+			slug = strings.TrimSpace(parts[3])
+		}
+	}
+
+	if slug == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Tenant slug is required"})
+		return
+	}
+
+	if DB == nil {
+		respondJSON(w, 500, map[string]string{"status": "error", "message": "Database not connected"})
+		return
+	}
+
+	// Find tenant details
+	var username, storeSlug string
+	err := DB.QueryRow(`SELECT username, COALESCE(store_slug, username) FROM users WHERE LOWER(store_slug) = LOWER($1) OR LOWER(username) = LOWER($1) LIMIT 1`, slug).Scan(&username, &storeSlug)
+	if err != nil {
+		respondJSON(w, 404, map[string]string{"status": "error", "message": "Store not found for slug: " + slug})
+		return
+	}
+
+	// 1. Cascading Relational Deletions across all tenant tables
+	_, _ = DB.Exec(`DELETE FROM order_items WHERE order_id IN (SELECT order_id FROM orders WHERE LOWER(tenant_id) = LOWER($1) OR LOWER(username) = LOWER($1))`, username)
+	_, _ = DB.Exec(`DELETE FROM orders WHERE LOWER(tenant_id) = LOWER($1) OR LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM customer_order_states WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM active_carts WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM products WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM categories WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM leads WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM customer_chats WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM customers WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM campaigns WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM campaign_logs WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM tenant_whatsapp_sessions WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM channel_forwarding_rules WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM magic_links WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM business_profiles WHERE LOWER(username) = LOWER($1)`, username)
+	_, _ = DB.Exec(`DELETE FROM users WHERE LOWER(username) = LOWER($1)`, username)
+
+	whatsapp.InvalidateUserConfigCache(username)
+
+	// 2. Background Goroutine: Request Cloudflare Worker to delete all B2 media prefixed with tenantSlug/ and username/
+	go func(targetSlug, targetUser string) {
+		httpClient := &http.Client{Timeout: 30 * time.Second}
+		prefixes := []string{targetSlug, targetUser}
+		for _, p := range prefixes {
+			if p == "" {
+				continue
+			}
+			workerURL := fmt.Sprintf("https://wamart-blackblaze.rkmtech633.workers.dev/delete-prefix?prefix=%s/", url.QueryEscape(p))
+			req, errReq := http.NewRequest("DELETE", workerURL, nil)
+			if errReq == nil {
+				resp, errDo := httpClient.Do(req)
+				if errDo == nil {
+					_ = resp.Body.Close()
+				}
+			}
+		}
+	}(storeSlug, username)
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status":      "success",
+		"message":     fmt.Sprintf("Store '%s' and all associated data permanently deleted", slug),
+		"tenant_slug": storeSlug,
+		"username":    username,
+	})
 }
 
 func parseCoordinateVal(val interface{}) float64 {

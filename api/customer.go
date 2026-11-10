@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -655,24 +657,11 @@ func CheckoutOrderHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		payConfig := payment.GetPaymentConfig(reqBody.TenantID)
-		vpa := payConfig.MerchantVPA
-		if vpa == "" {
-			vpa = "9876543210@paytm"
-		}
-		payee := payConfig.PayeeName
-		if payee == "" {
-			payee = reqBody.TenantID
-		}
-
 		upiURI := payment.GenerateUPIString(payConfig, deliveryDetails.TotalAmount, orderID)
-		amtStr := fmt.Sprintf("%.2f", deliveryDetails.TotalAmount)
-		qrURL, _, errQR := payment.GenerateWorkerDynamicQR(vpa, payee, orderID, amtStr, "")
-		if errQR != nil || qrURL == "" {
-			qrURL = fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=450x450&data=%s", upiURI)
-		}
+		qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=%s", url.QueryEscape(upiURI))
 
-		// Dispatch zero-blocking background Goroutine payment polling loop
-		go whatsapp.PollPaymentStatusBackground(r.Context(), DB, nil, reqBody.JID, reqBody.TenantID, orderID)
+		// Dispatch detached zero-blocking background Goroutine payment polling loop
+		go whatsapp.PollPaymentStatusBackground(context.Background(), DB, nil, reqBody.JID, reqBody.TenantID, orderID)
 
 		respondJSON(w, 200, map[string]interface{}{
 			"status":         "success",
@@ -682,6 +671,7 @@ func CheckoutOrderHandler(w http.ResponseWriter, r *http.Request) {
 			"payment_status": "PENDING_PAYMENT",
 			"order_status":   "PENDING_PAYMENT",
 			"total_amount":   deliveryDetails.TotalAmount,
+			"qr_url":         qrURL,
 			"qr_image_url":   qrURL,
 			"upi_uri":        upiURI,
 			"order": map[string]interface{}{

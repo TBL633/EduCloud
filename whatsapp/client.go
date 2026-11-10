@@ -2753,9 +2753,17 @@ func SendCatalogImagesHand(client *whatsmeow.Client, username, customerPhone, ca
 
 	for i, prod := range productsList {
 		caption := fmt.Sprintf("🛍️ *%s*\n💰 Price: *₹%.2f*", prod.Name, prod.Price)
-		if errImg := SendImageFromURL(client, cleanPhone, prod.ImageURL, caption); errImg != nil {
-			log.Printf("⚠️ Error sending catalog image for %s to +%s: %v", prod.Name, cleanPhone, errImg)
-			return fmt.Errorf("failed to deliver image for %s: %w", prod.Name, errImg)
+		// Dynamic thumbnail via wsrv.nl proxy (w=200, q=80) for lightweight just-in-time delivery
+		targetImageURL := prod.ImageURL
+		if strings.HasPrefix(targetImageURL, "http://") || strings.HasPrefix(targetImageURL, "https://") {
+			targetImageURL = fmt.Sprintf("https://wsrv.nl/?url=%s&w=200&q=80", url.QueryEscape(targetImageURL))
+		}
+
+		if errImg := SendImageFromURL(client, cleanPhone, targetImageURL, caption); errImg != nil {
+			log.Printf("⚠️ Error sending catalog image for %s to +%s: %v. Retrying with original URL...", prod.Name, cleanPhone, errImg)
+			if errRetry := SendImageFromURL(client, cleanPhone, prod.ImageURL, caption); errRetry != nil {
+				return fmt.Errorf("failed to deliver image for %s: %w", prod.Name, errRetry)
+			}
 		}
 		if i < len(productsList)-1 {
 			time.Sleep(1200 * time.Millisecond)

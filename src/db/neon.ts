@@ -194,6 +194,8 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit_type VARCHAR(50) DEFAULT 'custom';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]'::jsonb;`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS product_image_url TEXT DEFAULT '';`); } catch (e) {}
+    try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS thumb_url TEXT DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';`); } catch (e) {}
     try { await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS in_stock BOOLEAN DEFAULT true;`); } catch (e) {}
     try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`); } catch (e) {}
@@ -317,6 +319,16 @@ export async function initNeonDatabase(memoryUsers: Map<string, User>): Promise<
       ALTER TABLE users ADD COLUMN IF NOT EXISTS store_slug VARCHAR(100) DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT DEFAULT '';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS promotional_banners JSONB DEFAULT '[]'::jsonb;
+      CREATE TABLE IF NOT EXISTS business_profiles (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE,
+        tenant_slug VARCHAR(100) DEFAULT '',
+        promotional_banners JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      ALTER TABLE business_profiles ADD COLUMN IF NOT EXISTS promotional_banners JSONB DEFAULT '[]'::jsonb;
+      UPDATE users SET promotional_banners = jsonb_build_array(jsonb_build_object('image_url', banner_url, 'target_link', '')) WHERE (promotional_banners IS NULL OR promotional_banners = '[]'::jsonb) AND banner_url != '';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS tagline TEXT DEFAULT '';
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS jid VARCHAR(100) DEFAULT '';
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100) DEFAULT '';

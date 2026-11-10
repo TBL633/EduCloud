@@ -128,3 +128,23 @@ EduCloud provides a multi-tenant WhatsApp AI automation SaaS optimized for Rende
 - **Dynamic Helper `GenerateAIContextualReply`**:
   - Automatically loads the tenant's AI config, sliding window memory, and system prompt.
   - Generates replies with WhatsApp blockquote formatting (`> `) and expressive emojis dynamically through the LLM.
+
+---
+
+## 8. Advanced Image Management, Multi-Banner Carousel & Deletion Sync Architecture
+- **Interactive Image Cropper (`cropperjs`)**:
+  - Enforces strict aspect ratios: `1:1` square for Store Logos and Product Images, and `16:9` widescreen landscape for Promotional Hero Banners.
+  - Includes interactive rotation, zoom in/out, and reset controls inside a responsive modal.
+  - Direct upload from canvas blob to Cloudflare Worker media proxy (`/upload?path=[tenant_slug]/[folder]/[uuid].jpg`), keeping 0.1vCPU server load at zero.
+- **Hover Action Overlay & Lightbox Preview**:
+  - Uploaded images display a hover overlay with 👁️ "View" (opens fullscreen lightbox modal) and 🗑️ "Remove/Change" buttons.
+- **Full-Stack Deletion Sync**:
+  - Clicking "Remove" sends an immediate `DELETE https://wamart-blackblaze.rkmtech633.workers.dev/delete?path=[tenant_slug]/[folder]/[filename.jpg]` request to remove raw binaries from Backblaze B2.
+  - Concurrently invokes Golang backend `DELETE /api/media/image` to clear DB references (`image_url` on products, `logo_url` on users, or banner entries from `promotional_banners`).
+- **Multi-Banner Sliding Carousel System**:
+  - Database: `promotional_banners JSONB DEFAULT '[]'::jsonb` on `users` and `business_profiles` storing up to 5 items: `[{ "image_url": "...", "target_link": "..." }]`.
+  - Admin UI: Promotional Sliding Banners manager with action link selection (Category/Product deep-links like `/#cat_...` or `/#prod_...` or custom external URLs), 16:9 cropping, position badges (`#1` to `#5`), and individual deletion.
+  - Live Storefront UI: Swiper.js auto-sliding carousel (3500ms delay, touch loop, pagination bullets) rendering clickable banners wrapped in `<a href="..." target="_blank">`, with hash navigation support to smoothly scroll and highlight targeted categories/products.
+- **Bulk Store Deletion (Golang)**:
+  - Admin endpoint `DELETE /api/admin/store/:tenant_slug` with cascading SQL deletion across all tenant tables and non-blocking background goroutine calling Cloudflare Worker `/delete-prefix?prefix=[tenant_slug]/`.
+

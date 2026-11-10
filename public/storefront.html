@@ -7,6 +7,9 @@
     <!-- Tailwind CSS v4 CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Swiper.js for Sliding Banners -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -27,6 +30,36 @@
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+        }
+        /* Swiper Banner Slider Styling */
+        .hero-banner-swiper {
+            width: 100%;
+            aspect-ratio: 16 / 7;
+            max-height: 280px;
+        }
+        @media (max-width: 640px) {
+            .hero-banner-swiper {
+                aspect-ratio: 16 / 8;
+                max-height: 200px;
+            }
+        }
+        .hero-banner-swiper .swiper-slide {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: #0f172a;
+        }
+        .hero-banner-swiper .swiper-pagination-bullet {
+            background: #ffffff;
+            opacity: 0.6;
+        }
+        .hero-banner-swiper .swiper-pagination-bullet-active {
+            background: #10b981;
+            opacity: 1;
+            width: 18px;
+            border-radius: 9999px;
+            transition: all 0.3s ease;
         }
     </style>
 </head>
@@ -106,8 +139,18 @@
                 </div>
             </div>
 
-            <!-- 4. HERO BANNER -->
+            <!-- 4. HERO BANNER & PROMOTIONAL MULTI-BANNER SLIDER -->
             <section class="p-3 md:p-6" id="hero-banner-section">
+                <!-- Swiper Multi-Banner Slider Container -->
+                <div id="hero-swiper-container" class="swiper hero-banner-swiper rounded-2xl md:rounded-3xl overflow-hidden shadow-sm hidden">
+                    <div class="swiper-wrapper" id="hero-swiper-wrapper">
+                        <!-- Dynamic Banners populated via updateStorefrontUI -->
+                    </div>
+                    <!-- Swiper Pagination Bullets -->
+                    <div class="swiper-pagination"></div>
+                </div>
+
+                <!-- Fallback Default Store Header Card -->
                 <div id="hero-banner-wrapper" class="relative rounded-2xl md:rounded-3xl overflow-hidden shadow-sm bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 min-h-[140px] md:min-h-[190px] flex items-center justify-between p-4 md:p-8 text-white">
                     <img id="hero-banner-img" src="" alt="Store Promotion Banner" class="absolute inset-0 w-full h-full object-cover hidden" onerror="this.classList.add('hidden');">
                     <div class="relative z-10 max-w-[75%] space-y-1.5">
@@ -437,48 +480,131 @@
             </div>
         </div>
 
-        <!-- 9. ONLINE UPI QR PAYMENT MODAL -->
-        <div id="qr-payment-backdrop" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-70 transition-opacity"></div>
+        <!-- 9. PREMIUM ONLINE UPI QR PAYMENT MODAL WITH 5-MIN COUNTDOWN -->
+        <div id="qr-payment-backdrop" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-md z-70 transition-opacity"></div>
         <div id="qr-payment-modal" class="hidden fixed inset-0 z-75 flex items-center justify-center p-4">
-            <div class="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 p-5 text-center space-y-4 transform transition duration-300">
-                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div class="flex items-center gap-2 text-left">
-                        <div class="w-9 h-9 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm shadow-inner">
-                            <i class="fa-solid fa-qrcode"></i>
+            <div class="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden transform transition duration-300 flex flex-col">
+                
+                <!-- Premium Blue Gradient Header -->
+                <div class="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white p-4 text-left relative shadow-md">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center text-lg shadow-inner">
+                                <i class="fa-solid fa-qrcode text-blue-200"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-black tracking-wide leading-tight flex items-center gap-1.5">
+                                    <span>Scan & Pay</span>
+                                    <span class="text-[9px] bg-emerald-400/30 text-emerald-200 border border-emerald-300/40 px-1.5 py-0.5 rounded font-extrabold uppercase">Live</span>
+                                </h4>
+                                <p id="qr-store-name" class="text-[11px] text-blue-100/90 font-medium truncate max-w-[190px]">WaMart Store</p>
+                            </div>
                         </div>
-                        <div>
-                            <h4 class="text-xs font-black text-slate-900">Scan & Pay via UPI</h4>
-                            <p id="qr-store-name" class="text-[10px] text-slate-500 font-medium">WaMart Store</p>
+                        <button type="button" onclick="cancelOnlineQRPayment()" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xs transition cursor-pointer">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    <div class="mt-2 text-[10px] text-blue-200/90 flex items-center gap-2 font-semibold">
+                        <span>• Fast</span>
+                        <span>• Secure</span>
+                        <span>• Instant UPI Verification</span>
+                    </div>
+                </div>
+
+                <div class="p-5 space-y-3.5 text-center">
+                    <!-- Amount Banner -->
+                    <div class="bg-blue-50/80 p-3 rounded-2xl border border-blue-100 flex items-center justify-between shadow-2xs">
+                        <span class="text-xs text-slate-600 font-bold flex items-center gap-1.5">
+                            <i class="fa-solid fa-wallet text-blue-600 text-xs"></i>
+                            <span>Total Payable:</span>
+                        </span>
+                        <span id="qr-modal-amount" class="text-xl font-black text-blue-700 font-mono">₹0</span>
+                    </div>
+
+                    <!-- ACTIVE PAYMENT VIEW -->
+                    <div id="qr-active-view" class="space-y-3">
+                        <!-- Prominent QR Box -->
+                        <div class="p-3 bg-white rounded-2xl border-2 border-dashed border-blue-500/30 flex flex-col items-center justify-center space-y-2 shadow-inner">
+                            <img id="qr-code-img" src="" alt="Scan UPI QR Code" class="w-48 h-48 rounded-xl object-contain shadow-xs border border-slate-100 bg-white p-1">
+                            
+                            <!-- Real-time Status Indicator -->
+                            <div class="text-[11px] font-extrabold text-slate-700 flex items-center justify-center gap-2 bg-slate-50 px-3 py-1 rounded-full border border-slate-200/80">
+                                <span class="relative flex h-2.5 w-2.5">
+                                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                </span>
+                                <span>Waiting for UPI payment...</span>
+                            </div>
+                        </div>
+
+                        <!-- UPI App Badges Row -->
+                        <div class="space-y-1">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Supported UPI Apps</div>
+                            <div class="flex items-center justify-center gap-2 flex-wrap">
+                                <span class="px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-700 flex items-center gap-1">
+                                    <i class="fa-brands fa-google text-blue-500"></i> GPay
+                                </span>
+                                <span class="px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-700 flex items-center gap-1">
+                                    <i class="fa-solid fa-mobile-screen text-purple-600"></i> PhonePe
+                                </span>
+                                <span class="px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-700 flex items-center gap-1">
+                                    <i class="fa-solid fa-bolt text-sky-500"></i> Paytm
+                                </span>
+                                <span class="px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-extrabold text-slate-700 flex items-center gap-1">
+                                    <i class="fa-solid fa-building-columns text-orange-600"></i> BHIM
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Direct UPI Intent Button -->
+                        <a id="btn-open-upi-app" href="#" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold rounded-2xl flex items-center justify-center gap-2 transition shadow-md shadow-blue-600/20 active:scale-98">
+                            <i class="fa-solid fa-mobile-screen-button text-sm"></i>
+                            <span>Tap to Pay on Mobile UPI App</span>
+                        </a>
+
+                        <!-- Trust Badges -->
+                        <div class="grid grid-cols-3 gap-1.5 pt-1 text-[10px] text-slate-500 font-semibold border-t border-slate-100">
+                            <div class="flex items-center justify-center gap-1">
+                                <i class="fa-solid fa-shield-halved text-emerald-600 text-xs"></i> 100% Secure
+                            </div>
+                            <div class="flex items-center justify-center gap-1">
+                                <i class="fa-solid fa-bolt text-amber-500 text-xs"></i> Instant Pay
+                            </div>
+                            <div class="flex items-center justify-center gap-1">
+                                <i class="fa-solid fa-lock text-blue-600 text-xs"></i> UPI Safe
+                            </div>
+                        </div>
+
+                        <!-- 5:00 Countdown Timer Display -->
+                        <div class="bg-amber-50 border border-amber-200 rounded-2xl p-2.5 text-xs text-amber-900 font-bold flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-stopwatch text-amber-600 animate-pulse text-sm"></i>
+                            <span>Payment expires in:</span>
+                            <span id="qr-countdown-text" class="font-mono font-black text-amber-700 text-sm bg-amber-200/60 px-2 py-0.5 rounded-md">05:00</span>
                         </div>
                     </div>
-                    <button type="button" onclick="cancelOnlineQRPayment()" class="text-slate-400 hover:text-slate-600 text-sm p-1 cursor-pointer">
-                        <i class="fa-solid fa-xmark"></i>
-                    </button>
+
+                    <!-- TIMEOUT VIEW (Shown when timer hits 00:00) -->
+                    <div id="qr-timeout-view" class="hidden space-y-4 py-3">
+                        <div class="w-14 h-14 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center text-2xl shadow-inner">
+                            <i class="fa-solid fa-clock-rotate-left"></i>
+                        </div>
+                        <div class="space-y-1">
+                            <h4 class="text-sm font-black text-slate-900">Payment Session Timed Out</h4>
+                            <p class="text-xs text-slate-500 leading-relaxed px-2">
+                                The 5-minute payment window has expired. If money was deducted, our automated poller or support team will confirm your order on WhatsApp!
+                            </p>
+                        </div>
+                        <div class="space-y-2 pt-2">
+                            <button type="button" onclick="retryQRPayment()" class="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-2xl shadow-md transition cursor-pointer">
+                                Try Again / Regenerate QR
+                            </button>
+                            <button type="button" onclick="closeQRPaymentModal()" class="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-2xl transition cursor-pointer">
+                                Close Window
+                            </button>
+                        </div>
+                    </div>
+
                 </div>
-
-                <div class="bg-emerald-50/70 p-3 rounded-2xl border border-emerald-100 flex items-center justify-between">
-                    <span class="text-xs text-slate-600 font-bold">Total Amount Payable:</span>
-                    <span id="qr-modal-amount" class="text-lg font-black text-emerald-600 font-mono">₹0</span>
-                </div>
-
-                <!-- QR Code Display Box -->
-                <div class="p-3 bg-white rounded-2xl border-2 border-dashed border-emerald-500/30 flex flex-col items-center justify-center space-y-2">
-                    <img id="qr-code-img" src="" alt="Scan UPI QR Code" class="w-48 h-48 rounded-xl object-contain shadow-xs border border-slate-100">
-                    <p class="text-[11px] font-extrabold text-slate-700 flex items-center gap-1.5">
-                        <i class="fa-solid fa-circle-notch fa-spin text-emerald-600"></i>
-                        <span>Waiting for payment verification...</span>
-                    </p>
-                </div>
-
-                <!-- Direct UPI Intent Button -->
-                <a id="btn-open-upi-app" href="#" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-2xl flex items-center justify-center gap-2 transition shadow-md shadow-emerald-600/20">
-                    <i class="fa-solid fa-mobile-screen-button text-sm"></i>
-                    <span>Open UPI App (GPay / PhonePe / Paytm)</span>
-                </a>
-
-                <p class="text-[10px] text-slate-400 font-medium leading-tight">
-                    Scan with GPay, PhonePe, Paytm, or BHIM. Do not close this window until payment is complete.
-                </p>
             </div>
         </div>
 
@@ -762,11 +888,65 @@
                 if (logoPlaceholder) logoPlaceholder.classList.remove('hidden');
             }
 
-            // Hero Banner
+            // Multi-Banner Sliding Carousel (Swiper.js) & Fallback Hero Banner
+            const heroSwiperContainer = document.getElementById('hero-swiper-container');
+            const heroSwiperWrapper = document.getElementById('hero-swiper-wrapper');
+            const fallbackBannerWrapper = document.getElementById('hero-banner-wrapper');
             const heroBannerImg = document.getElementById('hero-banner-img');
-            if (heroBannerImg && t.banner_url) {
-                heroBannerImg.src = getProxyImageUrl(t.banner_url, 800, 320);
-                heroBannerImg.classList.remove('hidden');
+
+            const rawBanners = t.promotional_banners || [];
+            const validBanners = rawBanners.filter(b => b && b.image_url);
+
+            if (validBanners.length > 0 && heroSwiperContainer && heroSwiperWrapper) {
+                heroSwiperWrapper.innerHTML = validBanners.map((b, idx) => {
+                    const imgUrl = getProxyImageUrl(b.image_url, 1200, 520);
+                    const targetLink = (b.target_link || '').trim();
+                    const hasLink = !!targetLink;
+                    const hrefAttr = hasLink ? `href="${targetLink}"` : 'href="javascript:void(0)"';
+                    const targetAttr = (hasLink && (targetLink.startsWith('http://') || targetLink.startsWith('https://'))) ? 'target="_blank" rel="noopener noreferrer"' : '';
+
+                    return `
+                        <div class="swiper-slide">
+                            <a ${hrefAttr} ${targetAttr} class="w-full h-full block relative group cursor-pointer overflow-hidden">
+                                <img src="${imgUrl}" alt="Promotional Banner ${idx + 1}" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" onerror="this.src='${b.image_url}'">
+                                <div class="absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-transparent pointer-events-none"></div>
+                            </a>
+                        </div>
+                    `;
+                }).join('');
+
+                heroSwiperContainer.classList.remove('hidden');
+                if (fallbackBannerWrapper) fallbackBannerWrapper.classList.add('hidden');
+
+                if (window._heroSwiperInstance) {
+                    try { window._heroSwiperInstance.destroy(true, true); } catch (e) {}
+                }
+
+                if (typeof Swiper !== 'undefined') {
+                    window._heroSwiperInstance = new Swiper('#hero-swiper-container', {
+                        loop: validBanners.length > 1,
+                        autoplay: validBanners.length > 1 ? {
+                            delay: 3500,
+                            disableOnInteraction: false,
+                        } : false,
+                        pagination: {
+                            el: '.swiper-pagination',
+                            clickable: true,
+                        },
+                        effect: 'slide',
+                        speed: 600,
+                    });
+                }
+            } else {
+                if (heroSwiperContainer) heroSwiperContainer.classList.add('hidden');
+                if (fallbackBannerWrapper) fallbackBannerWrapper.classList.remove('hidden');
+
+                if (heroBannerImg && t.banner_url) {
+                    heroBannerImg.src = getProxyImageUrl(t.banner_url, 800, 320);
+                    heroBannerImg.classList.remove('hidden');
+                } else if (heroBannerImg) {
+                    heroBannerImg.classList.add('hidden');
+                }
             }
 
             // WhatsApp link bindings
@@ -919,7 +1099,8 @@
             const inCartQty = cart[item.id]?.qty || 0;
             const inStock = item.in_stock !== false;
 
-            const displayImg = item.image_url ? getProxyImageUrl(item.image_url, 320, 320) : '';
+            const primaryImg = (Array.isArray(item.images) && item.images.length > 0) ? item.images[0] : item.image_url;
+            const displayImg = primaryImg ? getProxyImageUrl(primaryImg, 320, 320) : '';
 
             // Variant Options
             let variantSelectorHtml = '';
@@ -934,7 +1115,7 @@
             }
 
             return `
-                <div onclick="openProductDetailModal(${item.id})" class="bg-white rounded-2xl border border-slate-200/80 p-2.5 flex flex-col justify-between shadow-xs hover:shadow-md transition relative group cursor-pointer active:scale-[0.99] select-none">
+                <div id="prod_${item.id}" onclick="openProductDetailModal(${item.id})" class="bg-white rounded-2xl border border-slate-200/80 p-2.5 flex flex-col justify-between shadow-xs hover:shadow-md transition relative group cursor-pointer active:scale-[0.99] select-none scroll-mt-20">
                     
                     <!-- Discount Tag -->
                     ${hasDiscount ? `
@@ -1026,8 +1207,10 @@
             const discountTag = document.getElementById('modal-discount-tag');
             const stockBadge = document.getElementById('modal-stock-badge');
 
-            if (product.image_url) {
-                imgEl.src = getProxyImageUrl(product.image_url, 600, 600);
+            const modalImgUrl = (Array.isArray(product.images) && product.images.length > 0) ? product.images[0] : product.image_url;
+
+            if (modalImgUrl) {
+                imgEl.src = getProxyImageUrl(modalImgUrl, 600, 600);
                 imgEl.classList.remove('hidden');
                 if (imgPlaceholder) imgPlaceholder.classList.add('hidden');
             } else {
@@ -1502,7 +1685,8 @@
                 if (selectedPaymentMode === 'ONLINE' || data.payment_mode === 'ONLINE') {
                     // Open QR Payment Modal & Start Polling
                     toggleCartDrawer(false);
-                    openQRPaymentModal(data.order_id, data.total_amount || totalAmount, data.qr_image_url, data.upi_uri);
+                    const qrImage = data.qr_url || data.qr_image_url || `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(data.upi_uri || '')}`;
+                    openQRPaymentModal(data.order_id, data.total_amount || totalAmount, qrImage, data.upi_uri);
                     startQRPaymentPolling(data.order_id, data.total_amount || totalAmount);
                 } else {
                     // Reset cart & update UI
@@ -1530,6 +1714,8 @@
             }
         }
 
+        let qrCountdownInterval = null;
+
         function openQRPaymentModal(orderId, amount, qrURL, upiURI) {
             const storeNameEl = document.getElementById('qr-store-name');
             const amountEl = document.getElementById('qr-modal-amount');
@@ -1541,13 +1727,61 @@
             if (imgEl && qrURL) imgEl.src = qrURL;
             if (upiBtn && upiURI) upiBtn.href = upiURI;
 
+            // Reset view elements
+            const activeView = document.getElementById('qr-active-view');
+            const timeoutView = document.getElementById('qr-timeout-view');
+            if (activeView) activeView.classList.remove('hidden');
+            if (timeoutView) timeoutView.classList.add('hidden');
+
             const backdrop = document.getElementById('qr-payment-backdrop');
             const modal = document.getElementById('qr-payment-modal');
             if (backdrop) backdrop.classList.remove('hidden');
             if (modal) modal.classList.remove('hidden');
+
+            // Start 5-minute countdown (300 seconds)
+            startQRPaymentCountdown(300);
+        }
+
+        function startQRPaymentCountdown(durationSeconds) {
+            stopQRPaymentCountdown();
+            let timer = durationSeconds;
+            const textEl = document.getElementById('qr-countdown-text');
+
+            function updateDisplay() {
+                const minutes = Math.floor(timer / 60);
+                const seconds = timer % 60;
+                const minStr = String(minutes).padStart(2, '0');
+                const secStr = String(seconds).padStart(2, '0');
+                if (textEl) textEl.innerText = `${minStr}:${secStr}`;
+            }
+
+            updateDisplay();
+
+            qrCountdownInterval = setInterval(() => {
+                timer--;
+                if (timer <= 0) {
+                    stopQRPaymentCountdown();
+                    stopQRPaymentPolling();
+                    
+                    const activeView = document.getElementById('qr-active-view');
+                    const timeoutView = document.getElementById('qr-timeout-view');
+                    if (activeView) activeView.classList.add('hidden');
+                    if (timeoutView) timeoutView.classList.remove('hidden');
+                } else {
+                    updateDisplay();
+                }
+            }, 1000);
+        }
+
+        function stopQRPaymentCountdown() {
+            if (qrCountdownInterval) {
+                clearInterval(qrCountdownInterval);
+                qrCountdownInterval = null;
+            }
         }
 
         function closeQRPaymentModal() {
+            stopQRPaymentCountdown();
             stopQRPaymentPolling();
             const backdrop = document.getElementById('qr-payment-backdrop');
             const modal = document.getElementById('qr-payment-modal');
@@ -1556,9 +1790,14 @@
         }
 
         function cancelOnlineQRPayment() {
-            if (confirm('Cancel payment verification? Your order has been registered.')) {
+            if (confirm('Cancel payment verification? Your order is registered in our system.')) {
                 closeQRPaymentModal();
             }
+        }
+
+        function retryQRPayment() {
+            closeQRPaymentModal();
+            toggleCartDrawer(true);
         }
 
         function startQRPaymentPolling(orderId, totalAmount) {
@@ -1569,6 +1808,7 @@
                     const data = await res.json();
                     if (data.status === 'success' && (data.paid || data.payment_status === 'PAID')) {
                         stopQRPaymentPolling();
+                        stopQRPaymentCountdown();
                         closeQRPaymentModal();
 
                         // Reset cart & update UI
@@ -2204,10 +2444,38 @@
             triggerCartSyncDebounced();
         };
 
+        // Promotional Banner Deep-Linking & Hash Navigation Handler
+        function handleHashNavigation() {
+            const hash = window.location.hash;
+            if (!hash) return;
+            if (hash.startsWith('#cat_')) {
+                const cat = decodeURIComponent(hash.replace('#cat_', ''));
+                if (typeof selectCategory === 'function') {
+                    selectCategory(cat);
+                }
+                const el = document.getElementById('products-section') || document.getElementById('products-grid');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+            } else if (hash.startsWith('#prod_')) {
+                const prodId = parseInt(hash.replace('#prod_', ''), 10);
+                if (prodId) {
+                    if (typeof openProductDetailModal === 'function') {
+                        openProductDetailModal(prodId);
+                    }
+                    setTimeout(() => {
+                        const el = document.getElementById(`prod_${prodId}`);
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }, 200);
+                }
+            }
+        }
+
+        window.addEventListener('hashchange', handleHashNavigation);
+
         // Initial Load on Page Ready
         window.addEventListener('DOMContentLoaded', async () => {
             await loadStorefront();
             await checkMagicLinkAuth();
+            setTimeout(handleHashNavigation, 300);
         });
     </script>
 </body>

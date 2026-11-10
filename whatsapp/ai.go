@@ -864,7 +864,7 @@ func GetRAGCatalogResults(username, userMsg string) string {
 	var rows *sql.Rows
 	var err error
 	if len(filterParts) > 0 {
-		q := fmt.Sprintf(`SELECT id, name, price, COALESCE(category, 'General'), COALESCE(NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') 
+		q := fmt.Sprintf(`SELECT id, name, price, COALESCE(category, 'General'), COALESCE(NULLIF(thumb_url, ''), NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') 
 			FROM products 
 			WHERE (LOWER(username)=$1 OR LOWER(username)=$2) AND (in_stock IS TRUE OR in_stock IS NULL) 
 			  AND (%s) 
@@ -873,7 +873,7 @@ func GetRAGCatalogResults(username, userMsg string) string {
 	}
 
 	if err != nil || rows == nil {
-		q := `SELECT id, name, price, COALESCE(category, 'General'), COALESCE(NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') 
+		q := `SELECT id, name, price, COALESCE(category, 'General'), COALESCE(NULLIF(thumb_url, ''), NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') 
 			FROM products 
 			WHERE (LOWER(username)=$1 OR LOWER(username)=$2) AND (in_stock IS TRUE OR in_stock IS NULL) 
 			ORDER BY id ASC LIMIT 10`
