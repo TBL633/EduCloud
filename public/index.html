@@ -12,292 +12,213 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-
     <style>
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-        .font-mono {
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .glass-card {
-            background: rgba(15, 23, 42, 0.75);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .glass-input {
-            background: rgba(2, 6, 23, 0.8);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        .glass-input:focus {
-            border-color: #10b981;
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
-        }
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
     </style>
 </head>
-<body class="h-full bg-slate-950 flex items-center justify-center p-4 relative overflow-x-hidden">
+<body class="h-full bg-slate-950 text-slate-100 antialiased flex items-center justify-center p-4 relative overflow-x-hidden">
 
-    <!-- Subtle Ambient Glow Background Effects -->
+    <!-- Glowing Background Lighting -->
     <div class="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/10 rounded-full blur-[140px] pointer-events-none"></div>
     <div class="fixed bottom-10 right-10 w-[400px] h-[400px] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none"></div>
 
-    <!-- Auth Container Card -->
-    <div class="w-full max-w-md glass-card rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 my-auto text-white">
+    <!-- Main Auth Card Container -->
+    <div class="w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 my-auto text-white">
         
-        <!-- SaaS Brand Header -->
+        <!-- Brand Header -->
         <div class="text-center mb-6">
-            <div class="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/20 mb-3 border border-emerald-400/30">
-                <i class="fa-brands fa-whatsapp text-2xl text-slate-950 font-black"></i>
+            <div class="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/20 mb-3 border border-emerald-400/30 text-slate-950 font-black text-2xl">
+                <i class="fa-solid fa-paper-plane"></i>
             </div>
-            <h1 class="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
+            <h1 className="text-2xl font-black tracking-tight text-white flex items-center justify-center gap-2">
                 <span>WaMart</span>
-                <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">AI SaaS</span>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                    AI SaaS
+                </span>
             </h1>
-            <p class="text-xs text-slate-400 mt-1 font-medium">WhatsApp Marketing & Automated Business Engine</p>
-            <div id="index-db-badge" class="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span id="index-db-text">WaMart Auth Service Connected</span>
-            </div>
-        </div>
-
-        <!-- Auth Navigation Tabs (Sign In vs Sign Up) -->
-        <div class="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-bold mb-6">
-            <button type="button" id="tab-btn-signin" onclick="setAuthTab('signin')" class="flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5">
-                <i class="fa-solid fa-right-to-bracket text-xs"></i>
-                <span>Sign In</span>
-            </button>
-            <button type="button" id="tab-btn-signup" onclick="setAuthTab('signup')" class="flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5">
-                <i class="fa-solid fa-user-plus text-xs"></i>
-                <span>Create Account</span>
-            </button>
+            <p class="text-xs text-slate-400 mt-1 font-medium">WhatsApp Marketing & Automated Sales Gateway</p>
         </div>
 
         <!-- Alert Notification Box -->
-        <div id="auth-alert" class="hidden mb-5 p-3.5 rounded-xl bg-rose-950/60 border border-rose-900/80 text-rose-300 text-xs font-medium text-center flex items-center justify-center gap-2">
-            <i id="auth-alert-icon" class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
-            <span id="auth-alert-text">Error message</span>
+        <div id="auth-alert" class="hidden p-3.5 mb-5 rounded-2xl border text-xs font-semibold flex items-center gap-2.5 transition-all">
+            <i id="auth-alert-icon" class="fa-solid"></i>
+            <span id="auth-alert-msg" class="flex-1"></span>
         </div>
 
-        <!-- 1. SIGN IN FORM -->
-        <form id="form-signin" onsubmit="event.preventDefault(); handleLogin();" class="space-y-4">
+        <!-- Sign In / Sign Up Tab Switcher -->
+        <div class="flex p-1 bg-slate-950 border border-slate-800 rounded-2xl mb-6">
+            <button id="tab-btn-signin" onclick="switchAuthTab('signin')" class="flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Sign In
+            </button>
+            <button id="tab-btn-signup" onclick="switchAuthTab('signup')" class="flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer text-slate-400 hover:text-white">
+                New Registration
+            </button>
+        </div>
+
+        <!-- SIGN IN FORM -->
+        <form id="form-signin" onsubmit="event.preventDefault(); handleLoginSubmit();" class="space-y-4">
             <div>
-                <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">Email or Username</label>
+                <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">Email Address or Username *</label>
                 <div class="relative">
                     <i class="fa-solid fa-envelope absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="text" id="login-identifier" placeholder="admin@example.com" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                    <input type="text" id="login-identifier" placeholder="e.g. laxmi@wamart.ai or rkm632002" required class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 font-medium">
                 </div>
             </div>
+
             <div>
-                <div class="flex items-center justify-between mb-1.5">
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Password</label>
-                </div>
+                <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">Password *</label>
                 <div class="relative">
                     <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="password" id="login-password" placeholder="Enter your account password" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
-                    <button type="button" onclick="togglePasswordVisibility('login-password', 'pass-eye-icon')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
-                        <i id="pass-eye-icon" class="fa-solid fa-eye-slash"></i>
+                    <input type="password" id="login-password" placeholder="Enter your account password" required class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-10 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 font-medium">
+                    <button type="button" onclick="togglePasswordVisibility('login-password', 'toggle-pass-icon')" class="absolute right-3.5 top-3 text-slate-500 hover:text-slate-300">
+                        <i id="toggle-pass-icon" class="fa-solid fa-eye"></i>
                     </button>
                 </div>
             </div>
 
-            <button type="submit" id="btn-login-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs mt-3 active:scale-[0.99]">
-                <i class="fa-solid fa-right-to-bracket text-slate-950"></i>
-                <span id="login-btn-text">Sign In to Dashboard</span>
+            <button type="submit" id="btn-login-submit" class="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-2xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-500/20">
+                <span>Sign In to Portal</span>
+                <i class="fa-solid fa-arrow-right"></i>
             </button>
         </form>
 
-        <!-- 2. PROFESSIONAL SIGN UP FORM (STEP 1: ENTER CREDENTIALS) -->
-        <div id="form-signup" class="hidden space-y-4">
-            <!-- Step Progress Indicator -->
-            <div class="p-3 rounded-2xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-[11px] font-semibold text-slate-400">
-                <span class="flex items-center gap-2">
-                    <span class="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">1</span>
-                    <span class="text-white font-bold">Business Details</span>
-                </span>
-                <span class="text-slate-500">Next: OTP Email Verification</span>
-            </div>
-
-            <form onsubmit="event.preventDefault(); handleSendOtp();" class="space-y-3.5">
+        <!-- SIGN UP / OTP FORM -->
+        <form id="form-signup" onsubmit="event.preventDefault(); handleSignupStepSubmit();" class="hidden space-y-4">
+            <!-- Step 1: User Credentials -->
+            <div id="signup-step-credentials" class="space-y-3.5">
                 <div>
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Full Name / Business Name</label>
+                    <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">Business Name / Full Name *</label>
                     <div class="relative">
                         <i class="fa-solid fa-user absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                        <input type="text" id="reg-full-name" placeholder="John Doe" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                        <input type="text" id="reg-name" placeholder="e.g. Laxmi Kirana Store" required class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 font-medium">
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Email Address</label>
+                    <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">Email Address *</label>
                     <div class="relative">
                         <i class="fa-solid fa-envelope absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                        <input type="email" id="reg-email" placeholder="john@company.com" required class="w-full pl-9 pr-4 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
+                        <input type="email" id="reg-email" placeholder="e.g. laxmi@wamart.ai" required class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 font-medium">
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Password (Min 6 chars, 1 Uppercase, 1 Number, 1 Special Char)</label>
+                    <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">Password *</label>
                     <div class="relative">
                         <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                        <input type="password" id="reg-password" placeholder="••••••••" minlength="6" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
-                        <button type="button" onclick="togglePasswordVisibility('reg-password', 'reg-pass-eye')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
-                            <i id="reg-pass-eye" class="fa-solid fa-eye-slash"></i>
-                        </button>
+                        <input type="password" id="reg-password" placeholder="Minimum 6 characters" minlength="6" required class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 font-medium">
                     </div>
                 </div>
 
-                <div>
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">Re-enter Password</label>
-                    <div class="relative">
-                        <i class="fa-solid fa-shield-check absolute left-3.5 top-3.5 text-slate-500 text-xs"></i>
-                        <input type="password" id="reg-confirm-password" placeholder="••••••••" minlength="6" required class="w-full pl-9 pr-10 py-2.5 glass-input rounded-xl text-white outline-none text-xs font-medium placeholder-slate-600 transition">
-                        <button type="button" onclick="togglePasswordVisibility('reg-confirm-password', 'reg-confirm-eye')" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer p-0.5">
-                            <i id="reg-confirm-eye" class="fa-solid fa-eye-slash"></i>
-                        </button>
-                    </div>
-                </div>
-
-                <button type="submit" id="btn-signup-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs mt-2 active:scale-[0.99]">
-                    <i class="fa-solid fa-paper-plane text-slate-950"></i>
-                    <span id="signup-btn-text">Send Email Verification Code</span>
+                <button type="submit" id="btn-signup-otp-request" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-2xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-indigo-600/20">
+                    <span>Send Verification Code (OTP)</span>
+                    <i class="fa-solid fa-paper-plane"></i>
                 </button>
-            </form>
-        </div>
-
-        <!-- 3. VERIFY OTP STEP (STEP 2: ENTER OTP CODE) -->
-        <div id="section-verify-otp" class="hidden space-y-4">
-            <!-- Step Progress Indicator -->
-            <div class="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between text-[11px] font-semibold">
-                <span class="flex items-center gap-2">
-                    <span class="w-5 h-5 rounded-full bg-emerald-400 text-slate-950 text-[10px] font-black flex items-center justify-center">2</span>
-                    <span class="text-emerald-300 font-bold">Email Verification</span>
-                </span>
-                <span class="text-emerald-400 font-mono">6-Digit Code</span>
             </div>
 
-            <div class="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center space-y-2">
-                <div class="w-10 h-10 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center mx-auto text-lg">
-                    <i class="fa-solid fa-envelope-open-text"></i>
+            <!-- Step 2: Verification Code -->
+            <div id="signup-step-otp" class="hidden space-y-3.5">
+                <div class="text-center p-3 bg-indigo-950/60 border border-indigo-800/80 rounded-2xl space-y-1">
+                    <p class="text-xs text-indigo-300">Enter the 6-digit OTP sent to <strong id="otp-target-email" class="text-white font-mono"></strong></p>
                 </div>
-                <p class="text-xs text-slate-300">We dispatched a 6-digit verification code to:</p>
-                <p id="otp-target-email" class="font-bold text-emerald-400 font-mono text-xs break-all bg-emerald-950/50 py-1 px-3 rounded-lg border border-emerald-800/40 inline-block"></p>
-                <div id="otp-dev-hint" class="hidden p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-center font-mono font-bold"></div>
-            </div>
 
-            <form onsubmit="event.preventDefault(); handleVerifyOtp();" class="space-y-4">
                 <div>
-                    <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 text-center">Enter 6-Digit OTP Code</label>
-                    <input type="text" id="otp-input-code" maxlength="6" pattern="[0-9]*" placeholder="123456" required class="w-full py-3.5 bg-slate-950 border border-emerald-500/60 rounded-xl focus:ring-2 focus:ring-emerald-400 text-center text-2xl font-mono tracking-[0.5em] text-emerald-400 font-black outline-none placeholder-slate-700">
+                    <label class="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-1">6-Digit Verification Code *</label>
+                    <input type="text" id="otp-code" placeholder="123456" maxlength="6" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-center text-lg font-mono font-bold text-emerald-400 outline-none focus:border-emerald-500 tracking-widest">
                 </div>
 
-                <button type="submit" id="btn-verify-submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center justify-center gap-2 cursor-pointer text-xs active:scale-[0.99]">
-                    <i class="fa-solid fa-circle-check text-slate-950"></i>
-                    <span>Verify Code & Complete Registration</span>
-                </button>
-
-                <div class="flex items-center justify-between text-xs pt-1">
-                    <button type="button" onclick="handleSendOtp(true)" class="text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer flex items-center gap-1 transition">
-                        <i class="fa-solid fa-rotate-right"></i>
-                        <span>Resend OTP</span>
+                <div class="flex gap-2">
+                    <button type="button" onclick="resetSignupStep()" class="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs cursor-pointer">
+                        Back
                     </button>
-                    <button type="button" onclick="backToSignupForm()" class="text-slate-400 hover:text-white font-semibold cursor-pointer transition">
-                        Edit Details
+                    <button type="button" onclick="handleVerifyOtpSubmit()" id="btn-verify-otp" class="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer">
+                        <span>Verify & Create Account</span>
+                        <i class="fa-solid fa-check"></i>
                     </button>
                 </div>
-            </form>
-        </div>
+            </div>
+        </form>
 
-        <!-- Footer Info -->
-        <div class="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500 font-mono">
-            <span>WaMart SaaS Engine</span>
-            <span class="text-emerald-400 flex items-center gap-1">
-                <i class="fa-solid fa-shield-halved text-[10px]"></i>
-                WaMart Auth Verified
+        <!-- Connection Footer Status -->
+        <div class="mt-6 pt-4 border-t border-slate-800/80 text-center">
+            <span class="text-[10px] text-slate-500 font-mono flex items-center justify-center gap-1.5" id="db-status-label">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>WaMart Neon Database Connected</span>
             </span>
         </div>
     </div>
 
-    <!-- VANILLA JAVASCRIPT AUTH CONTROLLER -->
+    <!-- PURE JAVASCRIPT AUTH ENGINE -->
     <script>
-        function togglePasswordVisibility(inputId, iconId) {
-            const passInput = document.getElementById(inputId);
-            const icon = document.getElementById(iconId);
-            if (!passInput || !icon) return;
-            if (passInput.type === 'password') {
-                passInput.type = 'text';
-                icon.className = 'fa-solid fa-eye';
-            } else {
-                passInput.type = 'password';
-                icon.className = 'fa-solid fa-eye-slash';
-            }
+        let currentAuthTab = 'signin';
+        let currentSignupStep = 'credentials';
+
+        function showAuthAlert(msg, isSuccess = false) {
+            const box = document.getElementById('auth-alert');
+            const icon = document.getElementById('auth-alert-icon');
+            const msgEl = document.getElementById('auth-alert-msg');
+            if (!box || !icon || !msgEl) return;
+
+            msgEl.innerText = msg;
+            box.className = `p-3.5 mb-5 rounded-2xl border text-xs font-semibold flex items-center gap-2.5 transition-all ${
+                isSuccess 
+                    ? 'bg-emerald-950/80 border-emerald-800 text-emerald-300' 
+                    : 'bg-rose-950/80 border-rose-800 text-rose-300'
+            }`;
+            icon.className = `fa-solid ${isSuccess ? 'fa-circle-check text-emerald-400' : 'fa-circle-exclamation text-rose-400'}`;
+            box.classList.remove('hidden');
         }
 
-        function setAuthTab(tab) {
-            const formSignin = document.getElementById('form-signin');
-            const formSignup = document.getElementById('form-signup');
-            const sectionOtp = document.getElementById('section-verify-otp');
+        function switchAuthTab(tab) {
+            currentAuthTab = tab;
             const btnSignin = document.getElementById('tab-btn-signin');
             const btnSignup = document.getElementById('tab-btn-signup');
+            const formSignin = document.getElementById('form-signin');
+            const formSignup = document.getElementById('form-signup');
+            const alertBox = document.getElementById('auth-alert');
 
-            hideAlert();
+            if (alertBox) alertBox.classList.add('hidden');
 
             if (tab === 'signin') {
+                btnSignin.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                btnSignup.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer text-slate-400 hover:text-white';
                 formSignin.classList.remove('hidden');
                 formSignup.classList.add('hidden');
-                sectionOtp.classList.add('hidden');
-                btnSignin.className = "flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5";
-                btnSignup.className = "flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5";
             } else {
-                formSignup.classList.remove('hidden');
+                btnSignup.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer bg-indigo-500/10 text-indigo-400 border border-indigo-500/20';
+                btnSignin.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition cursor-pointer text-slate-400 hover:text-white';
                 formSignin.classList.add('hidden');
-                sectionOtp.classList.add('hidden');
-                btnSignup.className = "flex-1 py-2.5 rounded-lg bg-emerald-500 text-slate-950 font-extrabold transition cursor-pointer shadow-md flex items-center justify-center gap-1.5";
-                btnSignin.className = "flex-1 py-2.5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center gap-1.5";
+                formSignup.classList.remove('hidden');
             }
         }
 
-        function showAlert(msg, isSuccess = false) {
-            const alertBox = document.getElementById('auth-alert');
-            const alertText = document.getElementById('auth-alert-text');
-            const alertIcon = document.getElementById('auth-alert-icon');
-            if (alertBox && alertText) {
-                alertText.innerText = msg;
-                if (isSuccess) {
-                    alertBox.className = "mb-5 p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-semibold text-center flex items-center justify-center gap-2";
-                    if (alertIcon) alertIcon.className = "fa-solid fa-circle-check text-emerald-400 text-sm";
-                } else {
-                    alertBox.className = "mb-5 p-3.5 rounded-xl bg-rose-950/60 border border-rose-900 text-rose-300 text-xs font-semibold text-center flex items-center justify-center gap-2";
-                    if (alertIcon) alertIcon.className = "fa-solid fa-circle-exclamation text-rose-400 text-sm";
-                }
-                alertBox.classList.remove('hidden');
+        function togglePasswordVisibility(inputId, iconId) {
+            const input = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (!input || !icon) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fa-solid fa-eye-slash';
+            } else {
+                input.type = 'password';
+                icon.className = 'fa-solid fa-eye';
             }
         }
 
-        function hideAlert() {
-            const alertBox = document.getElementById('auth-alert');
-            if (alertBox) alertBox.classList.add('hidden');
-        }
-
-        function backToSignupForm() {
-            document.getElementById('form-signup').classList.remove('hidden');
-            document.getElementById('section-verify-otp').classList.add('hidden');
-            hideAlert();
-        }
-
-        // --- AUTH API INTEGRATIONS ---
-
-        // 1. LOGIN USER (Auto Detect Role -> Redirect to appropriate portal)
-        async function handleLogin() {
+        async function handleLoginSubmit() {
             const identifier = document.getElementById('login-identifier').value.trim();
-            const password = document.getElementById('login-password').value.trim();
+            const password = document.getElementById('login-password').value;
             const btn = document.getElementById('btn-login-submit');
 
             if (!identifier || !password) {
-                showAlert('Please enter your email/username and password.');
+                showAuthAlert('Please fill out all fields.');
                 return;
             }
 
-            hideAlert();
             if (btn) btn.disabled = true;
 
             try {
@@ -306,171 +227,140 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ identifier, password })
                 });
-                const data = await res.json();
 
-                if (data.status === 'success') {
-                    showAlert('Authentication successful! Opening dashboard...', true);
-                    localStorage.setItem('token', data.token || ('token-' + (data.username || 'user')));
-                    localStorage.setItem('role', data.role || (data.portal === 'admin_portal' ? 'admin' : 'business_user'));
-                    localStorage.setItem('user_data', JSON.stringify(data));
+                const data = await res.json();
+                if (res.ok && data.token) {
+                    const userObj = data.user || {
+                        username: data.username,
+                        email: data.email,
+                        account_name: data.account_name,
+                        role: data.role,
+                        user_type: data.user_type,
+                        id: data.user_id
+                    };
+                    const userRole = userObj.role || userObj.user_type || (userObj.username === 'admin' ? 'admin' : 'user');
+
+                    localStorage.setItem('wamart_token', data.token);
+                    localStorage.setItem('token', data.token);
+                    localStorage.setItem('wamart_user', JSON.stringify(userObj));
+                    localStorage.setItem('user_data', JSON.stringify(userObj));
+                    localStorage.setItem('role', userRole);
+
+                    showAuthAlert('Login successful! Redirecting...', true);
 
                     setTimeout(() => {
-                        if (data.role === 'admin' || data.portal === 'admin_portal') {
+                        if (userRole === 'superadmin' || userRole === 'admin' || userObj.username === 'admin') {
                             window.location.href = '/admin-portal.html';
                         } else {
                             window.location.href = '/business-portal.html';
                         }
                     }, 500);
                 } else {
-                    showAlert(data.message || 'Invalid credentials. Please try again.');
+                    showAuthAlert(data.message || data.error || 'Invalid credentials');
                 }
             } catch (err) {
-                showAlert('Unable to connect to authentication server.');
+                showAuthAlert('Network error logging in. Please try again.');
             } finally {
                 if (btn) btn.disabled = false;
             }
         }
 
-        // 2. STEP 1 SIGNUP: REQUEST VERIFICATION OTP VIA NEON AUTH / EMAIL
-        async function handleSendOtp(isResend = false) {
-            const full_name = document.getElementById('reg-full-name').value.trim();
+        async function handleSignupStepSubmit() {
+            const name = document.getElementById('reg-name').value.trim();
             const email = document.getElementById('reg-email').value.trim();
-            const password = document.getElementById('reg-password').value.trim();
-            const confirm_password = document.getElementById('reg-confirm-password').value.trim();
-            const btn = document.getElementById('btn-signup-submit');
+            const password = document.getElementById('reg-password').value;
+            const btn = document.getElementById('btn-signup-otp-request');
 
-            if (!full_name || !email || !password || !confirm_password) {
-                showAlert('Please complete all sign-up fields.');
+            if (!name || !email || !password) {
+                showAuthAlert('Please complete all registration fields.');
                 return;
             }
 
-            if (password !== confirm_password) {
-                showAlert('Password and Re-enter Password do not match!');
-                return;
-            }
-
-            if (password.length < 6) {
-                showAlert('Password must be at least 6 characters long.');
-                return;
-            }
-
-            if (!/[A-Z]/.test(password)) {
-                showAlert('Password must contain at least 1 capital letter (A-Z).');
-                return;
-            }
-
-            if (!/[0-9]/.test(password)) {
-                showAlert('Password must contain at least 1 number (0-9).');
-                return;
-            }
-
-            if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-                showAlert('Password must contain at least 1 special character (!@#$%^&* etc.).');
-                return;
-            }
-
-            hideAlert();
             if (btn) btn.disabled = true;
 
             try {
                 const res = await fetch('/api/auth/send-otp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ full_name, email, password, confirm_password })
+                    body: JSON.stringify({ email, full_name: name, password })
                 });
-                const data = await res.json();
 
-                if (data.status === 'success') {
-                    showAlert('Verification code sent to ' + email + '! Check your email inbox.', true);
-                    document.getElementById('form-signup').classList.add('hidden');
-                    document.getElementById('section-verify-otp').classList.remove('hidden');
+                const data = await res.json();
+                if (res.ok) {
                     document.getElementById('otp-target-email').innerText = email;
-                    
-                    // Reset input field so user enters the OTP from their email
-                    const inputOtp = document.getElementById('otp-input-code');
-                    if (inputOtp) inputOtp.value = '';
-                    const hintEl = document.getElementById('otp-dev-hint');
-                    if (hintEl) hintEl.classList.add('hidden');
+                    document.getElementById('signup-step-credentials').classList.add('hidden');
+                    document.getElementById('signup-step-otp').classList.remove('hidden');
+                    showAuthAlert('Verification code sent to your email!', true);
                 } else {
-                    showAlert(data.message || 'Failed to dispatch verification email.');
+                    showAuthAlert(data.error || data.message || 'Failed to send OTP code');
                 }
             } catch (err) {
-                showAlert('Error contacting OTP dispatch server.');
+                showAuthAlert('Network error sending verification code');
             } finally {
                 if (btn) btn.disabled = false;
             }
         }
 
-        // 3. STEP 2 SIGNUP: VERIFY OTP CODE & CREATE USER ACCOUNT
-        async function handleVerifyOtp() {
-            const email = document.getElementById('reg-email').value.trim();
-            const full_name = document.getElementById('reg-full-name').value.trim();
-            const password = document.getElementById('reg-password').value.trim();
-            const otp_code = document.getElementById('otp-input-code').value.trim();
-            const btn = document.getElementById('btn-verify-submit');
+        function resetSignupStep() {
+            document.getElementById('signup-step-otp').classList.add('hidden');
+            document.getElementById('signup-step-credentials').classList.remove('hidden');
+        }
 
-            if (!otp_code || otp_code.length !== 6) {
-                showAlert('Please enter a valid 6-digit OTP verification code.');
+        async function handleVerifyOtpSubmit() {
+            const email = document.getElementById('otp-target-email').innerText;
+            const code = document.getElementById('otp-code').value.trim();
+            const name = document.getElementById('reg-name').value.trim();
+            const password = document.getElementById('reg-password').value;
+            const btn = document.getElementById('btn-verify-otp');
+
+            if (!code || code.length < 4) {
+                showAuthAlert('Please enter valid verification code.');
                 return;
             }
 
-            hideAlert();
             if (btn) btn.disabled = true;
 
             try {
                 const res = await fetch('/api/auth/verify-otp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, otp_code, full_name, password })
+                    body: JSON.stringify({ email, otp: code, full_name: name, password })
                 });
+
                 const data = await res.json();
-
-                if (data.status === 'success') {
-                    showAlert('Account created & verified successfully! Opening workspace...', true);
-                    localStorage.setItem('token', data.token || ('token-' + (data.username || 'user')));
-                    localStorage.setItem('role', data.role || 'business_user');
-                    localStorage.setItem('user_data', JSON.stringify(data));
-
+                if (res.ok) {
+                    if (data.token) {
+                        const userObj = data.user || { username: email.split('@')[0], email, account_name: name };
+                        localStorage.setItem('wamart_token', data.token);
+                        localStorage.setItem('token', data.token);
+                        localStorage.setItem('wamart_user', JSON.stringify(userObj));
+                        localStorage.setItem('user_data', JSON.stringify(userObj));
+                        localStorage.setItem('role', 'user');
+                    }
+                    showAuthAlert('Account verified successfully! Redirecting...', true);
                     setTimeout(() => {
                         window.location.href = '/business-portal.html';
                     }, 800);
                 } else {
-                    showAlert(data.message || 'Invalid or expired OTP code. Please check your email.');
+                    showAuthAlert(data.error || data.message || 'Invalid or expired OTP');
                 }
             } catch (err) {
-                showAlert('Connection error verifying OTP code.');
+                showAuthAlert('Verification failed. Network error.');
             } finally {
                 if (btn) btn.disabled = false;
             }
         }
 
-        async function checkNeonStatus() {
-            try {
-                const res = await fetch('/api/db-status');
-                const data = await res.json();
-                const badge = document.getElementById('index-db-badge');
-                const text = document.getElementById('index-db-text');
-                if (data.connected) {
-                    if (badge) badge.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono";
-                    if (text) text.innerText = "WaMart Database Active";
-                } else {
-                    if (badge) badge.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono";
-                    if (text) text.innerText = "Embedded System Storage";
-                }
-            } catch (err) {}
-        }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            checkNeonStatus();
-            const token = localStorage.getItem('token');
-            const role = localStorage.getItem('role');
-            if (token && role) {
-                if (role === 'admin') {
-                    window.location.href = '/admin-portal.html';
-                } else {
-                    window.location.href = '/business-portal.html';
-                }
-            }
+        // Auto check DB Status on mount
+        document.addEventListener('DOMContentLoaded', () => {
+            fetch('/api/db-status')
+                .then(r => r.json())
+                .then(d => {
+                    const label = document.getElementById('db-status-label');
+                    if (label && d.connected) {
+                        label.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Connected to ${d.engine || 'Neon Cloud DB'}</span>`;
+                    }
+                }).catch(() => {});
         });
     </script>
 </body>

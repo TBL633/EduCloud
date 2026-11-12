@@ -21,26 +21,81 @@ func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	autoReplyUsers := 0
 	libraryOwners := 0
 	businessUsers := 0
+	totalMediaItems := 0
+	totalOrders := 0
+	totalGMV := 0.0
+	todayOrders := 0
+	todayGMV := 0.0
+	totalLeads := 0
+	totalChats := 0
+	activeChannelRules := 0
+
+	now := time.Now()
+	sevenDayLabels := make([]string, 7)
+	sevenDayGMV := make([]float64, 7)
+	sevenDayOrders := make([]int, 7)
+	dayMap := make(map[string]int)
+	for i := 6; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i)
+		idx := 6 - i
+		key := d.Format("2006-01-02")
+		sevenDayLabels[idx] = d.Format("Mon, 02 Jan")
+		dayMap[key] = idx
+	}
 
 	if DB != nil {
 		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE LOWER(username) != 'admin'").Scan(&totalUsers)
-		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE status='Connected' AND wa_jid != '' AND LOWER(username) != 'admin'").Scan(&connectedUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE (status='Connected' OR (wa_jid IS NOT NULL AND wa_jid != '')) AND LOWER(username) != 'admin'").Scan(&connectedUsers)
 		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE automation_access=true AND LOWER(username) != 'admin'").Scan(&automationEnabled)
 		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE auto_reply=true AND LOWER(username) != 'admin'").Scan(&autoReplyUsers)
 		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='library_owner' AND LOWER(username) != 'admin'").Scan(&libraryOwners)
 		_ = DB.QueryRow("SELECT COUNT(*) FROM users WHERE user_type='business_user' AND LOWER(username) != 'admin'").Scan(&businessUsers)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM products").Scan(&totalMediaItems)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM leads").Scan(&totalLeads)
+		_ = DB.QueryRow("SELECT COUNT(DISTINCT customer_phone) FROM customer_chats").Scan(&totalChats)
+		_ = DB.QueryRow("SELECT COUNT(*) FROM channel_forwarding_rules WHERE is_active=true").Scan(&activeChannelRules)
+		_ = DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_amount), 0), COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE), COALESCE(SUM(total_amount) FILTER (WHERE created_at >= CURRENT_DATE), 0) FROM orders`).
+			Scan(&totalOrders, &totalGMV, &todayOrders, &todayGMV)
+
+		rows, err := DB.Query(`SELECT COALESCE(total_amount, 0), COALESCE(created_at, NOW()) FROM orders WHERE created_at >= NOW() - INTERVAL '7 days'`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var amt float64
+				var created time.Time
+				if err := rows.Scan(&amt, &created); err == nil {
+					if idx, ok := dayMap[created.Format("2006-01-02")]; ok {
+						sevenDayGMV[idx] += amt
+						sevenDayOrders[idx]++
+					}
+				}
+			}
+		}
 	}
 
 	respondJSON(w, 200, map[string]interface{}{
 		"status": "success",
 		"metrics": map[string]interface{}{
-			"totalUsers":              totalUsers,
-			"connectedUsers":          connectedUsers,
-			"disconnectedUsers":       totalUsers - connectedUsers,
-			"automationEnabledUsers":  automationEnabled,
-			"autoReplyUsers":          autoReplyUsers,
-			"libraryOwnersCount":      libraryOwners,
-			"businessUsersCount":      businessUsers,
+			"totalUsers":             totalUsers,
+			"connectedUsers":         connectedUsers,
+			"disconnectedUsers":      totalUsers - connectedUsers,
+			"automationEnabledUsers": automationEnabled,
+			"autoReplyUsers":         autoReplyUsers,
+			"libraryOwnersCount":     libraryOwners,
+			"businessUsersCount":     businessUsers,
+			"totalMediaItems":        totalMediaItems,
+			"totalOrders":            totalOrders,
+			"totalGMV":               totalGMV,
+			"todayOrders":            todayOrders,
+			"todayGMV":               todayGMV,
+			"totalLeads":             totalLeads,
+			"totalChats":             totalChats,
+			"activeChannelRules":     activeChannelRules,
+		},
+		"charts": map[string]interface{}{
+			"seven_day_labels": sevenDayLabels,
+			"seven_day_gmv":    sevenDayGMV,
+			"seven_day_orders": sevenDayOrders,
 		},
 	})
 }
@@ -48,31 +103,53 @@ func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 // ADMIN LIST ALL USERS & CATEGORIZED TENANTS
 func ListUsersHandler(w http.ResponseWriter, r *http.Request) {
 	type UserItem struct {
-		ID               int    `json:"id"`
-		Username         string `json:"username"`
-		Email            string `json:"email"`
-		Role             string `json:"role"`
-		UserType         string `json:"user_type"`
-		AccountName      string `json:"account_name"`
-		Phone            string `json:"phone"`
-		WAJID            string `json:"wa_jid"`
-		Status           string `json:"status"`
-		AutomationAccess bool   `json:"automation_access"`
-		AutoReply        bool   `json:"auto_reply"`
-		CreatedAt        string `json:"created_at"`
+		ID                  int     `json:"id"`
+		Username            string  `json:"username"`
+		StoreSlug           string  `json:"store_slug"`
+		Email               string  `json:"email"`
+		Role                string  `json:"role"`
+		UserType            string  `json:"user_type"`
+		AccountName         string  `json:"account_name"`
+		FullName            string  `json:"full_name"`
+		Phone               string  `json:"phone"`
+		WAJID               string  `json:"wa_jid"`
+		Status              string  `json:"status"`
+		AutomationAccess    bool    `json:"automation_access"`
+		IsAutomated         bool    `json:"is_automated"`
+		AutoReply           bool    `json:"auto_reply"`
+		StoreOpenStatus     bool    `json:"store_open_status"`
+		PaytmVPA            string  `json:"paytm_vpa"`
+		PaytmMID            string  `json:"paytm_mid"`
+		MaxDeliveryRadiusKM float64 `json:"max_delivery_radius_km"`
+		AIProvider          string  `json:"ai_provider"`
+		ProductsCount       int     `json:"products_count"`
+		LeadsCount          int     `json:"leads_count"`
+		OrdersCount         int     `json:"orders_count"`
+		RevenueTotal        float64 `json:"revenue_total"`
+		CreatedAt           string  `json:"created_at"`
 	}
 
 	var users []UserItem
 
 	if DB != nil {
-		rows, err := DB.Query(`SELECT id, username, COALESCE(email, ''), COALESCE(role, 'user'), COALESCE(user_type, 'business_user'), COALESCE(account_name, ''), COALESCE(phone, ''), COALESCE(wa_jid, ''), COALESCE(status, 'Disconnected'), COALESCE(automation_access, true), COALESCE(auto_reply, true), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Recent')
-			FROM users ORDER BY id ASC`)
+		rows, err := DB.Query(`SELECT u.id, u.username, COALESCE(u.store_slug, u.username), COALESCE(u.email, ''), COALESCE(u.role, 'user'), COALESCE(u.user_type, 'business_user'), COALESCE(u.account_name, u.username), COALESCE(u.phone, ''), COALESCE(u.wa_jid, ''), COALESCE(u.status, 'Disconnected'), COALESCE(u.automation_access, true), COALESCE(u.auto_reply, true), COALESCE(u.store_open_status, true), COALESCE(u.paytm_vpa, ''), COALESCE(u.paytm_mid, ''), COALESCE(u.max_delivery_radius_km, 15.0), COALESCE(u.ai_provider, 'Groq'),
+			(SELECT COUNT(*) FROM products p WHERE LOWER(p.username)=LOWER(u.username)),
+			(SELECT COUNT(*) FROM leads l WHERE LOWER(l.username)=LOWER(u.username)),
+			(SELECT COUNT(*) FROM orders o WHERE LOWER(o.tenant_id)=LOWER(u.username) OR LOWER(o.tenant_id)=LOWER(COALESCE(u.store_slug, u.username))),
+			(SELECT COALESCE(SUM(o.total_amount), 0) FROM orders o WHERE LOWER(o.tenant_id)=LOWER(u.username) OR LOWER(o.tenant_id)=LOWER(COALESCE(u.store_slug, u.username))),
+			COALESCE(TO_CHAR(u.created_at, 'DD Mon YYYY'), 'Recent')
+			FROM users u WHERE LOWER(u.username) != 'admin' ORDER BY u.id ASC`)
 
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var u UserItem
-				if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.UserType, &u.AccountName, &u.Phone, &u.WAJID, &u.Status, &u.AutomationAccess, &u.AutoReply, &u.CreatedAt); err == nil {
+				if err := rows.Scan(&u.ID, &u.Username, &u.StoreSlug, &u.Email, &u.Role, &u.UserType, &u.AccountName, &u.Phone, &u.WAJID, &u.Status, &u.AutomationAccess, &u.AutoReply, &u.StoreOpenStatus, &u.PaytmVPA, &u.PaytmMID, &u.MaxDeliveryRadiusKM, &u.AIProvider, &u.ProductsCount, &u.LeadsCount, &u.OrdersCount, &u.RevenueTotal, &u.CreatedAt); err == nil {
+					u.FullName = u.AccountName
+					u.IsAutomated = u.AutomationAccess
+					if u.WAJID != "" {
+						u.Status = "Connected"
+					}
 					users = append(users, u)
 				}
 			}
@@ -188,6 +265,166 @@ func ToggleAutomationHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 400, map[string]string{"status": "error", "message": "User not found"})
 }
 
+// ADMIN TOGGLE AUTO-REPLY
+func ToggleAutoReplyHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	username := cleanUsername(req.Username)
+	if username == "" {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Username is required"})
+		return
+	}
+	if DB != nil {
+		var current bool
+		if err := DB.QueryRow("SELECT COALESCE(auto_reply, true) FROM users WHERE LOWER(username)=LOWER($1)", username).Scan(&current); err == nil {
+			newStatus := !current
+			_, _ = DB.Exec("UPDATE users SET auto_reply=$1 WHERE LOWER(username)=LOWER($2)", newStatus, username)
+			respondJSON(w, 200, map[string]interface{}{
+				"status":     "success",
+				"auto_reply": newStatus,
+				"message":    fmt.Sprintf("AI Auto-Reply for @%s updated!", username),
+			})
+			return
+		}
+	}
+	respondJSON(w, 400, map[string]string{"status": "error", "message": "User not found"})
+}
+
+// ADMIN UPDATE USER / PASSWORD RESET
+func UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" && r.Method != "PUT" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Username            string  `json:"username"`
+		AccountName         string  `json:"account_name"`
+		Email               string  `json:"email"`
+		Phone               string  `json:"phone"`
+		UserType            string  `json:"user_type"`
+		StoreSlug           string  `json:"store_slug"`
+		NewPassword         string  `json:"new_password"`
+		AutomationAccess    *bool   `json:"automation_access"`
+		AutoReply           *bool   `json:"auto_reply"`
+		StoreOpenStatus     *bool   `json:"store_open_status"`
+		MaxDeliveryRadiusKM float64 `json:"max_delivery_radius_km"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	username := cleanUsername(req.Username)
+	if username == "" || DB == nil {
+		respondJSON(w, 400, map[string]string{"status": "error", "message": "Valid username is required"})
+		return
+	}
+	radius := req.MaxDeliveryRadiusKM
+	if radius <= 0 {
+		radius = 15.0
+	}
+	_, _ = DB.Exec(`UPDATE users SET
+		account_name = COALESCE(NULLIF($1, ''), account_name),
+		business_name = COALESCE(NULLIF($1, ''), business_name),
+		email = COALESCE(NULLIF($2, ''), email),
+		phone = COALESCE($3, phone),
+		user_type = COALESCE(NULLIF($4, ''), user_type),
+		store_slug = COALESCE(NULLIF($5, ''), store_slug),
+		max_delivery_radius_km = $6,
+		delivery_radius_km = $6
+		WHERE LOWER(username)=LOWER($7)`,
+		strings.TrimSpace(req.AccountName), strings.TrimSpace(req.Email), strings.TrimSpace(req.Phone), strings.TrimSpace(req.UserType), strings.TrimSpace(req.StoreSlug), radius, username)
+
+	if req.AutomationAccess != nil {
+		_, _ = DB.Exec("UPDATE users SET automation_access=$1 WHERE LOWER(username)=LOWER($2)", *req.AutomationAccess, username)
+	}
+	if req.AutoReply != nil {
+		_, _ = DB.Exec("UPDATE users SET auto_reply=$1 WHERE LOWER(username)=LOWER($2)", *req.AutoReply, username)
+	}
+	if req.StoreOpenStatus != nil {
+		_, _ = DB.Exec("UPDATE users SET store_open_status=$1 WHERE LOWER(username)=LOWER($2)", *req.StoreOpenStatus, username)
+	}
+	if len(strings.TrimSpace(req.NewPassword)) >= 4 {
+		_, _ = DB.Exec("UPDATE users SET password=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.NewPassword), username)
+	}
+	respondJSON(w, 200, map[string]string{"status": "success", "message": fmt.Sprintf("Tenant @%s updated!", username)})
+}
+
+// ADMIN GLOBAL ORDERS & LEADS MONITOR (GET /api/admin/orders)
+func AdminOrdersHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := cleanUsername(r.URL.Query().Get("tenant"))
+	orders := make([]map[string]interface{}, 0)
+	leads := make([]map[string]interface{}, 0)
+
+	if DB != nil {
+		oRows, err := DB.Query(`SELECT id, COALESCE(order_id, ''), COALESCE(jid, ''), COALESCE(customer_phone, ''), COALESCE(tenant_id, 'admin'), COALESCE(customer_name, 'Customer'), COALESCE(delivery_phone, ''), COALESCE(delivery_address, ''), COALESCE(items::text, '[]'), COALESCE(total_amount, 0), COALESCE(payment_mode, 'COD'), COALESCE(payment_status, 'PENDING'), COALESCE(order_status, 'NEW'), COALESCE(created_at, NOW())
+			FROM orders WHERE ($1 = '' OR LOWER(tenant_id)=LOWER($1)) ORDER BY created_at DESC LIMIT 100`, tenant)
+		if err == nil {
+			defer oRows.Close()
+			for oRows.Next() {
+				var id int
+				var oid, jid, cPhone, tID, cName, dPhone, dAddr, itemsJSON, pMode, pStat, oStat string
+				var amt float64
+				var created time.Time
+				if err := oRows.Scan(&id, &oid, &jid, &cPhone, &tID, &cName, &dPhone, &dAddr, &itemsJSON, &amt, &pMode, &pStat, &oStat, &created); err == nil {
+					if oid == "" {
+						oid = fmt.Sprintf("ORD-%d", id)
+					}
+					isWA := strings.HasPrefix(strings.ToUpper(oid), "WA") || strings.Contains(strings.ToUpper(pMode), "WHATSAPP") || (jid != "" && !strings.HasPrefix(strings.ToUpper(oid), "WEB"))
+					source := "Web"
+					if isWA {
+						source = "WhatsApp"
+					}
+					payStatusLabel := "Pending"
+					if strings.ToUpper(pStat) == "PAID" {
+						payStatusLabel = "Paid"
+					}
+					orders = append(orders, map[string]interface{}{
+						"id":               id,
+						"order_id":         oid,
+						"tenant_id":        tID,
+						"customer_name":    cName,
+						"customer_phone":   cPhone,
+						"delivery_address": dAddr,
+						"items_summary":    "Catalog Order",
+						"total_amount":     amt,
+						"source":           source,
+						"payment_mode":     pMode,
+						"payment_status":   payStatusLabel,
+						"order_status":     formatGoOrderStatus(oStat),
+						"created_at":       created.Format(time.RFC3339),
+					})
+				}
+			}
+		}
+
+		lRows, lErr := DB.Query(`SELECT id, COALESCE(username, 'admin'), COALESCE(customer_phone, ''), COALESCE(inquiry_text, ''), COALESCE(status, 'Captured'), COALESCE(created_at, NOW())
+			FROM leads WHERE ($1 = '' OR LOWER(username)=LOWER($1)) ORDER BY id DESC LIMIT 50`, tenant)
+		if lErr == nil {
+			defer lRows.Close()
+			for lRows.Next() {
+				var id int
+				var u, phone, inq, st string
+				var created time.Time
+				if err := lRows.Scan(&id, &u, &phone, &inq, &st, &created); err == nil {
+					leads = append(leads, map[string]interface{}{
+						"id":             id,
+						"username":       u,
+						"customer_phone": phone,
+						"inquiry_text":   inq,
+						"status":         st,
+						"created_at":     created.Format(time.RFC3339),
+					})
+				}
+			}
+		}
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"status": "success",
+		"orders": orders,
+		"leads":  leads,
+	})
+}
+
 // ADMIN DELETE TENANT ACCOUNT
 func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -233,7 +470,11 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" || r.Method == "PUT" {
 		var req struct {
 			Username                string      `json:"username"`
+			AccountName             string      `json:"account_name"`
+			Email                   string      `json:"email"`
+			Phone                   string      `json:"phone"`
 			BusinessName            string      `json:"business_name"`
+			BusinessType            string      `json:"business_type"`
 			NotificationPhone       string      `json:"notification_phone"`
 			AIProvider              string      `json:"ai_provider"`
 			AIModel                 string      `json:"ai_model"`
@@ -245,6 +486,12 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			PromotionalBanners      interface{} `json:"promotional_banners"`
 			Tagline                 string      `json:"tagline"`
 			ThemeColor              string      `json:"theme_color"`
+			AnnouncementBar         *string     `json:"announcement_bar"`
+			MinOrderAmount          interface{} `json:"min_order_amount"`
+			PackagingCharge         interface{} `json:"packaging_charge"`
+			AllowCOD                *bool       `json:"allow_cod"`
+			PaytmVPA                *string     `json:"paytm_vpa"`
+			PaytmMID                *string     `json:"paytm_mid"`
 			SocialInstagram         string      `json:"social_instagram"`
 			SocialFacebook          string      `json:"social_facebook"`
 			SocialWhatsApp          string      `json:"social_whatsapp"`
@@ -279,14 +526,28 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		freeRadVal := parseCoordinateVal(req.FreeDeliveryRadiusKM)
 		delChargeVal := parseCoordinateVal(req.DeliveryChargeAmount)
 		minFreeOrderVal := parseCoordinateVal(req.MinFreeDeliveryOrder)
+		minOrderVal := parseCoordinateVal(req.MinOrderAmount)
+		pkgChargeVal := parseCoordinateVal(req.PackagingCharge)
 
 		cleanSlug := strings.ToLower(strings.TrimSpace(req.StoreSlug))
 		cleanSlug = regexp.MustCompile(`[^a-z0-9_]+`).ReplaceAllString(cleanSlug, "_")
 		cleanSlug = strings.Trim(cleanSlug, "_")
 
 		if DB != nil {
+			if req.AccountName != "" {
+				_, _ = DB.Exec("UPDATE users SET account_name=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.AccountName), username)
+			}
+			if req.Email != "" {
+				_, _ = DB.Exec("UPDATE users SET email=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.Email), username)
+			}
+			if req.Phone != "" {
+				_, _ = DB.Exec("UPDATE users SET phone=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimPrefix(strings.TrimSpace(req.Phone), "+"), username)
+			}
 			if req.BusinessName != "" {
 				_, _ = DB.Exec("UPDATE users SET business_name=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.BusinessName), username)
+			}
+			if req.BusinessType != "" {
+				_, _ = DB.Exec("UPDATE users SET business_type=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(req.BusinessType), username)
 			}
 			if req.NotificationPhone != "" {
 				_, _ = DB.Exec("UPDATE users SET notification_phone=$1 WHERE LOWER(username)=LOWER($2)", req.NotificationPhone, username)
@@ -302,6 +563,24 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if req.StoreOpenStatus != nil {
 				_, _ = DB.Exec("UPDATE users SET store_open_status=$1 WHERE LOWER(username)=LOWER($2)", *req.StoreOpenStatus, username)
+			}
+			if req.AllowCOD != nil {
+				_, _ = DB.Exec("UPDATE users SET allow_cod=$1 WHERE LOWER(username)=LOWER($2)", *req.AllowCOD, username)
+			}
+			if req.AnnouncementBar != nil {
+				_, _ = DB.Exec("UPDATE users SET announcement_bar=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(*req.AnnouncementBar), username)
+			}
+			if req.PaytmVPA != nil {
+				_, _ = DB.Exec("UPDATE users SET paytm_vpa=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(*req.PaytmVPA), username)
+			}
+			if req.PaytmMID != nil {
+				_, _ = DB.Exec("UPDATE users SET paytm_mid=$1 WHERE LOWER(username)=LOWER($2)", strings.TrimSpace(*req.PaytmMID), username)
+			}
+			if req.MinOrderAmount != nil {
+				_, _ = DB.Exec("UPDATE users SET min_order_amount=$1 WHERE LOWER(username)=LOWER($2)", minOrderVal, username)
+			}
+			if req.PackagingCharge != nil {
+				_, _ = DB.Exec("UPDATE users SET packaging_charge=$1 WHERE LOWER(username)=LOWER($2)", pkgChargeVal, username)
 			}
 			if cleanSlug != "" {
 				_, _ = DB.Exec("UPDATE users SET store_slug=$1 WHERE LOWER(username)=LOWER($2)", cleanSlug, username)
@@ -411,15 +690,15 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 		username = "admin"
 	}
 
-	var email, accountName, bName, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
+	var email, accountName, bName, bType, userType, phone, notificationPhone, waJid, statusStr, aiProvider, aiModel, createdAt, fullAddress, localArea string
 	var storeSlug, logoURL, bannerURL, tagline, bannersJSON string
-	var themeColor, socialInsta, socialFb, socialWa, gstinNum, privacyPol, termsCond, refundPol, shippingPol, opHours, deliveryModesJSON, customDomain, domainStatus string
-	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, minFreeOrder float64
-	var autoReply, automationAccess, reqLoc, storeOpen bool
+	var themeColor, announcementBar, paytmVPA, paytmMID, socialInsta, socialFb, socialWa, gstinNum, privacyPol, termsCond, refundPol, shippingPol, opHours, deliveryModesJSON, customDomain, domainStatus string
+	var latVal, lngVal, maxRadVal, freeRadVal, delChargeVal, minFreeOrder, minOrderAmt, pkgCharge float64
+	var autoReply, automationAccess, reqLoc, storeOpen, allowCOD bool
 
 	if DB != nil {
 		err := DB.QueryRow(`SELECT 
-			COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(business_name, account_name, ''), COALESCE(user_type, 'business_user'), 
+			COALESCE(email, ''), COALESCE(account_name, ''), COALESCE(business_name, account_name, ''), COALESCE(business_type, 'Kirana / General Store'), COALESCE(user_type, 'business_user'), 
 			COALESCE(phone, ''), COALESCE(notification_phone, ''), COALESCE(wa_jid, ''), 
 			COALESCE(status, 'Disconnected'), COALESCE(auto_reply, true), COALESCE(automation_access, true), 
 			COALESCE(ai_provider, 'gemini'), COALESCE(ai_model, ''), COALESCE(TO_CHAR(created_at, 'DD Mon YYYY'), 'Active'),
@@ -427,12 +706,13 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 			COALESCE(max_delivery_radius_km, 15.0), COALESCE(free_delivery_radius_km, 3.0), COALESCE(delivery_charge_amount, 40.0), COALESCE(require_customer_location, false),
 			COALESCE(store_slug, username), COALESCE(logo_url, ''), COALESCE(banner_url, ''), COALESCE(tagline, ''),
 			COALESCE(promotional_banners::text, '[]'),
-			COALESCE(theme_color, 'emerald'), COALESCE(social_instagram, ''), COALESCE(social_facebook, ''), COALESCE(social_whatsapp, ''),
+			COALESCE(theme_color, 'emerald'), COALESCE(announcement_bar, ''), COALESCE(min_order_amount, 0.0), COALESCE(packaging_charge, 0.0), COALESCE(allow_cod, true), COALESCE(paytm_vpa, ''), COALESCE(paytm_mid, ''),
+			COALESCE(social_instagram, ''), COALESCE(social_facebook, ''), COALESCE(social_whatsapp, ''),
 			COALESCE(gstin_number, ''), COALESCE(privacy_policy, ''), COALESCE(terms_conditions, ''), COALESCE(refund_policy, ''), COALESCE(shipping_policy, ''),
 			COALESCE(min_free_delivery_order, 0.0), COALESCE(store_open_status, true), COALESCE(operating_hours, '9:00 AM - 10:00 PM'),
 			COALESCE(delivery_modes::text, '["doorstep", "pickup"]'), COALESCE(custom_domain, ''), COALESCE(domain_status, 'not_configured')
 			FROM users WHERE LOWER(username)=LOWER($1)`, username).
-			Scan(&email, &accountName, &bName, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &storeSlug, &logoURL, &bannerURL, &tagline, &bannersJSON, &themeColor, &socialInsta, &socialFb, &socialWa, &gstinNum, &privacyPol, &termsCond, &refundPol, &shippingPol, &minFreeOrder, &storeOpen, &opHours, &deliveryModesJSON, &customDomain, &domainStatus)
+			Scan(&email, &accountName, &bName, &bType, &userType, &phone, &notificationPhone, &waJid, &statusStr, &autoReply, &automationAccess, &aiProvider, &aiModel, &createdAt, &fullAddress, &localArea, &latVal, &lngVal, &maxRadVal, &freeRadVal, &delChargeVal, &reqLoc, &storeSlug, &logoURL, &bannerURL, &tagline, &bannersJSON, &themeColor, &announcementBar, &minOrderAmt, &pkgCharge, &allowCOD, &paytmVPA, &paytmMID, &socialInsta, &socialFb, &socialWa, &gstinNum, &privacyPol, &termsCond, &refundPol, &shippingPol, &minFreeOrder, &storeOpen, &opHours, &deliveryModesJSON, &customDomain, &domainStatus)
 
 		if err == nil {
 			if storeSlug == "" {
@@ -462,6 +742,7 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 				"email":                     email,
 				"account_name":              accountName,
 				"business_name":             bName,
+				"business_type":             bType,
 				"user_type":                 userType,
 				"phone":                     phone,
 				"notification_phone":        notificationPhone,
@@ -482,14 +763,20 @@ func UserProfileHandler(w http.ResponseWriter, r *http.Request) {
 				"min_free_delivery_order":   minFreeOrder,
 				"require_customer_location": reqLoc,
 				"store_open_status":         storeOpen,
-				"operating_hours":          opHours,
-				"delivery_modes":           parsedModes,
+				"operating_hours":           opHours,
+				"delivery_modes":            parsedModes,
 				"store_slug":                storeSlug,
 				"logo_url":                  logoURL,
 				"banner_url":                bannerURL,
 				"promotional_banners":       parsedBanners,
 				"tagline":                   tagline,
 				"theme_color":               themeColor,
+				"announcement_bar":          announcementBar,
+				"min_order_amount":          minOrderAmt,
+				"packaging_charge":          pkgCharge,
+				"allow_cod":                 allowCOD,
+				"paytm_vpa":                 paytmVPA,
+				"paytm_mid":                 paytmMID,
 				"social_instagram":          socialInsta,
 				"social_facebook":           socialFb,
 				"social_whatsapp":           socialWa,
@@ -632,7 +919,7 @@ func AdminStoreDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	whatsapp.InvalidateUserConfigCache(username)
 
-	// 2. Background Goroutine: Request Cloudflare Worker to delete all B2 media prefixed with tenantSlug/ and username/
+	// 2. Background Goroutine: Request Cloudflare Worker to delete all R2 media folder prefixed with tenantSlug/ and username/
 	go func(targetSlug, targetUser string) {
 		httpClient := &http.Client{Timeout: 30 * time.Second}
 		prefixes := []string{targetSlug, targetUser}
@@ -640,7 +927,7 @@ func AdminStoreDeleteHandler(w http.ResponseWriter, r *http.Request) {
 			if p == "" {
 				continue
 			}
-			workerURL := fmt.Sprintf("https://wamart-blackblaze.rkmtech633.workers.dev/delete-prefix?prefix=%s/", url.QueryEscape(p))
+			workerURL := fmt.Sprintf("https://wamart-cloudflare.rkmtech633.workers.dev/delete-folder?prefix=%s/", url.QueryEscape(p))
 			req, errReq := http.NewRequest("DELETE", workerURL, nil)
 			if errReq == nil {
 				resp, errDo := httpClient.Do(req)

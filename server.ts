@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import QRCode from 'qrcode';
-import type { User } from './src/db/neon.js';
+import type { User } from './db/neon.js';
 import {
   initNeonDatabase,
   findUserByIdentifier,
@@ -24,7 +24,7 @@ import {
   getDbStatus,
   getPool,
   isDbConnected
-} from './src/db/neon.js';
+} from './db/neon.js';
 
 export type { User };
 
@@ -320,7 +320,7 @@ async function saveCustomerOrderState(username: string, customerPhone: string, o
   const paymentMode = String(orderData.payment_mode || 'unselected').toLowerCase();
   const paymentStatus = String(orderData.payment_status || 'unpaid').toLowerCase();
   const orderStatus = String(orderData.order_status || (paymentStatus === 'paid' ? 'confirmed' : 'in_progress')).toLowerCase();
-  const orderId = String(orderData.order_id || `ORD_${cleanPhone.slice(-4)}_${Date.now().toString().slice(-4)}`);
+  const orderId = String(orderData.order_id || `ORD${Date.now()}${Math.floor(100000 + Math.random() * 900000)}`);
 
   if (getPool()) {
     try {
@@ -700,7 +700,7 @@ RULES:
   // If customer chose online payment and online payment is enabled, but LLM missed trigger tag, auto-inject payment QR!
   if (detectedOrder && detectedOrder.payment_mode === 'online' && hasOnlinePayment && !aiResponse.includes('<PAYMENT_TRIGGER') && !aiResponse.includes('ONLINE PAYMENT LINK')) {
     const payAmt = detectedOrder.total_amount || 100;
-    const payOrdId = `ORD_${customerPhone.slice(-4)}_${Date.now().toString().slice(-4)}`;
+    const payOrdId = `ORD${Date.now()}${Math.floor(100000 + Math.random() * 900000)}`;
     aiResponse += ` <PAYMENT_TRIGGER amount="${payAmt}" order_id="${payOrdId}">`;
   }
 
@@ -767,11 +767,26 @@ app.post('/api/login', async (req: Request, res: Response) => {
   const isGlobalAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin' || (user.email && user.email.toLowerCase() === 'admin@wamart.ai');
   const targetPortal = isGlobalAdmin ? 'admin_portal' : 'business_portal';
 
+  const userPayload = {
+    id: user.id,
+    user_id: user.id,
+    username: user.username,
+    email: user.email || '',
+    account_name: user.account_name || user.username,
+    full_name: user.account_name || user.username,
+    role: user.role || (isGlobalAdmin ? 'admin' : 'user'),
+    user_type: user.user_type || (isGlobalAdmin ? 'admin' : 'business_user'),
+    automation_access: user.automation_access,
+    auto_reply: user.auto_reply,
+    ai_provider: user.ai_provider,
+    system_prompt: user.system_prompt
+  };
+
   return res.json({
     status: 'success',
     portal: targetPortal,
-    role: user.role,
-    user_type: user.user_type || (isGlobalAdmin ? 'admin' : 'business_user'),
+    role: userPayload.role,
+    user_type: userPayload.user_type,
     token: 'wamart-token-' + user.username,
     username: user.username,
     email: user.email || '',
@@ -780,7 +795,8 @@ app.post('/api/login', async (req: Request, res: Response) => {
     automation_access: user.automation_access,
     ai_provider: user.ai_provider,
     system_prompt: user.system_prompt,
-    auto_reply: user.auto_reply
+    auto_reply: user.auto_reply,
+    user: userPayload
   });
 });
 
@@ -1319,102 +1335,268 @@ app.post('/api/admin/create-user', async (req: Request, res: Response) => {
   });
 });
 
-// 3. ADMIN: LIST USERS & THEIR ADDED ACCOUNTS
+// 3. ADMIN: LIST USERS & THEIR ADDED ACCOUNTS (Enriched with per-tenant SKUs, Orders, GMV, Leads)
 app.get('/api/admin/users', async (_req: Request, res: Response) => {
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
-        const dbUsers = await pool.query('SELECT * FROM users ORDER BY id ASC');
-        const currentDbUsernames = new Set(dbUsers.rows.map(r => r.username.toLowerCase()));
-        for (const [uname] of memoryUsers.entries()) {
-          if (!currentDbUsernames.has(uname) && uname !== 'admin') {
-            memoryUsers.delete(uname);
-          }
-        }
-        for (const row of dbUsers.rows) {
-          memoryUsers.set(row.username.toLowerCase(), {
-            id: row.id,
-            username: row.username,
-            email: row.email || '',
-            password: row.password,
-            role: row.role as 'admin' | 'user',
-            user_type: row.user_type as 'library_owner' | 'business_user' | 'admin',
-            account_name: row.account_name || `${row.username} Account`,
-            phone: row.phone || '',
-            wa_jid: row.wa_jid || '',
-            ai_provider: row.ai_provider || 'gemini',
-            api_key: row.api_key || '',
-            system_prompt: row.system_prompt || '',
-            auto_reply: Boolean(row.auto_reply),
-            automation_access: Boolean(row.automation_access),
-            status: (row.status as any) || 'Disconnected',
-            qr: row.qr || '',
-            created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+        const enrichedRes = await pool.query(`
+          SELECT u.*,
+            (SELECT COUNT(*) FROM products p WHERE LOWER(p.username) = LOWER(u.username)) AS products_count,
+            (SELECT COUNT(*) FROM orders o WHERE LOWER(o.tenant_id) = LOWER(u.username) OR (u.store_slug IS NOT NULL AND u.store_slug != '' AND LOWER(o.tenant_id) = LOWER(u.store_slug))) AS orders_count,
+            (SELECT COALESCE(SUM(o.total_amount), 0) FROM orders o WHERE LOWER(o.tenant_id) = LOWER(u.username) OR (u.store_slug IS NOT NULL AND u.store_slug != '' AND LOWER(o.tenant_id) = LOWER(u.store_slug))) AS revenue_total,
+            (SELECT COUNT(*) FROM leads l WHERE LOWER(l.username) = LOWER(u.username)) AS leads_count
+          FROM users u
+          ORDER BY u.id DESC
+        `);
+
+        const userList = enrichedRes.rows
+          .filter(u => !deletedUsernames.has(String(u.username || '').toLowerCase()) && String(u.username || '').toLowerCase() !== 'admin')
+          .map(u => {
+            const isConn = Boolean(u.wa_connected) || u.status === 'Connected';
+            return {
+              id: u.id,
+              username: u.username || '',
+              email: u.email || '',
+              role: u.role || 'user',
+              user_type: u.user_type || 'business_user',
+              account_name: u.business_name || u.account_name || u.username || 'Tenant Store',
+              business_name: u.business_name || u.account_name || u.username || 'Tenant Store',
+              business_type: u.business_type || 'General Store',
+              store_slug: u.store_slug || u.username || '',
+              store_open_status: u.store_open_status !== false,
+              paytm_vpa: u.paytm_vpa || '',
+              paytm_mid: u.paytm_mid || '',
+              max_delivery_radius_km: Number(u.max_delivery_radius_km ?? 10),
+              phone: u.phone || '',
+              wa_jid: isConn ? (u.wa_jid || u.phone || '') : '',
+              wa_connected: isConn,
+              status: isConn ? 'Connected' : 'Disconnected',
+              automation_access: u.automation_access !== false,
+              is_automated: u.automation_access !== false,
+              auto_reply: Boolean(u.auto_reply),
+              products_count: Number(u.products_count || 0),
+              orders_count: Number(u.orders_count || 0),
+              revenue_total: Number(u.revenue_total || 0),
+              leads_count: Number(u.leads_count || 0),
+              created_at: u.created_at
+            };
           });
-        }
-        const userList = dbUsers.rows
-          .filter(u => !deletedUsernames.has(u.username.toLowerCase()) && u.username.toLowerCase() !== 'admin')
-          .map(u => ({
-            id: u.id,
-            username: u.username,
-            email: u.email || '',
-            role: u.role,
-            user_type: u.user_type || 'business_user',
-            account_name: u.account_name,
-            phone: u.phone || '',
-            wa_jid: u.status === 'Connected' ? (u.wa_jid || '') : '',
-            status: u.status === 'Connected' ? 'Connected' : 'Disconnected',
-            automation_access: Boolean(u.automation_access),
-            auto_reply: Boolean(u.auto_reply),
-            created_at: u.created_at
-          }));
-        return res.json({ users: userList });
+        return res.json(userList);
       } catch (err: any) {
-        console.error('Failed to query users from Neon DB:', err.message);
+        console.error('Failed to query enriched users from DB:', err.message);
       }
     }
   }
 
   const userList = Array.from(memoryUsers.values())
-    .filter(u => !deletedUsernames.has(u.username.toLowerCase()))
+    .filter(u => !deletedUsernames.has(u.username.toLowerCase()) && u.username.toLowerCase() !== 'admin')
     .map(u => ({
       id: u.id,
-      username: u.username,
+      username: u.username || '',
       email: u.email || '',
-      role: u.role,
-      user_type: u.user_type || (u.role === 'admin' ? 'admin' : 'library_owner'),
-      account_name: u.account_name,
+      role: u.role || 'user',
+      user_type: u.user_type || 'business_user',
+      account_name: u.account_name || u.username || 'Tenant Account',
+      business_name: u.account_name || u.username || 'Tenant Account',
+      business_type: 'General Store',
+      store_slug: u.username || '',
+      store_open_status: true,
+      paytm_vpa: '',
+      paytm_mid: '',
+      max_delivery_radius_km: 10,
       phone: u.phone || '',
       wa_jid: u.wa_jid || '',
+      wa_connected: u.status === 'Connected',
       status: u.status || 'Disconnected',
-      automation_access: u.automation_access,
-      auto_reply: u.auto_reply,
+      automation_access: Boolean(u.automation_access),
+      is_automated: Boolean(u.automation_access),
+      auto_reply: Boolean(u.auto_reply),
+      products_count: 0,
+      orders_count: 0,
+      revenue_total: 0,
+      leads_count: 0,
       created_at: u.created_at
     }));
-  return res.json({ users: userList });
+  return res.json(userList);
 });
 
-// 4. ADMIN: TOGGLE AUTOMATION ACCESS (Sync with Neon DB)
+// 4. ADMIN: TOGGLE AUTOMATION ACCESS
 app.post('/api/admin/toggle-automation', async (req: Request, res: Response) => {
-  const { username } = req.body || {};
+  const { username, enabled } = req.body || {};
   if (!username) {
     return res.status(400).json({ error: 'Username is required' });
   }
-
-  const user = memoryUsers.get(username.toLowerCase());
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+  const cleanUser = String(username).trim().toLowerCase();
+  const user = memoryUsers.get(cleanUser);
+  const nextVal = typeof enabled === 'boolean' ? enabled : (user ? !user.automation_access : true);
+  if (user) {
+    user.automation_access = nextVal;
   }
-
-  user.automation_access = !user.automation_access;
-  await updateUserAutomationInNeon(username, user.automation_access);
-
+  await updateUserAutomationInNeon(cleanUser, nextVal);
   return res.json({
     status: 'success',
-    message: `Automation access for ${username} is now ${user.automation_access ? 'Enabled' : 'Disabled'}`,
-    automation_access: user.automation_access
+    success: true,
+    automation_access: nextVal
   });
+});
+
+// 4B. ADMIN: TOGGLE AI AUTO-REPLY
+app.post('/api/admin/toggle-auto-reply', async (req: Request, res: Response) => {
+  const { username, enabled } = req.body || {};
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+  const cleanUser = String(username).trim().toLowerCase();
+  const user = memoryUsers.get(cleanUser);
+  const nextVal = typeof enabled === 'boolean' ? enabled : (user ? !user.auto_reply : true);
+  if (user) {
+    user.auto_reply = nextVal;
+  }
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(`UPDATE users SET auto_reply = $1 WHERE LOWER(username) = LOWER($2)`, [nextVal, cleanUser]);
+    } catch (e) {}
+  }
+  return res.json({ status: 'success', success: true, auto_reply: nextVal });
+});
+
+// 4C. ADMIN: UPDATE TENANT DETAILS & RESET PASSWORD
+app.post('/api/admin/update-user', async (req: Request, res: Response) => {
+  const {
+    username,
+    account_name,
+    business_name,
+    business_type,
+    user_type,
+    email,
+    phone,
+    store_slug,
+    new_password,
+    max_delivery_radius_km,
+    store_open_status,
+    automation_access,
+    auto_reply
+  } = req.body || {};
+
+  if (!username) {
+    return res.status(400).json({ error: 'Username is required' });
+  }
+  const cleanUser = String(username).trim().toLowerCase();
+  const resolvedName = String(business_name || account_name || '').trim();
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(
+        `UPDATE users
+         SET business_name = COALESCE(NULLIF($1, ''), business_name),
+             account_name = COALESCE(NULLIF($1, ''), account_name),
+             business_type = COALESCE(NULLIF($2, ''), business_type),
+             phone = COALESCE($3, phone),
+             max_delivery_radius_km = COALESCE($4, max_delivery_radius_km),
+             store_open_status = COALESCE($5, store_open_status),
+             automation_access = COALESCE($6, automation_access),
+             auto_reply = COALESCE($7, auto_reply),
+             email = COALESCE(NULLIF($8, ''), email),
+             store_slug = COALESCE(NULLIF($9, ''), store_slug),
+             user_type = COALESCE(NULLIF($10, ''), user_type)
+         WHERE LOWER(username) = LOWER($11)`,
+        [
+          resolvedName,
+          business_type || '',
+          phone ?? null,
+          max_delivery_radius_km !== undefined ? Number(max_delivery_radius_km) : null,
+          typeof store_open_status === 'boolean' ? store_open_status : null,
+          typeof automation_access === 'boolean' ? automation_access : null,
+          typeof auto_reply === 'boolean' ? auto_reply : null,
+          email || '',
+          store_slug || '',
+          user_type || '',
+          cleanUser
+        ]
+      );
+      if (new_password && String(new_password).trim().length >= 4) {
+        await pool.query(`UPDATE users SET password = $1 WHERE LOWER(username) = LOWER($2)`, [String(new_password).trim(), cleanUser]);
+      }
+      const memUser = memoryUsers.get(cleanUser);
+      if (memUser) {
+        if (resolvedName) {
+          memUser.account_name = resolvedName;
+          memUser.business_name = resolvedName;
+        }
+        if (email) memUser.email = email;
+        if (phone !== undefined) memUser.phone = phone;
+        if (user_type) memUser.user_type = user_type;
+        if (typeof automation_access === 'boolean') memUser.automation_access = automation_access;
+        if (typeof auto_reply === 'boolean') memUser.auto_reply = auto_reply;
+        if (new_password && String(new_password).trim().length >= 4) {
+          memUser.password = String(new_password).trim();
+        }
+      }
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Database update failed' });
+    }
+  }
+  return res.json({ status: 'success', success: true, message: `Tenant @${cleanUser} updated successfully!` });
+});
+
+// 4D. ADMIN: GLOBAL ORDERS & AI LEADS MONITOR
+app.get('/api/admin/orders', async (_req: Request, res: Response) => {
+  const pool = getPool();
+  if (!pool) {
+    return res.json({ orders: [], leads: [] });
+  }
+  try {
+    const ordersRes = await pool.query(`
+      SELECT
+        COALESCE(NULLIF(o.order_id, ''), 'ORD-' || o.id::text) AS order_id,
+        COALESCE(u.username, o.tenant_id) AS username,
+        COALESCE(u.username, o.tenant_id) AS tenant_id,
+        COALESCE(NULLIF(u.business_name, ''), NULLIF(u.account_name, ''), o.tenant_id) AS business_name,
+        COALESCE(NULLIF(o.customer_name, ''), 'Storefront Customer') AS customer_name,
+        COALESCE(NULLIF(o.delivery_phone, ''), NULLIF(o.customer_phone, ''), '') AS customer_phone,
+        COALESCE(o.delivery_address, '') AS delivery_address,
+        COALESCE(o.total_amount, 0)::float AS total_amount,
+        COALESCE(o.payment_mode, 'COD') AS payment_mode,
+        COALESCE(o.payment_status, 'PENDING') AS payment_status,
+        COALESCE(o.order_status, 'NEW') AS order_status,
+        CASE WHEN COALESCE(o.jid, '') ILIKE '%@s.whatsapp.net%' THEN 'WhatsApp' ELSE 'Web' END AS source,
+        o.created_at AS created_at,
+        o.created_at AS updated_at
+      FROM orders o
+      LEFT JOIN users u ON LOWER(u.username) = LOWER(o.tenant_id) OR (u.store_slug IS NOT NULL AND u.store_slug != '' AND LOWER(u.store_slug) = LOWER(o.tenant_id))
+      ORDER BY o.created_at DESC NULLS LAST
+      LIMIT 150
+    `);
+
+    const leadsRes = await pool.query(`
+      SELECT
+        l.id,
+        l.username,
+        COALESCE(NULLIF(u.business_name, ''), NULLIF(u.account_name, ''), l.username) AS business_name,
+        COALESCE(l.customer_phone, '') AS customer_phone,
+        'WhatsApp Lead' AS customer_name,
+        COALESCE(l.inquiry_text, '') AS inquiry_text,
+        COALESCE(l.inquiry_text, '') AS message,
+        'AI Captured' AS intent,
+        COALESCE(l.status, 'New') AS status,
+        l.created_at
+      FROM leads l
+      LEFT JOIN users u ON LOWER(u.username) = LOWER(l.username)
+      ORDER BY l.created_at DESC NULLS LAST
+      LIMIT 150
+    `);
+
+    return res.json({
+      orders: ordersRes.rows,
+      leads: leadsRes.rows
+    });
+  } catch (err: any) {
+    console.warn('Error fetching /api/admin/orders:', err.message);
+    return res.json({ orders: [], leads: [] });
+  }
 });
 
 // 5. ADMIN: DELETE USER (Completely wipe tenant, products, leads, and session from DB)
@@ -1612,15 +1794,16 @@ app.get(['/api/status', '/api/whatsapp/status', '/api/whatsapp/qr'], async (req:
   });
 });
 
-// 7. PHONE PAIRING CODE (Handles /api/pair and /api/whatsapp/pair)
-app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response) => {
-  const { phone = '', username = '' } = req.body || {};
+// 7. PHONE PAIRING CODE (Handles /api/pair, /api/whatsapp/pair, and /api/whatsapp/pair-phone)
+app.all(['/api/pair', '/api/whatsapp/pair', '/api/whatsapp/pair-phone'], async (req: Request, res: Response) => {
+  const phone = req.body?.phone || req.query?.phone || '';
+  const username = req.body?.username || req.query?.username || '';
   const cleanPhone = String(phone).replace(/\D/g, '');
   if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ status: 'error', message: 'Valid phone number with country code is required (e.g. 917706070633)' });
+    return res.status(400).json({ status: 'error', error: 'Valid phone number with country code is required (e.g. 919876543210)', message: 'Valid phone number with country code is required' });
   }
 
-  const cleanUser = (username || 'admin').trim().toLowerCase();
+  const cleanUser = (String(username) || 'admin').trim().toLowerCase();
   const user = memoryUsers.get(cleanUser) || memoryUsers.get('admin');
   const code = generateWhatsAppPairingCode();
 
@@ -1634,7 +1817,6 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
     const pool = getPool();
     if (pool) {
       try {
-        
         const upsertQuery = `
           INSERT INTO users (username, email, password, role, user_type, account_name, wa_jid, phone, status, linked_at, created_at)
           VALUES ($1::VARCHAR, $1::VARCHAR || '@gmail.com', 'pass123', 'user', 'business_user', $1::VARCHAR || ' Account', $2::VARCHAR, $2::VARCHAR, 'Connected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -1657,7 +1839,7 @@ app.post(['/api/pair', '/api/whatsapp/pair'], async (req: Request, res: Response
   });
 });
 
-app.all(['/api/whatsapp/unlink', '/api/whatsapp/disconnect', '/api/whatsapp/unpair', '/api/logout-wa'], async (req: Request, res: Response) => {
+app.all(['/api/whatsapp/unlink', '/api/whatsapp/disconnect', '/api/whatsapp/unpair', '/api/whatsapp/logout', '/api/logout-wa'], async (req: Request, res: Response) => {
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}
@@ -2187,6 +2369,7 @@ app.post('/api/bulk/start', (req: Request, res: Response) => {
   const {
     username = 'admin',
     phones = [],
+    numbers = '',
     message = '',
     image_url = '',
     temp_file_path = '',
@@ -2194,27 +2377,22 @@ app.post('/api/bulk/start', (req: Request, res: Response) => {
     delay_ms = 1200
   } = req.body || {};
 
-  const user = memoryUsers.get(username);
-  if (!user || user.status !== 'Connected') {
-    return res.status(400).json({ status: 'error', message: 'WhatsApp not connected. Please pair or link device first.' });
-  }
+  const rawPhonesList = Array.isArray(phones) && phones.length > 0
+    ? phones
+    : String(numbers || '').split(/[\n,]+/).filter(Boolean);
 
-  if (user.role !== 'admin' && !user.automation_access) {
-    return res.status(403).json({ status: 'error', message: 'Automation access is disabled for your account. Please contact admin.' });
-  }
-
-  if (!Array.isArray(phones) || phones.length === 0) {
-    return res.status(400).json({ status: 'error', message: 'No target numbers provided' });
+  if (rawPhonesList.length === 0) {
+    return res.status(400).json({ status: 'error', error: 'No target numbers provided', message: 'No target numbers provided' });
   }
 
   if (!message && !image_url) {
-    return res.status(400).json({ status: 'error', message: 'Please provide message text or an image' });
+    return res.status(400).json({ status: 'error', error: 'Please provide message text or an image', message: 'Please provide message text or an image' });
   }
 
   // Clean numbers
-  const cleanedPhones = phones.map(p => String(p).trim().replace(/\D/g, '')).filter(p => p.length >= 8);
+  const cleanedPhones = rawPhonesList.map((p: any) => String(p).trim().replace(/\D/g, '')).filter((p: string) => p.length >= 8);
   if (cleanedPhones.length === 0) {
-    return res.status(400).json({ status: 'error', message: 'No valid phone numbers found after parsing' });
+    return res.status(400).json({ status: 'error', error: 'No valid phone numbers found after parsing', message: 'No valid phone numbers found after parsing' });
   }
 
   // Check if active campaign is already running
@@ -2398,159 +2576,187 @@ app.post('/api/bulk', (req: Request, res: Response) => {
 
 // 11. AI AUTO-REPLY SETTINGS & LEAD NOTIFICATION SETUP
 app.get('/api/ai/settings', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
-  let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
+  const username = ((req.query.username as string) || 'admin').trim();
+  const user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
 
-  if (getPool()) {
-    const pool = getPool();
-    if (pool) {
-      try {
-        let dbRes;
-        try {
-          dbRes = await pool.query(
-            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language, COALESCE(paytm_mid, '') as paytm_mid, COALESCE(paytm_vpa, '') as paytm_vpa, COALESCE(store_policies, '') as store_policies FROM users WHERE LOWER(username) = LOWER($1)`,
-            [username]
-          );
-        } catch (colErr) {
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'Groq';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS temperature NUMERIC(3,2) DEFAULT 0.7;`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`);
-          dbRes = await pool.query(
-            `SELECT ai_provider, model, temperature, notification_phone, api_key, system_prompt, auto_reply, COALESCE(business_name, account_name, '') as business_name, COALESCE(business_type, 'Kirana / General Store') as business_type, COALESCE(response_language, 'Hinglish') as response_language, COALESCE(paytm_mid, '') as paytm_mid, COALESCE(paytm_vpa, '') as paytm_vpa, COALESCE(store_policies, '') as store_policies FROM users WHERE LOWER(username) = LOWER($1)`,
-            [username]
-          );
-        }
+  const pool = getPool();
+  if (pool) {
+    try {
+      const dbRes = await pool.query(
+        `SELECT 
+          COALESCE(ai_provider, 'Groq') as ai_provider,
+          COALESCE(NULLIF(ai_model, ''), NULLIF(model, ''), 'llama-3.3-70b-versatile') as model,
+          COALESCE(ai_temperature, temperature, 0.7) as temperature,
+          COALESCE(notification_phone, '') as notification_phone,
+          COALESCE(api_key, '') as api_key,
+          COALESCE(system_prompt, '') as system_prompt,
+          COALESCE(auto_reply, true) as auto_reply,
+          COALESCE(import_catalog_details, true) as import_catalog_details,
+          COALESCE(business_name, account_name, '') as business_name,
+          COALESCE(business_type, 'Kirana / General Store') as business_type,
+          COALESCE(response_language, 'Hinglish') as response_language,
+          COALESCE(paytm_mid, '') as paytm_mid,
+          COALESCE(paytm_vpa, '') as paytm_vpa,
+          COALESCE(store_policies, '') as store_policies,
+          COALESCE(allow_cod, true) as allow_cod
+        FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1`,
+        [username]
+      );
 
-        if (dbRes.rows.length > 0) {
-          const row = dbRes.rows[0];
-          const bName = row.business_name || user?.business_name || user?.account_name || 'Rahul Store';
-          const bType = row.business_type || user?.business_type || 'Kirana / General Store';
-          const lang = row.response_language || user?.response_language || 'Hinglish';
-          return res.json({
-            business_name: bName,
-            business_type: bType,
-            response_language: lang,
-            language: lang,
-            platform: row.ai_provider || user?.ai_provider || 'Groq',
-            model: row.model || user?.model || 'llama-3.3-70b-versatile',
-            temperature: row.temperature !== null && row.temperature !== undefined ? Number(row.temperature) : (user?.temperature ?? 0.7),
-            notification_phone: row.notification_phone || user?.notification_phone || '',
-            api_key: row.api_key || user?.api_key || '',
-            system_prompt: row.system_prompt || user?.system_prompt || '',
-            auto_reply: row.auto_reply !== null && row.auto_reply !== undefined ? Boolean(row.auto_reply) : (user?.auto_reply ?? true),
-            paytm_mid: row.paytm_mid || (user as any)?.paytm_mid || '',
-            paytm_vpa: row.paytm_vpa || (user as any)?.paytm_vpa || '',
-            store_policies: row.store_policies || (user as any)?.store_policies || ''
-          });
-        }
-      } catch (err) {
-        console.warn('Error querying AI settings from Neon DB:', err);
+      if (dbRes.rows.length > 0) {
+        const row = dbRes.rows[0];
+        const bName = row.business_name || user?.business_name || user?.account_name || username;
+        const bType = row.business_type || user?.business_type || 'Kirana / General Store';
+        const lang = row.response_language || user?.response_language || 'Hinglish';
+        const tempVal = row.temperature !== null && row.temperature !== undefined ? Number(row.temperature) : 0.7;
+        return res.json({
+          status: 'success',
+          business_name: bName,
+          business_type: bType,
+          response_language: lang,
+          language: lang,
+          platform: row.ai_provider || 'Groq',
+          ai_provider: row.ai_provider || 'Groq',
+          model: row.model || 'llama-3.3-70b-versatile',
+          ai_model: row.model || 'llama-3.3-70b-versatile',
+          temperature: tempVal,
+          ai_temperature: tempVal,
+          notification_phone: row.notification_phone || '',
+          api_key: row.api_key || '',
+          system_prompt: row.system_prompt || '',
+          auto_reply: row.auto_reply !== false,
+          import_catalog_details: row.import_catalog_details !== false,
+          paytm_mid: row.paytm_mid || '',
+          paytm_vpa: row.paytm_vpa || '',
+          store_policies: row.store_policies || '',
+          allow_cod: row.allow_cod !== false
+        });
       }
+    } catch (err) {
+      console.warn('Error querying AI settings from Neon DB:', err);
     }
   }
 
-  const defaultBName = user?.business_name || user?.account_name || 'Rahul Store';
+  const defaultBName = user?.business_name || user?.account_name || username || 'My Store';
   const defaultBType = user?.business_type || 'Kirana / General Store';
   const defaultLang = user?.response_language || 'Hinglish';
 
   return res.json({
+    status: 'success',
     business_name: defaultBName,
     business_type: defaultBType,
     response_language: defaultLang,
     language: defaultLang,
     platform: user?.ai_provider || 'Groq',
+    ai_provider: user?.ai_provider || 'Groq',
     model: user?.model || 'llama-3.3-70b-versatile',
+    ai_model: user?.model || 'llama-3.3-70b-versatile',
     temperature: user?.temperature ?? 0.7,
+    ai_temperature: user?.temperature ?? 0.7,
     notification_phone: user?.notification_phone || user?.phone || '',
     api_key: user?.api_key || '',
     system_prompt: user?.system_prompt || '',
     auto_reply: user?.auto_reply ?? true,
+    import_catalog_details: (user as any)?.import_catalog_details ?? true,
     paytm_mid: (user as any)?.paytm_mid || '',
     paytm_vpa: (user as any)?.paytm_vpa || '',
-    store_policies: (user as any)?.store_policies || ''
+    store_policies: (user as any)?.store_policies || '',
+    allow_cod: (user as any)?.allow_cod ?? true
   });
 });
 
 app.post('/api/ai/settings', async (req: Request, res: Response) => {
-  const { username = '', ai_provider, platform, model, temperature, notification_phone, api_key, system_prompt, auto_reply, business_name, business_type, response_language, language, paytm_mid, paytm_vpa, store_policies } = req.body || {};
-  let user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
+  const b = req.body || {};
+  const username = String(b.username || 'admin').trim();
+  const user = username ? memoryUsers.get(username.toLowerCase()) : undefined;
 
-  const resolvedPlatform = platform || ai_provider || 'Groq';
-  const resolvedModel = model || 'llama-3.3-70b-versatile';
-  const resolvedTemp = temperature !== undefined ? parseFloat(temperature) : 0.7;
-  const resolvedNotifPhone = String(notification_phone || '').trim();
-  const resolvedApiKey = String(api_key || '').trim();
-  const resolvedPrompt = system_prompt !== undefined ? String(system_prompt) : '';
-  const resolvedAutoReply = auto_reply !== undefined ? Boolean(auto_reply) : true;
-  const resolvedBName = String(business_name || '').trim();
-  const resolvedBType = String(business_type || 'Kirana / General Store').trim();
-  const resolvedLang = String(response_language || language || 'Hinglish').trim();
-  const resolvedPaytmMid = String(paytm_mid || '').trim();
-  const resolvedPaytmVpa = String(paytm_vpa || '').trim();
-  const resolvedStorePolicies = String(store_policies || '').trim();
+  const resolvedPlatform = String(b.platform || b.ai_provider || 'Groq').trim();
+  const resolvedModel = String(b.ai_model || b.model || 'llama-3.3-70b-versatile').trim();
+  const resolvedTemp = b.ai_temperature !== undefined ? parseFloat(b.ai_temperature) : (b.temperature !== undefined ? parseFloat(b.temperature) : 0.7);
+  const resolvedNotifPhone = b.notification_phone !== undefined ? String(b.notification_phone).trim() : undefined;
+  const resolvedApiKey = b.api_key !== undefined ? String(b.api_key).trim() : undefined;
+  const resolvedPrompt = b.system_prompt !== undefined ? String(b.system_prompt).trim() : undefined;
+  const resolvedAutoReply = b.auto_reply !== undefined ? Boolean(b.auto_reply) : true;
+  const resolvedImportCatalog = b.import_catalog_details !== undefined ? Boolean(b.import_catalog_details) : true;
+  const resolvedBName = b.business_name !== undefined && String(b.business_name).trim() !== '' ? String(b.business_name).trim() : undefined;
+  const resolvedBType = b.business_type !== undefined && String(b.business_type).trim() !== '' ? String(b.business_type).trim() : undefined;
+  const resolvedLang = String(b.response_language || b.language || 'Hinglish').trim();
+  const resolvedPaytmMid = b.paytm_mid !== undefined && String(b.paytm_mid).trim() !== '' ? String(b.paytm_mid).trim() : undefined;
+  const resolvedPaytmVpa = b.paytm_vpa !== undefined && String(b.paytm_vpa).trim() !== '' ? String(b.paytm_vpa).trim() : undefined;
+  const resolvedStorePolicies = b.store_policies !== undefined ? String(b.store_policies).trim() : undefined;
 
   if (user) {
     user.ai_provider = resolvedPlatform;
     user.model = resolvedModel;
+    user.ai_model = resolvedModel;
     user.temperature = resolvedTemp;
-    user.notification_phone = resolvedNotifPhone;
-    if (resolvedApiKey) user.api_key = resolvedApiKey;
-    user.system_prompt = resolvedPrompt;
+    user.ai_temperature = resolvedTemp;
+    if (resolvedNotifPhone !== undefined) user.notification_phone = resolvedNotifPhone;
+    if (resolvedApiKey !== undefined) user.api_key = resolvedApiKey;
+    if (resolvedPrompt !== undefined) user.system_prompt = resolvedPrompt;
     user.auto_reply = resolvedAutoReply;
-    user.business_name = resolvedBName;
-    user.business_type = resolvedBType;
+    (user as any).import_catalog_details = resolvedImportCatalog;
+    if (resolvedBName) user.business_name = resolvedBName;
+    if (resolvedBType) user.business_type = resolvedBType;
     user.response_language = resolvedLang;
-    (user as any).paytm_mid = resolvedPaytmMid;
-    (user as any).paytm_vpa = resolvedPaytmVpa;
-    (user as any).store_policies = resolvedStorePolicies;
+    if (resolvedPaytmMid) (user as any).paytm_mid = resolvedPaytmMid;
+    if (resolvedPaytmVpa) (user as any).paytm_vpa = resolvedPaytmVpa;
+    if (resolvedStorePolicies !== undefined) (user as any).store_policies = resolvedStorePolicies;
   }
 
-  if (getPool()) {
-    const pool = getPool();
-    if (pool) {
-      try {
-        try {
-          await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10, paytm_mid = $11, paytm_vpa = $12, store_policies = $13 WHERE LOWER(username) = LOWER($14)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, resolvedPaytmMid, resolvedPaytmVpa, resolvedStorePolicies, username]
-          );
-        } catch (dbColErr) {
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(50) DEFAULT 'Groq';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS temperature NUMERIC(3,2) DEFAULT 0.7;`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_phone VARCHAR(50) DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_name VARCHAR(255) DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS business_type VARCHAR(100) DEFAULT 'Kirana / General Store';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS response_language VARCHAR(50) DEFAULT 'Hinglish';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS system_prompt TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_reply BOOLEAN DEFAULT true;`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paytm_vpa TEXT DEFAULT '';`);
-          await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS store_policies TEXT DEFAULT '';`);
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS import_catalog_details BOOLEAN DEFAULT true;`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100) DEFAULT 'llama-3.3-70b-versatile';`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_temperature DOUBLE PRECISION DEFAULT 0.7;`);
 
-          await pool.query(
-            `UPDATE users SET notification_phone = $1, ai_provider = $2, model = $3, temperature = $4, api_key = $5, system_prompt = $6, auto_reply = $7, business_name = $8, business_type = $9, response_language = $10, paytm_mid = $11, paytm_vpa = $12, store_policies = $13 WHERE LOWER(username) = LOWER($14)`,
-            [resolvedNotifPhone, resolvedPlatform, resolvedModel, resolvedTemp, resolvedApiKey, resolvedPrompt, resolvedAutoReply, resolvedBName, resolvedBType, resolvedLang, resolvedPaytmMid, resolvedPaytmVpa, resolvedStorePolicies, username]
-          );
-        }
-      } catch (dbErr) {
-        console.warn('Neon DB AI settings sync error:', dbErr);
-      }
+      const sets: string[] = [
+        'ai_provider = $1',
+        'model = $2',
+        'ai_model = $2',
+        'temperature = $3',
+        'ai_temperature = $3',
+        'auto_reply = $4',
+        'import_catalog_details = $5',
+        'response_language = $6'
+      ];
+      const vals: any[] = [
+        resolvedPlatform,
+        resolvedModel,
+        resolvedTemp,
+        resolvedAutoReply,
+        resolvedImportCatalog,
+        resolvedLang
+      ];
+      let idx = 7;
+      const addOpt = (col: string, val: any) => {
+        sets.push(`${col} = $${idx}`);
+        vals.push(val);
+        idx++;
+      };
+
+      if (resolvedNotifPhone !== undefined) addOpt('notification_phone', resolvedNotifPhone);
+      if (resolvedApiKey !== undefined) addOpt('api_key', resolvedApiKey);
+      if (resolvedPrompt !== undefined) addOpt('system_prompt', resolvedPrompt);
+      if (resolvedStorePolicies !== undefined) addOpt('store_policies', resolvedStorePolicies);
+      if (resolvedBName !== undefined) addOpt('business_name', resolvedBName);
+      if (resolvedBType !== undefined) addOpt('business_type', resolvedBType);
+      if (resolvedPaytmMid !== undefined) addOpt('paytm_mid', resolvedPaytmMid);
+      if (resolvedPaytmVpa !== undefined) addOpt('paytm_vpa', resolvedPaytmVpa);
+      if (b.allow_cod !== undefined) addOpt('allow_cod', Boolean(b.allow_cod));
+
+      vals.push(username.toLowerCase());
+      await pool.query(
+        `UPDATE users SET ${sets.join(', ')} WHERE LOWER(username) = LOWER($${idx})`,
+        vals
+      );
+    } catch (dbErr) {
+      console.warn('Neon DB AI settings sync error:', dbErr);
     }
   }
 
-  return res.json({ status: 'success', message: 'AI Settings & Lead Notification Phone Saved Successfully!' });
+  return res.json({ status: 'success', message: 'AI Lead Responder settings saved & synced to cloud DB!' });
 });
 
 // 11B. TEST LEAD NOTIFICATION ALERT DISPATCH
@@ -2579,7 +2785,7 @@ app.post('/api/ai/test-lead-alert', async (req: Request, res: Response) => {
 // 12. CATEGORIES ENDPOINT (/api/categories)
 app.all('/api/categories', async (req: Request, res: Response) => {
   if (req.method === 'GET') {
-    const username = ((req.query.username as string) || '').trim().toLowerCase();
+    const username = ((req.query.username as string) || 'admin').trim().toLowerCase();
 
     if (getPool()) {
       const pool = getPool();
@@ -2591,18 +2797,31 @@ app.all('/api/categories', async (req: Request, res: Response) => {
               username VARCHAR(255) NOT NULL,
               category_name VARCHAR(255) NOT NULL,
               category_image_url TEXT DEFAULT '',
+              parent_id INT DEFAULT 0,
+              parent_name VARCHAR(255) DEFAULT '',
               created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
               UNIQUE(username, category_name)
             );
           `);
 
           const catRes = await pool.query(
-            `SELECT c.id, c.category_name, COALESCE(c.category_image_url, '') as category_image_url, COUNT(p.id)::int as product_count
+            `SELECT c.id,
+                    c.category_name,
+                    c.category_name as name,
+                    COALESCE(c.category_image_url, '') as category_image_url,
+                    COALESCE(c.parent_id, 0)::int as parent_id,
+                    COALESCE(c.parent_name, '') as parent_name,
+                    (SELECT COUNT(*)::int FROM products p
+                     WHERE LOWER(p.username) = LOWER(c.username)
+                       AND (
+                         p.category_id = c.id
+                         OR LOWER(TRIM(COALESCE(p.category, ''))) = LOWER(TRIM(c.category_name))
+                         OR LOWER(TRIM(COALESCE(p.sub_category, ''))) = LOWER(TRIM(c.category_name))
+                       )
+                    ) as product_count
              FROM categories c
-             LEFT JOIN products p ON LOWER(p.category) = LOWER(c.category_name) AND LOWER(p.username) = LOWER(c.username)
              WHERE LOWER(c.username) = LOWER($1)
-             GROUP BY c.id, c.category_name, c.category_image_url
-             ORDER BY c.id ASC`,
+             ORDER BY COALESCE(c.parent_id, 0) ASC, c.id ASC`,
             [username]
           );
 
@@ -2617,12 +2836,21 @@ app.all('/api/categories', async (req: Request, res: Response) => {
     }
 
     const filtered = memoryCategories.filter(c => c.username.toLowerCase() === username);
-    const result = filtered.map(c => {
-      const pCount = memoryCatalog.filter(p => p.username.toLowerCase() === username && (p.category || '').toLowerCase() === c.category_name.toLowerCase()).length;
+    const result = filtered.map((c: any) => {
+      const pCount = memoryCatalog.filter(p =>
+        p.username.toLowerCase() === username &&
+        (
+          (p.category || '').toLowerCase() === c.category_name.toLowerCase() ||
+          ((p as any).sub_category || '').toLowerCase() === c.category_name.toLowerCase()
+        )
+      ).length;
       return {
         id: c.id,
         category_name: c.category_name,
-        category_image_url: c.category_image_url,
+        name: c.category_name,
+        category_image_url: c.category_image_url || '',
+        parent_id: c.parent_id || 0,
+        parent_name: c.parent_name || '',
         product_count: pCount
       };
     });
@@ -2633,14 +2861,17 @@ app.all('/api/categories', async (req: Request, res: Response) => {
     });
   }
 
-  if (req.method === 'POST') {
+  if (req.method === 'POST' || req.method === 'PUT') {
     let body = req.body;
     if (typeof body === 'string') {
       try { body = JSON.parse(body); } catch {}
     }
-    const username = String(body?.username || '').trim().toLowerCase();
-    const categoryName = String(body?.category_name || body?.category || '').trim();
+    const id = parseInt(String(body?.id || 0), 10);
+    const username = String(body?.username || 'admin').trim().toLowerCase();
+    const categoryName = String(body?.category_name || body?.name || body?.category || '').trim();
     const categoryImageUrl = String(body?.category_image_url || body?.image_url || '').trim();
+    const parentId = parseInt(String(body?.parent_id || 0), 10) || 0;
+    const parentName = String(body?.parent_name || body?.parent_category || '').trim();
 
     if (!categoryName) {
       return res.status(400).json({ status: 'error', message: 'Category Name is required' });
@@ -2650,45 +2881,92 @@ app.all('/api/categories', async (req: Request, res: Response) => {
       const pool = getPool();
       if (pool) {
         try {
-          await pool.query(`
-            CREATE TABLE IF NOT EXISTS categories (
-              id SERIAL PRIMARY KEY,
-              username VARCHAR(255) NOT NULL,
-              category_name VARCHAR(255) NOT NULL,
-              category_image_url TEXT DEFAULT '',
-              created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-              UNIQUE(username, category_name)
+          if (id > 0) {
+            const oldCatRes = await pool.query(
+              `SELECT category_name FROM categories WHERE id = $1 AND LOWER(username) = LOWER($2)`,
+              [id, username]
             );
-          `);
+            const oldName = oldCatRes.rows[0]?.category_name || '';
+
+            await pool.query(
+              `UPDATE categories
+               SET category_name = $1,
+                   category_image_url = $2,
+                   parent_id = $3,
+                   parent_name = $4
+               WHERE id = $5 AND LOWER(username) = LOWER($6)`,
+              [categoryName, categoryImageUrl, parentId, parentName, id, username]
+            );
+
+            if (oldName && oldName !== categoryName) {
+              await pool.query(
+                `UPDATE categories SET parent_name = $1 WHERE LOWER(username) = LOWER($2) AND LOWER(parent_name) = LOWER($3)`,
+                [categoryName, username, oldName]
+              );
+              await pool.query(
+                `UPDATE products SET category = $1 WHERE LOWER(username) = LOWER($2) AND LOWER(category) = LOWER($3)`,
+                [categoryName, username, oldName]
+              );
+              await pool.query(
+                `UPDATE products SET sub_category = $1 WHERE LOWER(username) = LOWER($2) AND LOWER(sub_category) = LOWER($3)`,
+                [categoryName, username, oldName]
+              );
+            }
+
+            return res.json({
+              status: 'success',
+              id,
+              category_name: categoryName,
+              category_image_url: categoryImageUrl,
+              parent_id: parentId,
+              parent_name: parentName,
+              message: 'Category updated successfully!'
+            });
+          }
 
           const insertRes = await pool.query(
-            `INSERT INTO categories (username, category_name, category_image_url)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (username, category_name) DO UPDATE SET category_image_url = EXCLUDED.category_image_url
+            `INSERT INTO categories (username, category_name, category_image_url, parent_id, parent_name)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (username, category_name) DO UPDATE SET
+               category_image_url = CASE WHEN EXCLUDED.category_image_url != '' THEN EXCLUDED.category_image_url ELSE categories.category_image_url END,
+               parent_id = EXCLUDED.parent_id,
+               parent_name = EXCLUDED.parent_name
              RETURNING id`,
-            [username, categoryName, categoryImageUrl]
+            [username, categoryName, categoryImageUrl, parentId, parentName]
           );
 
           return res.json({
             status: 'success',
             id: insertRes.rows[0]?.id || 1,
-            message: 'Category created successfully!'
+            category_name: categoryName,
+            category_image_url: categoryImageUrl,
+            parent_id: parentId,
+            parent_name: parentName,
+            message: 'Category saved successfully!'
           });
         } catch (err: any) {
-          return res.status(500).json({ status: 'error', message: err?.message || 'Database error creating category' });
+          return res.status(500).json({ status: 'error', message: err?.message || 'Database error saving category' });
         }
       }
     }
 
-    let existing = memoryCategories.find(c => c.username.toLowerCase() === username && c.category_name.toLowerCase() === categoryName.toLowerCase());
+    let existing: any = id > 0
+      ? memoryCategories.find(c => c.id === id && c.username.toLowerCase() === username)
+      : memoryCategories.find(c => c.username.toLowerCase() === username && c.category_name.toLowerCase() === categoryName.toLowerCase());
+
     if (existing) {
+      existing.category_name = categoryName;
       existing.category_image_url = categoryImageUrl;
+      existing.parent_id = parentId;
+      existing.parent_name = parentName;
     } else {
       existing = {
         id: nextCategoryId++,
         username,
         category_name: categoryName,
         category_image_url: categoryImageUrl,
+        parent_id: parentId,
+        parent_name: parentName,
         created_at: new Date().toISOString()
       };
       memoryCategories.push(existing);
@@ -2697,13 +2975,17 @@ app.all('/api/categories', async (req: Request, res: Response) => {
     return res.json({
       status: 'success',
       id: existing.id,
-      message: 'Category created successfully!'
+      category_name: categoryName,
+      category_image_url: categoryImageUrl,
+      parent_id: parentId,
+      parent_name: parentName,
+      message: 'Category saved successfully!'
     });
   }
 
   if (req.method === 'DELETE') {
     const id = parseInt((req.query.id as string) || (req.body?.id as string) || '0', 10);
-    const username = String(req.query.username || req.body?.username || '').trim().toLowerCase();
+    const username = String(req.query.username || req.body?.username || 'admin').trim().toLowerCase();
 
     if (getPool()) {
       const pool = getPool();
@@ -2731,49 +3013,113 @@ app.all('/api/categories', async (req: Request, res: Response) => {
   return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 });
 
-// 12C. SMART AI PRODUCT & SERVICE CATALOG (/api/products)
-app.get('/api/products', async (req: Request, res: Response) => {
-  const username = ((req.query.username as string) || '').trim().toLowerCase();
+function resolveBusinessUsername(req: Request, bodyUsername?: string): string {
+  const fromQuery = String(req.query.username || bodyUsername || '').trim().replace(/^@/, '');
+  if (fromQuery) return fromQuery.toLowerCase();
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token.startsWith('wamart-token-')) {
+      const extracted = token.slice('wamart-token-'.length).trim().replace(/^@/, '');
+      if (extracted) return extracted.toLowerCase();
+    }
+  }
+  return 'admin';
+}
+
+// 12C. SMART AI PRODUCT & SERVICE CATALOG (/api/products & /api/business/products)
+app.get(['/api/products', '/api/business/products'], async (req: Request, res: Response) => {
+  const username = resolveBusinessUsername(req);
 
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
-        let rows = await pool.query(
-          `SELECT id, name, COALESCE(price, '₹0') as price, COALESCE(description, '') as description, COALESCE(category, '') as category, COALESCE(in_stock, true) as in_stock, COALESCE(mrp, 0)::float as mrp, COALESCE(sale_price, 0)::float as sale_price, COALESCE(product_image_url, image_url, '') as product_image_url, COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link
-           FROM products WHERE LOWER(username) = LOWER($1) ORDER BY id ASC`,
+        const rows = await pool.query(
+          `SELECT id,
+                  COALESCE(category_id, 0)::int as category_id,
+                  name,
+                  COALESCE(sku, '') as sku,
+                  COALESCE(price, '₹0') as price,
+                  COALESCE(description, '') as description,
+                  COALESCE(category, '') as category,
+                  COALESCE(sub_category, '') as sub_category,
+                  COALESCE(sub_category_id, 0)::int as sub_category_id,
+                  COALESCE(item_type, 'product') as item_type,
+                  COALESCE(unit_type, 'custom') as unit_type,
+                  COALESCE(variants, '[]'::jsonb) as variants,
+                  COALESCE(images, '[]'::jsonb) as images,
+                  COALESCE(in_stock, true) as in_stock,
+                  COALESCE(stock_quantity, 50)::int as stock_quantity,
+                  COALESCE(low_stock_threshold, 5)::int as low_stock_threshold,
+                  COALESCE(mrp, 0)::float as mrp,
+                  COALESCE(sale_price, 0)::float as sale_price,
+                  COALESCE(product_image_url, image_url, '') as product_image_url,
+                  COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link
+           FROM products
+           WHERE LOWER(username) = LOWER($1)
+           ORDER BY id ASC`,
           [username]
         );
 
-        if (rows.rows.length > 0) {
-          const products = rows.rows.map((r, index) => ({
+        const products = rows.rows.map((r) => {
+          let parsedImages: string[] = [];
+          if (Array.isArray(r.images)) {
+            parsedImages = r.images.filter(Boolean);
+          } else if (typeof r.images === 'string') {
+            try { parsedImages = JSON.parse(r.images).filter(Boolean); } catch {}
+          }
+          if (parsedImages.length === 0 && r.product_image_url) {
+            parsedImages = [r.product_image_url];
+          }
+          const primaryImg = parsedImages[0] || r.product_image_url || '';
+
+          let parsedVariants: any[] = [];
+          if (Array.isArray(r.variants)) {
+            parsedVariants = r.variants;
+          } else if (typeof r.variants === 'string') {
+            try { parsedVariants = JSON.parse(r.variants); } catch {}
+          }
+
+          return {
             id: r.id,
+            category_id: r.category_id || 0,
             name: r.name,
+            sku: r.sku || `SKU-${String(r.id).padStart(4, '0')}`,
             price: r.price,
-            mrp: r.mrp,
-            sale_price: r.sale_price,
+            mrp: Number(r.mrp) || 0,
+            sale_price: Number(r.sale_price) || parseFloat(String(r.price || '').replace(/[^\d.]/g, '')) || 0,
             details: r.description,
             description: r.description,
             category: r.category,
             category_name: r.category,
-            in_stock: r.in_stock,
-            product_image_url: r.product_image_url,
-            image_url: r.product_image_url,
+            sub_category: r.sub_category || '',
+            sub_category_id: r.sub_category_id || 0,
+            item_type: r.item_type || 'product',
+            unit_type: r.unit_type || 'custom',
+            variants: parsedVariants,
+            images: parsedImages,
+            in_stock: Boolean(r.in_stock),
+            stock_quantity: typeof r.stock_quantity === 'number' ? r.stock_quantity : 50,
+            low_stock_threshold: typeof r.low_stock_threshold === 'number' ? r.low_stock_threshold : 5,
+            product_image_url: primaryImg,
+            image_url: primaryImg,
             whatsapp_catalog_link: r.whatsapp_catalog_link,
             whatsapp_url: r.whatsapp_catalog_link
-          }));
-          return res.json({ status: 'success', products });
-        }
+          };
+        });
+        return res.json({ status: 'success', products });
       } catch (err) {
         console.warn('DB products fetch fallback:', err);
       }
     }
   }
 
-  let items = memoryCatalog.filter(m => m.username.toLowerCase() === username);
-  const products = items.map((m, index) => ({
+  const items = memoryCatalog.filter(m => m.username.toLowerCase() === username);
+  const products = items.map((m) => ({
     id: m.id,
     name: m.name,
+    sku: (m as any).sku || `SKU-${String(m.id).padStart(4, '0')}`,
     price: m.price,
     mrp: (m as any).mrp || 0,
     sale_price: (m as any).sale_price || parseFloat(String(m.price).replace(/[^\d.]/g, '')) || 0,
@@ -2781,7 +3127,15 @@ app.get('/api/products', async (req: Request, res: Response) => {
     description: m.details,
     category: m.category || '',
     category_name: m.category || '',
+    sub_category: (m as any).sub_category || '',
+    sub_category_id: (m as any).sub_category_id || 0,
+    item_type: m.item_type || 'product',
+    unit_type: m.unit_type || 'custom',
+    variants: Array.isArray(m.variants) ? m.variants : [],
+    images: (m as any).images || (m.image_url ? [m.image_url] : []),
     in_stock: m.in_stock ?? true,
+    stock_quantity: (m as any).stock_quantity ?? 50,
+    low_stock_threshold: (m as any).low_stock_threshold ?? 5,
     product_image_url: m.image_url || '',
     image_url: m.image_url || '',
     whatsapp_catalog_link: m.whatsapp_catalog_link || '',
@@ -2790,7 +3144,7 @@ app.get('/api/products', async (req: Request, res: Response) => {
   return res.json({ status: 'success', products });
 });
 
-app.post('/api/products', async (req: Request, res: Response) => {
+app.post(['/api/products', '/api/business/products'], async (req: Request, res: Response) => {
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}
@@ -2798,56 +3152,131 @@ app.post('/api/products', async (req: Request, res: Response) => {
   const id = parseInt(String(body?.id || 0), 10);
   const {
     name = '',
+    sku = '',
     price = '',
     mrp = 0,
     sale_price = 0,
     description = '',
     details = '',
-    username = '',
+    username = 'admin',
     item_type = 'product',
     unit_type = 'custom',
     variants = [],
+    images = [],
     whatsapp_catalog_link = '',
     whatsapp_url = '',
     image_url = '',
     product_image_url = '',
     category = '',
     category_name = '',
-    in_stock = true
+    category_id = 0,
+    sub_category = '',
+    sub_category_id = 0,
+    in_stock = true,
+    stock_quantity,
+    low_stock_threshold,
+    stock_delta
   } = body || {};
 
-  const cleanUser = String(username).trim().toLowerCase();
-  const catName = String(category_name || category || '').trim();
-  const imgUrl = String(product_image_url || image_url || '').trim();
-  const waUrl = String(whatsapp_url || whatsapp_catalog_link || '').trim();
-  const mrpVal = parseFloat(mrp) || 0;
-  const salePriceVal = parseFloat(sale_price) || 0;
-  const descStr = String(description || details || '').trim();
-  const inStockVal = Boolean(in_stock);
+  const cleanUser = String(username || 'admin').trim().toLowerCase();
 
-  // If toggling stock status directly with id
-  if (id > 0 && !name) {
+  // Quick stock status or stock quantity adjustment when name is omitted
+  if (id > 0 && !String(name).trim()) {
     if (getPool()) {
       const pool = getPool();
       if (pool) {
         try {
-          await pool.query(`UPDATE products SET in_stock = $1 WHERE id = $2 AND LOWER(username) = LOWER($3)`, [inStockVal, id, cleanUser]);
-          return res.json({ status: 'success', message: 'Stock status updated' });
-        } catch (e) {}
+          if (stock_delta !== undefined) {
+            const deltaVal = parseInt(String(stock_delta), 10) || 0;
+            const updRes = await pool.query(
+              `UPDATE products
+               SET stock_quantity = GREATEST(0, COALESCE(stock_quantity, 0) + $1),
+                   in_stock = CASE WHEN GREATEST(0, COALESCE(stock_quantity, 0) + $1) > 0 THEN true ELSE false END
+               WHERE id = $2 AND LOWER(username) = LOWER($3)
+               RETURNING stock_quantity, in_stock`,
+              [deltaVal, id, cleanUser]
+            );
+            return res.json({
+              status: 'success',
+              stock_quantity: updRes.rows[0]?.stock_quantity ?? 0,
+              in_stock: updRes.rows[0]?.in_stock ?? false,
+              message: 'Stock quantity updated'
+            });
+          }
+          if (stock_quantity !== undefined) {
+            const newQty = Math.max(0, parseInt(String(stock_quantity), 10) || 0);
+            const autoInStock = body?.in_stock !== undefined ? Boolean(in_stock) : newQty > 0;
+            await pool.query(
+              `UPDATE products SET stock_quantity = $1, in_stock = $2 WHERE id = $3 AND LOWER(username) = LOWER($4)`,
+              [newQty, autoInStock, id, cleanUser]
+            );
+            return res.json({
+              status: 'success',
+              stock_quantity: newQty,
+              in_stock: autoInStock,
+              message: 'Stock quantity updated'
+            });
+          }
+          const inStockVal = Boolean(in_stock);
+          await pool.query(
+            `UPDATE products SET in_stock = $1 WHERE id = $2 AND LOWER(username) = LOWER($3)`,
+            [inStockVal, id, cleanUser]
+          );
+          return res.json({ status: 'success', in_stock: inStockVal, message: 'Stock status updated' });
+        } catch (e: any) {
+          return res.status(500).json({ status: 'error', message: e?.message || 'Failed to update stock' });
+        }
       }
     }
-    const memItem = memoryCatalog.find(m => m.id === id);
+    const memItem: any = memoryCatalog.find(m => m.id === id);
     if (memItem) {
-      memItem.in_stock = inStockVal;
+      if (stock_delta !== undefined) {
+        memItem.stock_quantity = Math.max(0, (memItem.stock_quantity ?? 50) + (parseInt(String(stock_delta), 10) || 0));
+        memItem.in_stock = memItem.stock_quantity > 0;
+      } else if (stock_quantity !== undefined) {
+        memItem.stock_quantity = Math.max(0, parseInt(String(stock_quantity), 10) || 0);
+        memItem.in_stock = body?.in_stock !== undefined ? Boolean(in_stock) : memItem.stock_quantity > 0;
+      } else {
+        memItem.in_stock = Boolean(in_stock);
+      }
     }
     return res.json({ status: 'success', message: 'Stock status updated' });
   }
 
-  if (!name) {
-    return res.status(400).json({ error: 'Product Name is required' });
+  const cleanName = String(name).trim();
+  if (!cleanName) {
+    return res.status(400).json({ status: 'error', error: 'Product Name is required', message: 'Product Name is required' });
   }
 
-  let summaryPrice = price;
+  const catName = String(category_name || category || '').trim();
+  const subCatName = String(sub_category || '').trim();
+  const catIdVal = parseInt(String(category_id || 0), 10) || 0;
+  const subCatIdVal = parseInt(String(sub_category_id || 0), 10) || 0;
+  const cleanSku = String(sku || '').trim();
+
+  const rawImages: string[] = Array.isArray(images)
+    ? images.map((u: any) => String(u || '').trim()).filter(Boolean)
+    : [];
+  const fallbackSingleImg = String(product_image_url || image_url || '').trim();
+  if (rawImages.length === 0 && fallbackSingleImg) {
+    rawImages.push(fallbackSingleImg);
+  }
+  const cleanImages = rawImages.slice(0, 3);
+  const imgUrl = cleanImages[0] || fallbackSingleImg || '';
+
+  const waUrl = String(whatsapp_url || whatsapp_catalog_link || '').trim();
+  const mrpVal = parseFloat(String(mrp)) || 0;
+  const salePriceVal = parseFloat(String(sale_price)) || 0;
+  const descStr = String(description || details || '').trim();
+  const stockQtyVal = stock_quantity !== undefined && stock_quantity !== ''
+    ? Math.max(0, parseInt(String(stock_quantity), 10) || 0)
+    : 50;
+  const lowStockVal = low_stock_threshold !== undefined && low_stock_threshold !== ''
+    ? Math.max(0, parseInt(String(low_stock_threshold), 10) || 5)
+    : 5;
+  const inStockVal = Boolean(in_stock);
+
+  let summaryPrice = String(price || '').trim();
   if (!summaryPrice && salePriceVal > 0) {
     summaryPrice = `₹${salePriceVal}`;
   }
@@ -2855,7 +3284,8 @@ app.post('/api/products', async (req: Request, res: Response) => {
     summaryPrice = '₹0';
   }
 
-  const jsonVariants = JSON.stringify(variants);
+  const jsonVariants = JSON.stringify(Array.isArray(variants) ? variants : []);
+  const jsonImages = JSON.stringify(cleanImages);
 
   if (getPool()) {
     const pool = getPool();
@@ -2863,45 +3293,146 @@ app.post('/api/products', async (req: Request, res: Response) => {
       try {
         if (id > 0) {
           await pool.query(
-            `UPDATE products SET category = $2, name = $3, description = $4, mrp = $5, sale_price = $6, price = $7, item_type = $8, unit_type = $9, variants = $10::jsonb, whatsapp_catalog_link = $11, image_url = $12, product_image_url = $12, in_stock = $13 WHERE id = $14 AND LOWER(username) = LOWER($1)`,
-            [cleanUser, catName, name, descStr, mrpVal, salePriceVal, summaryPrice, item_type, unit_type, jsonVariants, waUrl, imgUrl, inStockVal, id]
+            `UPDATE products
+             SET category_id = $2,
+                 category = $3,
+                 sub_category = $4,
+                 sub_category_id = $5,
+                 name = $6,
+                 sku = $7,
+                 description = $8,
+                 mrp = $9,
+                 sale_price = $10,
+                 price = $11,
+                 item_type = $12,
+                 unit_type = $13,
+                 variants = $14::jsonb,
+                 whatsapp_catalog_link = $15,
+                 image_url = $16,
+                 product_image_url = $16,
+                 images = $17::jsonb,
+                 in_stock = $18,
+                 stock_quantity = $19,
+                 low_stock_threshold = $20
+             WHERE id = $21 AND LOWER(username) = LOWER($1)`,
+            [
+              cleanUser,
+              catIdVal,
+              catName,
+              subCatName,
+              subCatIdVal,
+              cleanName,
+              cleanSku,
+              descStr,
+              mrpVal,
+              salePriceVal,
+              summaryPrice,
+              item_type || 'product',
+              unit_type || 'custom',
+              jsonVariants,
+              waUrl,
+              imgUrl,
+              jsonImages,
+              inStockVal,
+              stockQtyVal,
+              lowStockVal,
+              id
+            ]
           );
-          return res.json({ status: 'success', id, message: 'Product updated!' });
+          return res.json({
+            status: 'success',
+            id,
+            image_url: imgUrl,
+            images: cleanImages,
+            message: 'Product updated successfully!'
+          });
         }
 
         const result = await pool.query(
-          `INSERT INTO products (username, category, name, description, price, mrp, sale_price, item_type, unit_type, variants, whatsapp_catalog_link, image_url, product_image_url, in_stock)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $12, $13) RETURNING id`,
-          [cleanUser, catName, name, descStr, summaryPrice, mrpVal, salePriceVal, item_type, unit_type, jsonVariants, waUrl, imgUrl, inStockVal]
+          `INSERT INTO products (
+             username, category_id, category, sub_category, sub_category_id,
+             name, sku, description, price, mrp, sale_price,
+             item_type, unit_type, variants, whatsapp_catalog_link,
+             image_url, product_image_url, images, in_stock, stock_quantity, low_stock_threshold
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $16, $17::jsonb, $18, $19, $20)
+           RETURNING id`,
+          [
+            cleanUser,
+            catIdVal,
+            catName,
+            subCatName,
+            subCatIdVal,
+            cleanName,
+            cleanSku,
+            descStr,
+            summaryPrice,
+            mrpVal,
+            salePriceVal,
+            item_type || 'product',
+            unit_type || 'custom',
+            jsonVariants,
+            waUrl,
+            imgUrl,
+            jsonImages,
+            inStockVal,
+            stockQtyVal,
+            lowStockVal
+          ]
         );
         const newId = result.rows[0]?.id;
         return res.json({
           status: 'success',
           id: newId,
+          image_url: imgUrl,
+          images: cleanImages,
           message: 'Product saved to catalog!',
-          product: { id: newId, name, price: summaryPrice, mrp: mrpVal, sale_price: salePriceVal, category: catName, in_stock: inStockVal }
+          product: {
+            id: newId,
+            name: cleanName,
+            sku: cleanSku || `SKU-${String(newId).padStart(4, '0')}`,
+            price: summaryPrice,
+            mrp: mrpVal,
+            sale_price: salePriceVal,
+            category: catName,
+            sub_category: subCatName,
+            in_stock: inStockVal,
+            stock_quantity: stockQtyVal,
+            low_stock_threshold: lowStockVal,
+            images: cleanImages
+          }
         });
       } catch (err: any) {
         console.error('Failed to insert/update product in Neon DB:', err);
+        return res.status(500).json({ status: 'error', message: err?.message || 'Database error saving product' });
       }
     }
   }
 
   // Fallback to in-memory catalog
-  const newItem: CatalogItem = {
+  const newItem: any = {
     id: id > 0 ? id : nextCatalogId++,
     username: cleanUser,
-    name,
+    name: cleanName,
+    sku: cleanSku,
     price: summaryPrice,
+    mrp: mrpVal,
+    sale_price: salePriceVal,
     details: descStr,
+    description: descStr,
     tag: `<ITEM_${id || memoryCatalog.length + 1}>`,
     item_type: (item_type as any) || 'product',
     unit_type,
-    variants,
+    variants: Array.isArray(variants) ? variants : [],
     whatsapp_catalog_link: waUrl,
     image_url: imgUrl,
+    product_image_url: imgUrl,
+    images: cleanImages,
     category: catName,
+    sub_category: subCatName,
     in_stock: inStockVal,
+    stock_quantity: stockQtyVal,
+    low_stock_threshold: lowStockVal,
     created_at: new Date().toISOString()
   };
   if (id > 0) {
@@ -2915,6 +3446,8 @@ app.post('/api/products', async (req: Request, res: Response) => {
   return res.json({
     status: 'success',
     id: newItem.id,
+    image_url: imgUrl,
+    images: cleanImages,
     message: 'Product saved to catalog!',
     product: newItem
   });
@@ -2922,15 +3455,36 @@ app.post('/api/products', async (req: Request, res: Response) => {
 
 app.delete('/api/products', async (req: Request, res: Response) => {
   const id = req.query.id as string;
+  const username = String(req.query.username || '').trim().toLowerCase();
   if (!id) {
-    return res.status(400).json({ error: 'Missing product id' });
+    return res.status(400).json({ status: 'error', error: 'Missing product id' });
   }
+
+  let deletedImages: string[] = [];
 
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
-        await pool.query('DELETE FROM products WHERE id = $1', [id]);
+        const imgRes = await pool.query(
+          `SELECT COALESCE(images, '[]'::jsonb) as images, COALESCE(product_image_url, image_url, '') as image_url
+           FROM products WHERE id = $1`,
+          [id]
+        );
+        if (imgRes.rows[0]) {
+          const row = imgRes.rows[0];
+          if (Array.isArray(row.images)) {
+            deletedImages = row.images.filter(Boolean);
+          }
+          if (deletedImages.length === 0 && row.image_url) {
+            deletedImages = [row.image_url];
+          }
+        }
+        if (username) {
+          await pool.query('DELETE FROM products WHERE id = $1 AND LOWER(username) = LOWER($2)', [id, username]);
+        } else {
+          await pool.query('DELETE FROM products WHERE id = $1', [id]);
+        }
       } catch (err) {
         console.warn('Failed to delete from DB:', err);
       }
@@ -2943,7 +3497,11 @@ app.delete('/api/products', async (req: Request, res: Response) => {
     memoryCatalog.splice(idx, 1);
   }
 
-  return res.json({ status: 'success', message: 'Item deleted from catalog' });
+  return res.json({
+    status: 'success',
+    deleted_images: deletedImages,
+    message: 'Item deleted from catalog'
+  });
 });
 
 // 12D. BUSINESS DASHBOARD STATS (REAL LIVE METRICS)
@@ -3022,31 +3580,540 @@ app.post(['/webhook/payment', '/api/webhook/paytm'], async (req: Request, res: R
   });
 });
 
-app.get('/api/business/dashboard', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
+app.get(['/api/business/dashboard', '/api/business/dashboard/stats'], async (req: Request, res: Response) => {
+  const username = resolveBusinessUsername(req);
   const campaign = activeCampaigns.get(username);
   const activeCampaignsCount = (campaign && campaign.status === 'running') ? 1 : 0;
 
-  let leadsCount = 0;
-  if (getPool()) {
-    const pool = getPool();
-    if (pool) {
-      try {
-        const resLeads = await pool.query(
-          `SELECT COUNT(*) FROM leads WHERE LOWER(username) = LOWER($1)`,
-          [username]
-        );
-        leadsCount = parseInt(resLeads.rows[0]?.count || '0', 10);
-      } catch {}
+  let storeName = username;
+  let storeSlug = username;
+  let deliveryRadiusKm = 15;
+  let freeDeliveryThreshold = 499;
+  let waConnected = false;
+  let waJid = '';
+  let operatingHours = '09:00 AM - 09:00 PM';
+
+  let totalChats = 0;
+  let totalProducts = 0;
+  let leadsCapturedTotal = 0;
+  let leadsCapturedToday = 0;
+  let messagesAutoRepliedToday = 0;
+
+  let grossSalesToday = 0;
+  let grossSalesYesterday = 0;
+  let totalOrdersToday = 0;
+  let webOrdersToday = 0;
+  let whatsappOrdersToday = 0;
+  let upiCollectedAmount = 0;
+  let codPendingAmount = 0;
+
+  const sevenDayLabels: string[] = [];
+  const sevenDaySales: number[] = [];
+  const sevenDayOrders: number[] = [];
+  const dayBucketMap = new Map<string, { sales: number; orders: number }>();
+
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const label = d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+    sevenDayLabels.push(label);
+    dayBucketMap.set(key, { sales: 0, orders: 0 });
+  }
+
+  let webOrdersCount7d = 0;
+  let whatsappOrdersCount7d = 0;
+  let webRevenue7d = 0;
+  let whatsappRevenue7d = 0;
+
+  let recentOrders: any[] = [];
+  let lowStockItems: any[] = [];
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      // 1. User / Store profile & WhatsApp status
+      const uRes = await pool.query(
+        `SELECT COALESCE(NULLIF(store_name, ''), NULLIF(account_name, ''), username) as store_name,
+                COALESCE(NULLIF(store_slug, ''), username) as store_slug,
+                COALESCE(delivery_radius_km, max_delivery_radius_km, 15)::float as delivery_radius_km,
+                COALESCE(free_delivery_threshold, 499)::float as free_delivery_threshold,
+                COALESCE(status, 'Disconnected') as status,
+                COALESCE(wa_jid, '') as wa_jid,
+                COALESCE(NULLIF(operating_hours, ''), '09:00 AM - 09:00 PM') as operating_hours
+         FROM users
+         WHERE LOWER(username) = LOWER($1) OR LOWER(store_slug) = LOWER($1)
+         LIMIT 1`,
+        [username]
+      );
+      if (uRes.rows.length > 0) {
+        const u = uRes.rows[0];
+        storeName = u.store_name || username;
+        storeSlug = u.store_slug || username;
+        deliveryRadiusKm = Number(u.delivery_radius_km || 15);
+        freeDeliveryThreshold = Number(u.free_delivery_threshold || 499);
+        waJid = u.wa_jid || '';
+        waConnected = u.status === 'Connected' || Boolean(waJid);
+        operatingHours = u.operating_hours || '09:00 AM - 09:00 PM';
+      }
+    } catch (e: any) {
+      console.warn('Dashboard user profile query notice:', e.message);
+    }
+
+    try {
+      // 2. Leads & AI Chats stats
+      const lRes = await pool.query(
+        `SELECT COUNT(*)::int as total_leads,
+                COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int as today_leads
+         FROM leads
+         WHERE LOWER(username) = LOWER($1)`,
+        [username]
+      );
+      if (lRes.rows.length > 0) {
+        leadsCapturedTotal = Number(lRes.rows[0].total_leads || 0);
+        leadsCapturedToday = Number(lRes.rows[0].today_leads || 0);
+      }
+
+      const cRes = await pool.query(
+        `SELECT COUNT(DISTINCT customer_phone)::int as total_chats,
+                COUNT(*) FILTER (WHERE (LOWER(role) IN ('assistant', 'ai', 'bot') OR LOWER(sender_type) IN ('ai', 'bot')) AND created_at >= CURRENT_DATE)::int as today_ai_replies,
+                COUNT(*) FILTER (WHERE LOWER(role) IN ('assistant', 'ai', 'bot') OR LOWER(sender_type) IN ('ai', 'bot'))::int as total_ai_replies
+         FROM customer_chats
+         WHERE LOWER(username) = LOWER($1)`,
+        [username]
+      );
+      if (cRes.rows.length > 0) {
+        totalChats = Number(cRes.rows[0].total_chats || 0);
+        messagesAutoRepliedToday = Number(cRes.rows[0].today_ai_replies || cRes.rows[0].total_ai_replies || 0);
+      }
+    } catch (e: any) {
+      console.warn('Dashboard leads/chats query notice:', e.message);
+    }
+
+    try {
+      // 3. Products count & Low Stock alerts
+      const pCountRes = await pool.query(
+        `SELECT COUNT(*)::int as cnt FROM products WHERE LOWER(username) = LOWER($1)`,
+        [username]
+      );
+      totalProducts = Number(pCountRes.rows[0]?.cnt || 0);
+
+      const lowStockRes = await pool.query(
+        `SELECT id,
+                name,
+                COALESCE(sku, '') as sku,
+                COALESCE(category, 'General') as category,
+                COALESCE(in_stock, true) as in_stock,
+                COALESCE(stock_quantity, 50)::int as stock_quantity,
+                COALESCE(low_stock_threshold, 5)::int as low_stock_threshold,
+                COALESCE(sale_price, 0)::float as sale_price,
+                COALESCE(price, '₹0') as price
+         FROM products
+         WHERE LOWER(username) = LOWER($1)
+           AND (COALESCE(in_stock, true) = false OR COALESCE(stock_quantity, 50) <= COALESCE(low_stock_threshold, 5))
+         ORDER BY COALESCE(in_stock, true) ASC, COALESCE(stock_quantity, 50) ASC
+         LIMIT 5`,
+        [username]
+      );
+      lowStockItems = lowStockRes.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        sku: r.sku || `SKU-${String(r.id).padStart(4, '0')}`,
+        category: r.category || 'General',
+        in_stock: Boolean(r.in_stock),
+        stock_quantity: r.in_stock ? Number(r.stock_quantity ?? 0) : 0,
+        low_stock_threshold: Number(r.low_stock_threshold ?? 5),
+        price: Number(r.sale_price) || parseFloat(String(r.price || '').replace(/[^\d.]/g, '')) || 0
+      }));
+    } catch (e: any) {
+      console.warn('Dashboard products/low-stock query notice:', e.message);
+    }
+
+    try {
+      // 4. Orders analytics & Recent orders from orders table (plus customer_order_states fallback)
+      const oRes = await pool.query(
+        `SELECT id,
+                order_id,
+                jid,
+                customer_phone,
+                tenant_id,
+                customer_name,
+                delivery_phone,
+                delivery_address,
+                items,
+                COALESCE(total_amount, 0)::float as total_amount,
+                COALESCE(payment_mode, 'COD') as payment_mode,
+                COALESCE(payment_status, 'PENDING') as payment_status,
+                COALESCE(order_status, 'NEW') as order_status,
+                created_at
+         FROM orders
+         WHERE LOWER(tenant_id) = LOWER($1) OR LOWER(tenant_id) = LOWER($2)
+         ORDER BY created_at DESC
+         LIMIT 200`,
+        [username, storeSlug]
+      );
+
+      let rawOrders = oRes.rows;
+
+      // Also merge any customer_order_states orders that aren't in orders table
+      const sRes = await pool.query(
+        `SELECT id,
+                order_id,
+                jid,
+                customer_phone,
+                COALESCE(tenant_id, username) as tenant_id,
+                customer_name,
+                delivery_phone,
+                delivery_address,
+                items,
+                COALESCE(total_amount, 0)::float as total_amount,
+                COALESCE(payment_mode, 'COD') as payment_mode,
+                COALESCE(payment_status, 'PENDING') as payment_status,
+                COALESCE(order_status, 'NEW') as order_status,
+                COALESCE(updated_at, created_at) as created_at
+         FROM customer_order_states
+         WHERE (LOWER(username) = LOWER($1) OR LOWER(tenant_id) = LOWER($1) OR LOWER(tenant_id) = LOWER($2))
+           AND order_id IS NOT NULL AND order_id != ''
+         ORDER BY updated_at DESC
+         LIMIT 50`,
+        [username, storeSlug]
+      );
+
+      const seenOrderIds = new Set(rawOrders.map((r) => String(r.order_id || '').trim()).filter(Boolean));
+      for (const sr of sRes.rows) {
+        const oid = String(sr.order_id || '').trim();
+        if (oid && !seenOrderIds.has(oid)) {
+          seenOrderIds.add(oid);
+          rawOrders.push(sr);
+        }
+      }
+
+      const todayStr = now.toISOString().slice(0, 10);
+      const yesterdayDate = new Date(now);
+      yesterdayDate.setDate(now.getDate() - 1);
+      const yesterdayStr = yesterdayDate.toISOString().slice(0, 10);
+
+      for (const r of rawOrders) {
+        const amt = Number(r.total_amount || 0);
+        const createdDate = r.created_at ? new Date(r.created_at) : now;
+        const dateKey = !isNaN(createdDate.getTime()) ? createdDate.toISOString().slice(0, 10) : todayStr;
+
+        const orderIdStr = String(r.order_id || `ORD-${r.id}`);
+        const payMode = String(r.payment_mode || 'COD').toUpperCase();
+        const payStatus = String(r.payment_status || 'PENDING').toUpperCase();
+        const isWhatsAppSource =
+          orderIdStr.toUpperCase().startsWith('WA') ||
+          payMode.includes('WHATSAPP') ||
+          (Boolean(r.jid) && !orderIdStr.toUpperCase().startsWith('WEB'));
+        const source = isWhatsAppSource ? 'WhatsApp' : 'Web';
+
+        if (dateKey === todayStr) {
+          grossSalesToday += amt;
+          totalOrdersToday += 1;
+          if (source === 'WhatsApp') {
+            whatsappOrdersToday += 1;
+          } else {
+            webOrdersToday += 1;
+          }
+        } else if (dateKey === yesterdayStr) {
+          grossSalesYesterday += amt;
+        }
+
+        if (payStatus === 'PAID' || payStatus === 'SUCCESS' || payStatus === 'COMPLETED' || payMode.includes('UPI') || payMode.includes('ONLINE')) {
+          if (payStatus === 'PAID' || payStatus === 'SUCCESS' || payStatus === 'COMPLETED') {
+            upiCollectedAmount += amt;
+          } else if (payMode.includes('COD') || payMode.includes('CASH')) {
+            codPendingAmount += amt;
+          } else {
+            upiCollectedAmount += amt;
+          }
+        } else {
+          codPendingAmount += amt;
+        }
+
+        if (dayBucketMap.has(dateKey)) {
+          const b = dayBucketMap.get(dateKey)!;
+          b.sales += amt;
+          b.orders += 1;
+          if (source === 'WhatsApp') {
+            whatsappOrdersCount7d += 1;
+            whatsappRevenue7d += amt;
+          } else {
+            webOrdersCount7d += 1;
+            webRevenue7d += amt;
+          }
+        }
+      }
+
+      for (const [, bucket] of dayBucketMap.entries()) {
+        sevenDaySales.push(Math.round(bucket.sales));
+        sevenDayOrders.push(bucket.orders);
+      }
+
+      recentOrders = rawOrders.slice(0, 10).map((r) => {
+        let parsedItems: any[] = [];
+        if (Array.isArray(r.items)) {
+          parsedItems = r.items;
+        } else if (typeof r.items === 'string') {
+          try { parsedItems = JSON.parse(r.items); } catch { parsedItems = []; }
+        }
+        const itemsSummary = Array.isArray(parsedItems) && parsedItems.length > 0
+          ? parsedItems.map((it: any) => `${it.name || it.product_name || 'Item'} × ${it.quantity || it.qty || 1}`).join(', ')
+          : 'Catalog Order';
+
+        const orderIdStr = String(r.order_id || `ORD-${r.id}`);
+        const payMode = String(r.payment_mode || 'COD').toUpperCase();
+        const isWhatsAppSource =
+          orderIdStr.toUpperCase().startsWith('WA') ||
+          payMode.includes('WHATSAPP') ||
+          (Boolean(r.jid) && !orderIdStr.toUpperCase().startsWith('WEB'));
+
+        return {
+          id: r.id,
+          order_id: orderIdStr,
+          customer_name: r.customer_name || 'Walk-in / WhatsApp Customer',
+          customer_phone: r.customer_phone || r.delivery_phone || '',
+          delivery_address: r.delivery_address || '',
+          items: Array.isArray(parsedItems) ? parsedItems : [],
+          items_summary: itemsSummary,
+          amount: Number(r.total_amount || 0),
+          total_amount: Number(r.total_amount || 0),
+          source: isWhatsAppSource ? 'WhatsApp' : 'Web',
+          payment_method: payMode.includes('UPI') || payMode.includes('ONLINE') ? 'UPI QR' : 'COD',
+          payment_mode: r.payment_mode || 'COD',
+          payment_status: String(r.payment_status || 'PENDING').toUpperCase() === 'PAID' ? 'Paid' : 'Pending',
+          order_status: formatOrderStatusLabel(r.order_status),
+          created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+        };
+      });
+    } catch (e: any) {
+      console.warn('Dashboard orders query notice:', e.message);
     }
   }
 
+  if (sevenDaySales.length === 0) {
+    for (let i = 0; i < 7; i++) {
+      sevenDaySales.push(0);
+      sevenDayOrders.push(0);
+    }
+  }
+
+  let salesGrowthPct = 0;
+  if (grossSalesYesterday > 0) {
+    salesGrowthPct = Number((((grossSalesToday - grossSalesYesterday) / grossSalesYesterday) * 100).toFixed(1));
+  } else if (grossSalesToday > 0) {
+    salesGrowthPct = 100;
+  }
+
   return res.json({
+    status: 'success',
+    username,
+    store_profile: {
+      store_name: storeName,
+      store_slug: storeSlug,
+      delivery_radius_km: deliveryRadiusKm,
+      free_delivery_threshold: freeDeliveryThreshold,
+      wa_connected: waConnected,
+      wa_jid: waJid,
+      operating_hours: operatingHours
+    },
+    kpis: {
+      gross_sales_today: Math.round(grossSalesToday),
+      gross_sales_yesterday: Math.round(grossSalesYesterday),
+      sales_growth_pct: salesGrowthPct,
+      total_orders_today: totalOrdersToday,
+      web_orders_today: webOrdersToday,
+      whatsapp_orders_today: whatsappOrdersToday,
+      upi_collected_amount: Math.round(upiCollectedAmount),
+      cod_pending_amount: Math.round(codPendingAmount),
+      leads_captured_today: leadsCapturedToday || leadsCapturedTotal,
+      messages_auto_replied_today: messagesAutoRepliedToday || stats.totalAiReplies || 0
+    },
+    charts: {
+      seven_day_labels: sevenDayLabels,
+      seven_day_sales: sevenDaySales,
+      seven_day_orders: sevenDayOrders,
+      source_split: {
+        web_orders: webOrdersCount7d,
+        whatsapp_orders: whatsappOrdersCount7d,
+        web_revenue: Math.round(webRevenue7d),
+        whatsapp_revenue: Math.round(whatsappRevenue7d)
+      }
+    },
+    recent_orders: recentOrders,
+    low_stock_items: lowStockItems,
+    // Legacy compatibility fields
     active_campaigns: activeCampaignsCount,
-    leads_captured: leadsCount,
+    total_chats: totalChats,
+    total_products: totalProducts,
+    total_leads: leadsCapturedTotal,
+    leads_captured: leadsCapturedTotal,
     delivered_messages: stats.totalMessagesSent,
-    ai_replies: stats.totalAiReplies
+    ai_replies: messagesAutoRepliedToday || stats.totalAiReplies,
+    wa_connected: waConnected,
+    wa_jid: waJid
   });
+});
+
+function normalizeOrderStatusCode(rawStatus: any): string {
+  const s = String(rawStatus || 'CONFIRMED').toUpperCase().trim();
+  if (s === 'DISPATCHED' || s === 'SHIPPED') return 'DISPATCHED';
+  if (s === 'OUT_FOR_DELIVERY' || s === 'OUT FOR DELIVERY' || s === 'ON_THE_WAY' || s === 'ON THE WAY') return 'OUT_FOR_DELIVERY';
+  if (s === 'DELIVERED' || s === 'COMPLETED') return 'DELIVERED';
+  if (s === 'PROCESSING' || s === 'PREPARING' || s === 'PACKING') return 'PROCESSING';
+  if (s === 'CANCELLED' || s === 'CANCELED') return 'CANCELLED';
+  if (s === 'NEW' || s === 'CONFIRMED' || s === 'ORDER_CONFIRMED' || s === 'IN_PROGRESS') return 'CONFIRMED';
+  return s || 'CONFIRMED';
+}
+
+function formatOrderStatusLabel(rawStatus: any): string {
+  const s = String(rawStatus || 'NEW').toUpperCase().trim();
+  if (s === 'DELIVERED' || s === 'COMPLETED') return 'Delivered';
+  if (s === 'OUT_FOR_DELIVERY' || s === 'OUT FOR DELIVERY' || s === 'ON_THE_WAY' || s === 'ON THE WAY') return 'Out for Delivery';
+  if (s === 'DISPATCHED' || s === 'SHIPPED') return 'Dispatched';
+  if (s === 'PROCESSING' || s === 'PREPARING' || s === 'PACKING') return 'Processing';
+  if (s === 'CANCELLED' || s === 'CANCELED') return 'Cancelled';
+  return 'New';
+}
+
+app.post('/api/business/orders/status', async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const username = resolveBusinessUsername(req, body?.username);
+  const orderId = String(body?.order_id || body?.orderId || '').trim();
+  const rawStatusInput = String(body?.order_status || body?.status || 'DISPATCHED').trim();
+  const newStatus = normalizeOrderStatusCode(rawStatusInput);
+  let paymentStatus = body?.payment_status ? String(body.payment_status).toUpperCase().trim() : '';
+  if (newStatus === 'DELIVERED' && !paymentStatus) {
+    paymentStatus = 'PAID';
+  }
+
+  if (!orderId) {
+    return res.status(400).json({ status: 'error', message: 'order_id is required' });
+  }
+
+  const pool = getPool();
+  if (!pool) {
+    return res.status(500).json({ status: 'error', message: 'Database connection not available' });
+  }
+
+  try {
+    if (paymentStatus) {
+      await pool.query(
+        `UPDATE orders
+         SET order_status = $1, payment_status = $2, updated_at = NOW()
+         WHERE LOWER(order_id) = LOWER($3) AND (LOWER(tenant_id) = LOWER($4) OR $4 = 'admin')`,
+        [newStatus, paymentStatus, orderId, username]
+      );
+      await pool.query(
+        `UPDATE customer_order_states
+         SET order_status = $1, payment_status = $2, updated_at = NOW()
+         WHERE LOWER(order_id) = LOWER($3) AND (LOWER(username) = LOWER($4) OR LOWER(tenant_id) = LOWER($4) OR $4 = 'admin')`,
+        [newStatus, paymentStatus, orderId, username]
+      );
+    } else {
+      await pool.query(
+        `UPDATE orders
+         SET order_status = $1, updated_at = NOW()
+         WHERE LOWER(order_id) = LOWER($2) AND (LOWER(tenant_id) = LOWER($3) OR $3 = 'admin')`,
+        [newStatus, orderId, username]
+      );
+      await pool.query(
+        `UPDATE customer_order_states
+         SET order_status = $1, updated_at = NOW()
+         WHERE LOWER(order_id) = LOWER($2) AND (LOWER(username) = LOWER($3) OR LOWER(tenant_id) = LOWER($3) OR $3 = 'admin')`,
+        [newStatus, orderId, username]
+      );
+    }
+
+    // Lookup order customer details & dispatch automated WhatsApp notification
+    let waNotified = false;
+    let waMessageText = '';
+    try {
+      let ordRow: any = null;
+      const oLookup = await pool.query(
+        `SELECT COALESCE(tenant_id, $2) as tenant_id, COALESCE(customer_phone, '') as customer_phone,
+                COALESCE(delivery_phone, '') as delivery_phone, COALESCE(jid, '') as jid,
+                COALESCE(customer_name, 'Customer') as customer_name, COALESCE(total_amount, 0) as total_amount,
+                COALESCE(payment_mode, 'COD') as payment_mode
+         FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1`,
+        [orderId, username]
+      );
+      if (oLookup.rows.length > 0) {
+        ordRow = oLookup.rows[0];
+      } else {
+        const sLookup = await pool.query(
+          `SELECT COALESCE(NULLIF(tenant_id, ''), username, $2) as tenant_id, COALESCE(customer_phone, '') as customer_phone,
+                  COALESCE(delivery_phone, '') as delivery_phone, COALESCE(jid, '') as jid,
+                  COALESCE(customer_name, 'Customer') as customer_name, COALESCE(total_amount, 0) as total_amount,
+                  COALESCE(payment_mode, 'COD') as payment_mode
+           FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1`,
+          [orderId, username]
+        );
+        if (sLookup.rows.length > 0) {
+          ordRow = sLookup.rows[0];
+        }
+      }
+
+      if (ordRow) {
+        const ordTenant = String(ordRow.tenant_id || username || 'admin').toLowerCase().trim();
+        const rawPhone = ordRow.customer_phone || ordRow.delivery_phone || String(ordRow.jid || '').split('@')[0];
+        const cleanPhone = String(rawPhone || '').replace(/\D/g, '');
+        const custName = ordRow.customer_name || 'Customer';
+        const totalAmt = Number(ordRow.total_amount || 0).toFixed(2);
+        const payMode = String(ordRow.payment_mode || 'COD').toUpperCase();
+
+        let storeName = ordTenant;
+        const uRes = await pool.query(
+          `SELECT COALESCE(NULLIF(business_name, ''), NULLIF(account_name, ''), username) as store_name
+           FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(store_slug) = LOWER($1) LIMIT 1`,
+          [ordTenant]
+        );
+        if (uRes.rows.length > 0 && uRes.rows[0].store_name) {
+          storeName = uRes.rows[0].store_name;
+        }
+
+        if (newStatus === 'DISPATCHED') {
+          waMessageText = `📦 *Your order has been dispatched!*\n\nHello *${custName}*,\nYour order *#${orderId}* from *${storeName}* (₹${totalAmt}) has been packed and dispatched! We will notify you as soon as our delivery partner is out for delivery. 🚀`;
+        } else if (newStatus === 'OUT_FOR_DELIVERY') {
+          waMessageText = `🛵 *Your order is out for delivery!*\n\nHello *${custName}*,\nYour order *#${orderId}* from *${storeName}* (₹${totalAmt} • ${payMode}) is on the way to your address! Please keep your phone reachable. 📍`;
+        } else if (newStatus === 'DELIVERED') {
+          waMessageText = `✅ *Your order is delivered!*\n\nHello *${custName}*,\nYour order *#${orderId}* (₹${totalAmt}) from *${storeName}* has been successfully delivered. Thank you for shopping with us! 🙏✨`;
+        } else if (newStatus === 'PROCESSING') {
+          waMessageText = `👨‍🍳 *Your order #${orderId} is being prepared!*\n\nHello *${custName}*, *${storeName}* is currently packing your items (₹${totalAmt}). You will receive an update once it is dispatched!`;
+        }
+
+        if (waMessageText && cleanPhone) {
+          pushToLiveChat(ordTenant, cleanPhone, waMessageText, 'outgoing_manual');
+          await recordCustomerChat(ordTenant, cleanPhone, 'assistant', waMessageText);
+          stats.totalMessagesSent++;
+          waNotified = true;
+        }
+      }
+    } catch (waErr: any) {
+      console.warn('Order status WhatsApp notification warning:', waErr.message);
+    }
+
+    const statusLabel = formatOrderStatusLabel(newStatus);
+    return res.json({
+      status: 'success',
+      order_id: orderId,
+      order_status: statusLabel,
+      raw_order_status: newStatus,
+      payment_status: paymentStatus || undefined,
+      whatsapp_notified: waNotified,
+      whatsapp_message: waMessageText || undefined,
+      message: waNotified
+        ? `Order ${orderId} marked "${statusLabel}" & WhatsApp alert sent to customer!`
+        : `Order ${orderId} updated to "${statusLabel}"`
+    });
+  } catch (e: any) {
+    console.warn('Order status update error:', e.message);
+    return res.status(500).json({ status: 'error', message: 'Failed to update order status: ' + e.message });
+  }
 });
 
 // 12E. RECENT CAPTURED LEADS (REAL DB & MEMORY DATA - ZERO DUMMY DATA)
@@ -3107,53 +4174,102 @@ app.get('/api/user/config', (req: Request, res: Response) => {
   });
 });
 
-// 12G. USER PROFILE DETAILS (REAL DATA ONLY - ZERO FAKE DATA)
-app.get('/api/user/profile', async (req: Request, res: Response) => {
-  const username = (req.query.username as string) || '';
-  if (!username) {
-    return res.status(400).json({ error: 'Username is required' });
-  }
-
+// 12G. USER PROFILE & STORE MANAGEMENT DETAILS (REAL DATA ONLY - ZERO FAKE DATA)
+app.get(['/api/user/profile', '/api/admin/profile'], async (req: Request, res: Response) => {
+  const username = ((req.query.username as string) || 'admin').trim();
   const cleanUser = username.toLowerCase();
-  let user = memoryUsers.get(cleanUser);
+  const user = memoryUsers.get(cleanUser);
 
-  if (getPool()) {
-    const pool = getPool();
-    if (pool) {
-      try {
-        const r = await pool.query('SELECT * FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser]);
-        if (r.rows.length > 0) {
-          const row = r.rows[0];
-          return res.json({
-            status: 'success',
-            username: row.username,
-            account_name: row.account_name || `${row.username} Workspace`,
-            business_name: row.business_name || row.account_name || row.username,
-            email: row.email || '',
-            phone: row.phone || '',
-            notification_phone: row.notification_phone || '',
-            wa_jid: row.wa_jid || '',
-            wa_status: row.status || 'Disconnected',
-            role: row.role || 'user',
-            user_type: row.user_type || 'business_user',
-            ai_provider: row.ai_provider || 'gemini',
-            ai_model: row.ai_model || 'gemini-1.5-flash',
-            full_address: row.full_address || '',
-            local_area: row.local_area || '',
-            latitude: row.latitude ? parseFloat(row.latitude) : 0,
-            longitude: row.longitude ? parseFloat(row.longitude) : 0,
-            max_delivery_radius_km: row.max_delivery_radius_km !== undefined ? Number(row.max_delivery_radius_km) : 15.0,
-            free_delivery_radius_km: row.free_delivery_radius_km !== undefined ? Number(row.free_delivery_radius_km) : 3.0,
-            delivery_charge_amount: row.delivery_charge_amount !== undefined ? Number(row.delivery_charge_amount) : 40.0,
-            require_customer_location: Boolean(row.require_customer_location),
-            store_slug: row.store_slug || row.username,
-            logo_url: row.logo_url || '',
-            banner_url: row.banner_url || '',
-            tagline: row.tagline || '',
-            created_at: row.created_at ? new Date(row.created_at).toLocaleString() : 'Active'
-          });
+  const pool = getPool();
+  if (pool) {
+    try {
+      const r = await pool.query('SELECT * FROM users WHERE LOWER(username) = $1 LIMIT 1', [cleanUser]);
+      if (r.rows.length > 0) {
+        const row = r.rows[0];
+        let parsedBanners: any[] = [];
+        try {
+          if (row.promotional_banners) {
+            parsedBanners = typeof row.promotional_banners === 'string'
+              ? JSON.parse(row.promotional_banners)
+              : row.promotional_banners;
+          }
+        } catch {
+          parsedBanners = [];
         }
-      } catch (e) {}
+        if (!Array.isArray(parsedBanners) || parsedBanners.length === 0) {
+          if (row.banner_url) {
+            parsedBanners = [{ image_url: row.banner_url, target_link: '' }];
+          } else {
+            parsedBanners = [];
+          }
+        }
+
+        let parsedModes: string[] = ['doorstep', 'pickup'];
+        try {
+          if (row.delivery_modes) {
+            const m = typeof row.delivery_modes === 'string'
+              ? JSON.parse(row.delivery_modes)
+              : row.delivery_modes;
+            if (Array.isArray(m)) parsedModes = m;
+          }
+        } catch {}
+
+        return res.json({
+          status: 'success',
+          username: row.username,
+          account_name: row.account_name || `${row.username} Workspace`,
+          business_name: row.business_name || row.account_name || row.username,
+          business_type: row.business_type || 'Kirana / General Store',
+          email: row.email || '',
+          phone: row.phone || '',
+          notification_phone: row.notification_phone || '',
+          wa_jid: row.wa_jid || '',
+          wa_status: row.status || 'Disconnected',
+          auto_reply: row.auto_reply !== false,
+          automation_access: row.automation_access !== false,
+          role: row.role || 'user',
+          user_type: row.user_type || 'business_user',
+          ai_provider: row.ai_provider || 'gemini',
+          ai_model: row.ai_model || 'gemini-1.5-flash',
+          full_address: row.full_address || '',
+          local_area: row.local_area || '',
+          latitude: row.latitude ? parseFloat(row.latitude) : 0,
+          longitude: row.longitude ? parseFloat(row.longitude) : 0,
+          max_delivery_radius_km: row.max_delivery_radius_km !== undefined && row.max_delivery_radius_km !== null ? Number(row.max_delivery_radius_km) : 15.0,
+          free_delivery_radius_km: row.free_delivery_radius_km !== undefined && row.free_delivery_radius_km !== null ? Number(row.free_delivery_radius_km) : 3.0,
+          delivery_charge_amount: row.delivery_charge_amount !== undefined && row.delivery_charge_amount !== null ? Number(row.delivery_charge_amount) : 40.0,
+          min_free_delivery_order: row.min_free_delivery_order !== undefined && row.min_free_delivery_order !== null ? Number(row.min_free_delivery_order) : 499.0,
+          require_customer_location: Boolean(row.require_customer_location),
+          store_open_status: row.store_open_status !== false,
+          operating_hours: row.operating_hours || '9:00 AM - 10:00 PM',
+          delivery_modes: parsedModes,
+          store_slug: row.store_slug || row.username,
+          logo_url: row.logo_url || '',
+          banner_url: row.banner_url || '',
+          promotional_banners: parsedBanners,
+          tagline: row.tagline || '',
+          theme_color: row.theme_color || 'emerald',
+          announcement_bar: row.announcement_bar || '',
+          min_order_amount: row.min_order_amount !== undefined && row.min_order_amount !== null ? Number(row.min_order_amount) : 0.0,
+          packaging_charge: row.packaging_charge !== undefined && row.packaging_charge !== null ? Number(row.packaging_charge) : 0.0,
+          allow_cod: row.allow_cod !== false,
+          paytm_vpa: row.paytm_vpa || '',
+          paytm_mid: row.paytm_mid || '',
+          social_instagram: row.social_instagram || '',
+          social_facebook: row.social_facebook || '',
+          social_whatsapp: row.social_whatsapp || '',
+          gstin_number: row.gstin_number || '',
+          privacy_policy: row.privacy_policy || '',
+          terms_conditions: row.terms_conditions || '',
+          refund_policy: row.refund_policy || '',
+          shipping_policy: row.shipping_policy || '',
+          custom_domain: row.custom_domain || '',
+          domain_status: row.domain_status || 'not_configured',
+          created_at: row.created_at ? new Date(row.created_at).toLocaleString() : 'Active'
+        });
+      }
+    } catch (e) {
+      console.warn('Error querying user profile:', e);
     }
   }
 
@@ -3161,11 +4277,13 @@ app.get('/api/user/profile', async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'User account not found' });
   }
 
+  const memAny = user as any;
   return res.json({
     status: 'success',
     username: user.username,
     account_name: user.account_name || `${user.username} Workspace`,
     business_name: user.business_name || user.account_name || user.username,
+    business_type: user.business_type || 'Kirana / General Store',
     email: user.email || '',
     phone: user.phone || '',
     notification_phone: user.notification_phone || '',
@@ -3175,126 +4293,352 @@ app.get('/api/user/profile', async (req: Request, res: Response) => {
     user_type: user.user_type || 'business_user',
     ai_provider: user.ai_provider || 'gemini',
     ai_model: user.model || 'gemini-1.5-flash',
-    full_address: user.full_address || '',
-    local_area: user.local_area || '',
-    max_delivery_radius_km: user.max_delivery_radius_km !== undefined ? user.max_delivery_radius_km : 15.0,
-    free_delivery_radius_km: user.free_delivery_radius_km !== undefined ? user.free_delivery_radius_km : 3.0,
-    delivery_charge_amount: user.delivery_charge_amount !== undefined ? user.delivery_charge_amount : 40.0,
-    require_customer_location: Boolean(user.require_customer_location),
-    store_slug: user.store_slug || user.username,
-    logo_url: user.logo_url || '',
-    banner_url: user.banner_url || '',
-    tagline: user.tagline || '',
+    full_address: memAny.full_address || '',
+    local_area: memAny.local_area || '',
+    latitude: memAny.latitude || 0,
+    longitude: memAny.longitude || 0,
+    max_delivery_radius_km: memAny.max_delivery_radius_km ?? 15.0,
+    free_delivery_radius_km: memAny.free_delivery_radius_km ?? 3.0,
+    delivery_charge_amount: memAny.delivery_charge_amount ?? 40.0,
+    min_free_delivery_order: memAny.min_free_delivery_order ?? 499.0,
+    require_customer_location: Boolean(memAny.require_customer_location),
+    store_open_status: memAny.store_open_status !== false,
+    operating_hours: memAny.operating_hours || '9:00 AM - 10:00 PM',
+    delivery_modes: memAny.delivery_modes || ['doorstep', 'pickup'],
+    store_slug: memAny.store_slug || user.username,
+    logo_url: memAny.logo_url || '',
+    banner_url: memAny.banner_url || '',
+    promotional_banners: memAny.promotional_banners || [],
+    tagline: memAny.tagline || '',
+    theme_color: memAny.theme_color || 'emerald',
+    announcement_bar: memAny.announcement_bar || '',
+    min_order_amount: memAny.min_order_amount ?? 0.0,
+    packaging_charge: memAny.packaging_charge ?? 0.0,
+    allow_cod: memAny.allow_cod !== false,
+    paytm_vpa: memAny.paytm_vpa || '',
+    paytm_mid: memAny.paytm_mid || '',
+    social_instagram: memAny.social_instagram || '',
+    social_facebook: memAny.social_facebook || '',
+    social_whatsapp: memAny.social_whatsapp || '',
+    gstin_number: memAny.gstin_number || '',
+    privacy_policy: memAny.privacy_policy || '',
+    terms_conditions: memAny.terms_conditions || '',
+    refund_policy: memAny.refund_policy || '',
+    shipping_policy: memAny.shipping_policy || '',
+    custom_domain: memAny.custom_domain || '',
+    domain_status: memAny.domain_status || 'not_configured',
     created_at: user.created_at ? new Date(user.created_at).toLocaleString() : 'Active'
   });
 });
 
-// POST /api/user/profile to save store branding, address, GPS, delivery logistics & store slug
-app.post('/api/user/profile', async (req: Request, res: Response) => {
+// POST / PUT /api/user/profile to save store branding, address, GPS, delivery logistics, checkout & custom domain
+app.all(['/api/user/profile', '/api/admin/profile'], async (req: Request, res: Response, next) => {
+  if (req.method !== 'POST' && req.method !== 'PUT') return next();
+
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}
   }
-  const {
-    username,
-    business_name,
-    notification_phone,
-    full_address,
-    local_area,
-    latitude,
-    longitude,
-    max_delivery_radius_km,
-    free_delivery_radius_km,
-    delivery_charge_amount,
-    require_customer_location,
-    store_slug,
-    logo_url,
-    banner_url,
-    tagline
-  } = body || {};
-
+  const b = body || {};
+  const username = String(b.username || 'admin').trim();
   if (!username) {
     return res.status(400).json({ status: 'error', message: 'Username is required' });
   }
 
   const cleanUser = username.toLowerCase();
-  let cleanSlug = (store_slug || '').toLowerCase().trim();
+  let cleanSlug = String(b.store_slug || '').toLowerCase().trim();
   cleanSlug = cleanSlug.replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
 
-  const latVal = parseFloat(latitude) || 0;
-  const lngVal = parseFloat(longitude) || 0;
-  const maxRadVal = parseFloat(max_delivery_radius_km) || 15.0;
-  const freeRadVal = parseFloat(free_delivery_radius_km) >= 0 ? parseFloat(free_delivery_radius_km) : 3.0;
-  const delChargeVal = parseFloat(delivery_charge_amount) >= 0 ? parseFloat(delivery_charge_amount) : 40.0;
-  const reqLocVal = Boolean(require_customer_location);
+  const latVal = b.latitude !== undefined ? (parseFloat(b.latitude) || 0) : undefined;
+  const lngVal = b.longitude !== undefined ? (parseFloat(b.longitude) || 0) : undefined;
+  const maxRadVal = b.max_delivery_radius_km !== undefined ? (parseFloat(b.max_delivery_radius_km) || 15.0) : undefined;
+  const freeRadVal = b.free_delivery_radius_km !== undefined ? (parseFloat(b.free_delivery_radius_km) >= 0 ? parseFloat(b.free_delivery_radius_km) : 3.0) : undefined;
+  const delChargeVal = b.delivery_charge_amount !== undefined ? (parseFloat(b.delivery_charge_amount) >= 0 ? parseFloat(b.delivery_charge_amount) : 40.0) : undefined;
+  const minFreeOrderVal = b.min_free_delivery_order !== undefined ? (parseFloat(b.min_free_delivery_order) >= 0 ? parseFloat(b.min_free_delivery_order) : 0.0) : undefined;
+  const minOrderVal = b.min_order_amount !== undefined ? (parseFloat(b.min_order_amount) >= 0 ? parseFloat(b.min_order_amount) : 0.0) : undefined;
+  const pkgChargeVal = b.packaging_charge !== undefined ? (parseFloat(b.packaging_charge) >= 0 ? parseFloat(b.packaging_charge) : 0.0) : undefined;
 
   const pool = getPool();
   if (pool) {
     try {
-      await pool.query(
-        `UPDATE users SET 
-          business_name = CASE WHEN $1 != '' THEN $1 ELSE business_name END,
-          notification_phone = CASE WHEN $2 != '' THEN $2 ELSE notification_phone END,
-          full_address = CASE WHEN $3 != '' THEN $3 ELSE full_address END,
-          local_area = CASE WHEN $4 != '' THEN $4 ELSE local_area END,
-          latitude = CASE WHEN $5 != 0 THEN $5 ELSE latitude END,
-          longitude = CASE WHEN $6 != 0 THEN $6 ELSE longitude END,
-          business_lat = CASE WHEN $5 != 0 THEN $5 ELSE business_lat END,
-          business_lng = CASE WHEN $6 != 0 THEN $6 ELSE business_lng END,
-          max_delivery_radius_km = CASE WHEN $7 > 0 THEN $7 ELSE max_delivery_radius_km END,
-          free_delivery_radius_km = CASE WHEN $8 >= 0 THEN $8 ELSE free_delivery_radius_km END,
-          delivery_charge_amount = CASE WHEN $9 >= 0 THEN $9 ELSE delivery_charge_amount END,
-          require_customer_location = $10,
-          store_slug = CASE WHEN $11 != '' THEN $11 ELSE store_slug END,
-          logo_url = CASE WHEN $12 != '' THEN $12 ELSE logo_url END,
-          banner_url = CASE WHEN $13 != '' THEN $13 ELSE banner_url END,
-          tagline = CASE WHEN $14 != '' THEN $14 ELSE tagline END
-        WHERE LOWER(username) = LOWER($15)`,
-        [
-          (business_name || '').trim(),
-          (notification_phone || '').trim(),
-          (full_address || '').trim(),
-          (local_area || '').trim(),
-          latVal,
-          lngVal,
-          maxRadVal,
-          freeRadVal,
-          delChargeVal,
-          reqLocVal,
-          cleanSlug,
-          (logo_url || '').trim(),
-          (banner_url || '').trim(),
-          (tagline || '').trim(),
-          cleanUser
-        ]
-      );
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let idx = 1;
+      const addField = (col: string, val: any, cast = '') => {
+        sets.push(`${col} = $${idx}${cast}`);
+        vals.push(val);
+        idx++;
+      };
+
+      if (b.account_name !== undefined && String(b.account_name).trim() !== '') {
+        addField('account_name', String(b.account_name).trim());
+      }
+      if (b.email !== undefined && String(b.email).trim() !== '') {
+        addField('email', String(b.email).trim());
+      }
+      if (b.phone !== undefined) {
+        addField('phone', String(b.phone).trim().replace(/^\+/, ''));
+      }
+      if (b.business_name !== undefined && String(b.business_name).trim() !== '') {
+        addField('business_name', String(b.business_name).trim());
+      }
+      if (b.business_type !== undefined && String(b.business_type).trim() !== '') {
+        addField('business_type', String(b.business_type).trim());
+      }
+      if (b.notification_phone !== undefined && String(b.notification_phone).trim() !== '') {
+        addField('notification_phone', String(b.notification_phone).trim());
+      }
+      if (b.ai_provider !== undefined && String(b.ai_provider).trim() !== '') {
+        addField('ai_provider', String(b.ai_provider).trim());
+      }
+      if (b.ai_model !== undefined && String(b.ai_model).trim() !== '') {
+        addField('ai_model', String(b.ai_model).trim());
+      }
+      if (cleanSlug !== '') {
+        addField('store_slug', cleanSlug);
+      }
+      if (b.tagline !== undefined) {
+        addField('tagline', String(b.tagline).trim());
+      }
+      if (b.theme_color !== undefined && String(b.theme_color).trim() !== '') {
+        addField('theme_color', String(b.theme_color).trim());
+      }
+      if (b.announcement_bar !== undefined) {
+        addField('announcement_bar', String(b.announcement_bar).trim());
+      }
+      if (minOrderVal !== undefined) {
+        addField('min_order_amount', minOrderVal);
+      }
+      if (pkgChargeVal !== undefined) {
+        addField('packaging_charge', pkgChargeVal);
+      }
+      if (b.allow_cod !== undefined) {
+        addField('allow_cod', Boolean(b.allow_cod));
+      }
+      if (b.paytm_vpa !== undefined) {
+        addField('paytm_vpa', String(b.paytm_vpa).trim());
+      }
+      if (b.paytm_mid !== undefined) {
+        addField('paytm_mid', String(b.paytm_mid).trim());
+      }
+      if (b.logo_url !== undefined) {
+        addField('logo_url', String(b.logo_url).trim());
+      }
+      if (b.banner_url !== undefined) {
+        addField('banner_url', String(b.banner_url).trim());
+      }
+      if (b.promotional_banners !== undefined && Array.isArray(b.promotional_banners)) {
+        const bannersJson = JSON.stringify(b.promotional_banners);
+        addField('promotional_banners', bannersJson, '::jsonb');
+        if (b.promotional_banners.length > 0 && b.promotional_banners[0]?.image_url && b.banner_url === undefined) {
+          addField('banner_url', String(b.promotional_banners[0].image_url).trim());
+        }
+        try {
+          await pool.query(
+            `INSERT INTO business_profiles (username, tenant_slug, promotional_banners)
+             VALUES ($1, $2, $3::jsonb)
+             ON CONFLICT (username) DO UPDATE SET promotional_banners = EXCLUDED.promotional_banners, tenant_slug = CASE WHEN EXCLUDED.tenant_slug != '' THEN EXCLUDED.tenant_slug ELSE business_profiles.tenant_slug END`,
+            [cleanUser, cleanSlug || cleanUser, bannersJson]
+          );
+        } catch {}
+      }
+      if (b.social_instagram !== undefined) {
+        addField('social_instagram', String(b.social_instagram).trim());
+      }
+      if (b.social_facebook !== undefined) {
+        addField('social_facebook', String(b.social_facebook).trim());
+      }
+      if (b.social_whatsapp !== undefined) {
+        addField('social_whatsapp', String(b.social_whatsapp).trim());
+      }
+      if (b.full_address !== undefined) {
+        addField('full_address', String(b.full_address).trim());
+      }
+      if (b.local_area !== undefined) {
+        addField('local_area', String(b.local_area).trim());
+      }
+      if (latVal !== undefined && latVal !== 0) {
+        addField('latitude', latVal);
+        addField('business_lat', latVal);
+      }
+      if (lngVal !== undefined && lngVal !== 0) {
+        addField('longitude', lngVal);
+        addField('business_lng', lngVal);
+      }
+      if (b.gstin_number !== undefined) {
+        addField('gstin_number', String(b.gstin_number).trim().toUpperCase());
+      }
+      if (b.privacy_policy !== undefined) {
+        addField('privacy_policy', String(b.privacy_policy).trim());
+      }
+      if (b.terms_conditions !== undefined) {
+        addField('terms_conditions', String(b.terms_conditions).trim());
+      }
+      if (b.refund_policy !== undefined) {
+        addField('refund_policy', String(b.refund_policy).trim());
+      }
+      if (b.shipping_policy !== undefined) {
+        addField('shipping_policy', String(b.shipping_policy).trim());
+      }
+      if (maxRadVal !== undefined && maxRadVal > 0) {
+        addField('max_delivery_radius_km', maxRadVal);
+      }
+      if (freeRadVal !== undefined && freeRadVal >= 0) {
+        addField('free_delivery_radius_km', freeRadVal);
+      }
+      if (delChargeVal !== undefined && delChargeVal >= 0) {
+        addField('delivery_charge_amount', delChargeVal);
+      }
+      if (minFreeOrderVal !== undefined && minFreeOrderVal >= 0) {
+        addField('min_free_delivery_order', minFreeOrderVal);
+      }
+      if (b.require_customer_location !== undefined) {
+        addField('require_customer_location', Boolean(b.require_customer_location));
+      }
+      if (b.store_open_status !== undefined) {
+        addField('store_open_status', Boolean(b.store_open_status));
+      }
+      if (b.operating_hours !== undefined) {
+        addField('operating_hours', String(b.operating_hours).trim());
+      }
+      if (b.delivery_modes !== undefined && Array.isArray(b.delivery_modes)) {
+        addField('delivery_modes', JSON.stringify(b.delivery_modes), '::jsonb');
+      }
+      if (b.custom_domain !== undefined) {
+        const cleanDomain = String(b.custom_domain).toLowerCase().trim()
+          .replace(/^https?:\/\//, '')
+          .replace(/\/+$/, '');
+        addField('custom_domain', cleanDomain);
+        const domStatus = b.domain_status || (cleanDomain ? 'pending_dns' : 'not_configured');
+        addField('domain_status', domStatus);
+      } else if (b.domain_status !== undefined) {
+        addField('domain_status', String(b.domain_status).trim());
+      }
+
+      if (sets.length > 0) {
+        vals.push(cleanUser);
+        await pool.query(
+          `UPDATE users SET ${sets.join(', ')} WHERE LOWER(username) = LOWER($${idx})`,
+          vals
+        );
+      }
     } catch (err: any) {
       console.warn('Error saving user profile in DB:', err.message);
     }
   }
 
   // Update memoryUsers fallback
-  const mem = memoryUsers.get(cleanUser);
+  const mem = memoryUsers.get(cleanUser) as any;
   if (mem) {
-    if (business_name) mem.business_name = business_name;
-    if (notification_phone) mem.notification_phone = notification_phone;
-    if (full_address) mem.full_address = full_address;
-    if (local_area) mem.local_area = local_area;
-    mem.max_delivery_radius_km = maxRadVal;
-    mem.free_delivery_radius_km = freeRadVal;
-    mem.delivery_charge_amount = delChargeVal;
-    mem.require_customer_location = reqLocVal;
+    if (b.business_name !== undefined && b.business_name !== '') mem.business_name = b.business_name;
+    if (b.business_type !== undefined && b.business_type !== '') mem.business_type = b.business_type;
+    if (b.notification_phone !== undefined && b.notification_phone !== '') mem.notification_phone = b.notification_phone;
+    if (b.full_address !== undefined) mem.full_address = b.full_address;
+    if (b.local_area !== undefined) mem.local_area = b.local_area;
+    if (latVal) mem.latitude = latVal;
+    if (lngVal) mem.longitude = lngVal;
+    if (maxRadVal !== undefined) mem.max_delivery_radius_km = maxRadVal;
+    if (freeRadVal !== undefined) mem.free_delivery_radius_km = freeRadVal;
+    if (delChargeVal !== undefined) mem.delivery_charge_amount = delChargeVal;
+    if (minFreeOrderVal !== undefined) mem.min_free_delivery_order = minFreeOrderVal;
+    if (b.require_customer_location !== undefined) mem.require_customer_location = Boolean(b.require_customer_location);
+    if (b.store_open_status !== undefined) mem.store_open_status = Boolean(b.store_open_status);
+    if (b.operating_hours !== undefined) mem.operating_hours = b.operating_hours;
+    if (b.delivery_modes !== undefined) mem.delivery_modes = b.delivery_modes;
     if (cleanSlug) mem.store_slug = cleanSlug;
-    if (logo_url) mem.logo_url = logo_url;
-    if (banner_url) mem.banner_url = banner_url;
-    if (tagline) mem.tagline = tagline;
+    if (b.logo_url !== undefined) mem.logo_url = b.logo_url;
+    if (b.banner_url !== undefined) mem.banner_url = b.banner_url;
+    if (b.promotional_banners !== undefined) mem.promotional_banners = b.promotional_banners;
+    if (b.tagline !== undefined) mem.tagline = b.tagline;
+    if (b.theme_color !== undefined) mem.theme_color = b.theme_color;
+    if (b.announcement_bar !== undefined) mem.announcement_bar = b.announcement_bar;
+    if (minOrderVal !== undefined) mem.min_order_amount = minOrderVal;
+    if (pkgChargeVal !== undefined) mem.packaging_charge = pkgChargeVal;
+    if (b.allow_cod !== undefined) mem.allow_cod = Boolean(b.allow_cod);
+    if (b.paytm_vpa !== undefined) mem.paytm_vpa = b.paytm_vpa;
+    if (b.paytm_mid !== undefined) mem.paytm_mid = b.paytm_mid;
+    if (b.social_instagram !== undefined) mem.social_instagram = b.social_instagram;
+    if (b.social_facebook !== undefined) mem.social_facebook = b.social_facebook;
+    if (b.social_whatsapp !== undefined) mem.social_whatsapp = b.social_whatsapp;
+    if (b.gstin_number !== undefined) mem.gstin_number = b.gstin_number;
+    if (b.privacy_policy !== undefined) mem.privacy_policy = b.privacy_policy;
+    if (b.terms_conditions !== undefined) mem.terms_conditions = b.terms_conditions;
+    if (b.refund_policy !== undefined) mem.refund_policy = b.refund_policy;
+    if (b.shipping_policy !== undefined) mem.shipping_policy = b.shipping_policy;
+    if (b.custom_domain !== undefined) mem.custom_domain = b.custom_domain;
+    if (b.domain_status !== undefined) mem.domain_status = b.domain_status;
   }
 
   return res.json({
     status: 'success',
-    message: 'Business profile, storefront branding, and delivery settings saved successfully!',
-    store_slug: cleanSlug || cleanUser
+    message: 'Store management settings saved & synced to cloud DB!',
+    store_slug: cleanSlug || cleanUser,
+    full_address: b.full_address,
+    local_area: b.local_area,
+    latitude: latVal,
+    longitude: lngVal,
+    max_delivery_radius_km: maxRadVal,
+    free_delivery_radius_km: freeRadVal,
+    delivery_charge_amount: delChargeVal,
+    min_free_delivery_order: minFreeOrderVal,
+    require_customer_location: b.require_customer_location,
+    store_open_status: b.store_open_status,
+    custom_domain: b.custom_domain
   });
+});
+
+// MEDIA IMAGE CLEAR HANDLER: DELETE or POST /api/media/image
+app.all('/api/media/image', async (req: Request, res: Response) => {
+  if (req.method !== 'DELETE' && req.method !== 'POST') {
+    return res.status(405).json({ status: 'error', message: 'Method not allowed' });
+  }
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const type = String(body?.type || req.query.type || '').toLowerCase();
+  const id = parseInt(String(body?.id || '0'), 10) || 0;
+  const username = String(body?.username || req.query.username || 'admin').toLowerCase().trim();
+  const index = typeof body?.index === 'number' ? body.index : parseInt(String(body?.index || '0'), 10) || 0;
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      if (type === 'product' && id > 0) {
+        await pool.query(
+          `UPDATE products SET image_url = '', product_image_url = '' WHERE id = $1 AND LOWER(username) = LOWER($2)`,
+          [id, username]
+        );
+      } else if (type === 'logo') {
+        await pool.query(`UPDATE users SET logo_url = '' WHERE LOWER(username) = LOWER($1)`, [username]);
+      } else if (type === 'banner') {
+        const r = await pool.query(`SELECT COALESCE(promotional_banners::text, '[]') as pb FROM users WHERE LOWER(username) = LOWER($1)`, [username]);
+        let bList: any[] = [];
+        try { bList = JSON.parse(r.rows[0]?.pb || '[]'); } catch {}
+        if (Array.isArray(bList) && index >= 0 && index < bList.length) {
+          bList.splice(index, 1);
+          const updatedJson = JSON.stringify(bList);
+          await pool.query(`UPDATE users SET promotional_banners = $1::jsonb, banner_url = $2 WHERE LOWER(username) = LOWER($3)`, [
+            updatedJson,
+            bList[0]?.image_url || '',
+            username
+          ]);
+          try {
+            await pool.query(`UPDATE business_profiles SET promotional_banners = $1::jsonb WHERE LOWER(username) = LOWER($2)`, [
+              updatedJson,
+              username
+            ]);
+          } catch {}
+        } else {
+          await pool.query(`UPDATE users SET banner_url = '' WHERE LOWER(username) = LOWER($1)`, [username]);
+        }
+      }
+    } catch (e: any) {
+      console.warn('Media clear DB error:', e.message);
+    }
+  }
+
+  return res.json({ status: 'success', message: 'Image reference cleared from database' });
 });
 
 // GET /api/storefront/:slug or /api/storefront?slug=... (100% Dynamic Tenant Storefront API)
@@ -3302,36 +4646,42 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
   const slugParam = (req.params.slug || req.query.slug || req.query.username || '') as string;
   const cleanSlug = slugParam.trim().toLowerCase();
 
-  if (!cleanSlug) {
-    return res.status(400).json({ status: 'error', message: 'Store slug is required' });
-  }
-
   let tenantRow: any = null;
   const pool = getPool();
 
   if (pool) {
     try {
-      const uRes = await pool.query(
-        `SELECT 
-          id, username, email, phone, notification_phone, wa_jid, 
-          COALESCE(business_name, account_name, username) as store_name,
-          COALESCE(store_slug, username) as store_slug,
-          COALESCE(tagline, '') as tagline,
-          COALESCE(logo_url, '') as logo_url,
-          COALESCE(banner_url, '') as banner_url,
-          COALESCE(full_address, '') as full_address,
-          COALESCE(local_area, '') as local_area,
-          COALESCE(max_delivery_radius_km, 15.0) as max_delivery_radius_km,
-          COALESCE(free_delivery_radius_km, 3.0) as free_delivery_radius_km,
-          COALESCE(delivery_charge_amount, 40.0) as delivery_charge_amount,
-          COALESCE(require_customer_location, false) as require_customer_location
-        FROM users 
-        WHERE LOWER(store_slug) = $1 OR LOWER(username) = $1 
-        LIMIT 1`,
-        [cleanSlug]
-      );
-      if (uRes.rows.length > 0) {
-        tenantRow = uRes.rows[0];
+      if (cleanSlug && cleanSlug !== 'default' && cleanSlug !== 'store') {
+        const uRes = await pool.query(
+          `SELECT *, COALESCE(business_name, account_name, username) as store_name,
+                  (SELECT COUNT(*)::int FROM products p WHERE LOWER(p.username) = LOWER(users.username)) as total_products
+           FROM users
+           WHERE LOWER(store_slug) = $1 OR LOWER(username) = $1 OR LOWER(custom_domain) = $1
+           LIMIT 1`,
+          [cleanSlug]
+        );
+        if (uRes.rows.length > 0) {
+          const candidate = uRes.rows[0];
+          // If 'admin' was passed as default slug and has 0 products, fall back to the active merchant store with products
+          if (cleanSlug !== 'admin' || Number(candidate.total_products || 0) > 0) {
+            tenantRow = candidate;
+          }
+        }
+      }
+      // Graceful fallback when visiting /storefront.html without slug or with default 'admin' slug
+      if (!tenantRow && (!cleanSlug || cleanSlug === 'admin' || cleanSlug === 'default' || cleanSlug === 'store')) {
+        const uRes = await pool.query(
+          `SELECT *, COALESCE(business_name, account_name, username) as store_name
+           FROM users
+           ORDER BY
+             (SELECT COUNT(*)::int FROM products p WHERE LOWER(p.username) = LOWER(users.username)) DESC,
+             CASE WHEN (logo_url != '' OR banner_url != '' OR business_name != '' OR wa_jid != '') THEN 0 ELSE 1 END,
+             id DESC
+           LIMIT 1`
+        );
+        if (uRes.rows.length > 0) {
+          tenantRow = uRes.rows[0];
+        }
       }
     } catch (e: any) {
       console.warn('Storefront query notice:', e.message);
@@ -3340,25 +4690,12 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
 
   if (!tenantRow) {
     const mem = Array.from(memoryUsers.values()).find(
-      u => (u.store_slug && u.store_slug.toLowerCase() === cleanSlug) || u.username.toLowerCase() === cleanSlug
-    );
+      u => ((u as any).store_slug && (u as any).store_slug.toLowerCase() === cleanSlug) || u.username.toLowerCase() === cleanSlug
+    ) as any;
     if (mem) {
       tenantRow = {
-        username: mem.username,
-        store_name: mem.business_name || mem.account_name || mem.username,
-        store_slug: mem.store_slug || mem.username,
-        tagline: mem.tagline || '',
-        logo_url: mem.logo_url || '',
-        banner_url: mem.banner_url || '',
-        phone: mem.phone || '',
-        notification_phone: mem.notification_phone || '',
-        wa_jid: mem.wa_jid || '',
-        full_address: mem.full_address || '',
-        local_area: mem.local_area || '',
-        max_delivery_radius_km: mem.max_delivery_radius_km || 15.0,
-        free_delivery_radius_km: mem.free_delivery_radius_km || 3.0,
-        delivery_charge_amount: mem.delivery_charge_amount || 40.0,
-        require_customer_location: Boolean(mem.require_customer_location)
+        ...mem,
+        store_name: mem.business_name || mem.account_name || mem.username
       };
     }
   }
@@ -3370,26 +4707,79 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
   const tenantUsername = tenantRow.username;
 
   // Format clean WhatsApp phone
-  let contactPhone = tenantRow.notification_phone || tenantRow.phone || '';
+  let contactPhone = tenantRow.social_whatsapp || tenantRow.notification_phone || tenantRow.phone || '';
   if (!contactPhone && tenantRow.wa_jid) {
     contactPhone = tenantRow.wa_jid.split('@')[0].split(':')[0];
   }
-  const cleanPhoneDigits = contactPhone.replace(/\D/g, '');
+  const cleanPhoneDigits = String(contactPhone).replace(/\D/g, '');
+
+  let parsedBanners: any[] = [];
+  try {
+    if (tenantRow.promotional_banners) {
+      parsedBanners = typeof tenantRow.promotional_banners === 'string'
+        ? JSON.parse(tenantRow.promotional_banners)
+        : tenantRow.promotional_banners;
+    }
+  } catch {
+    parsedBanners = [];
+  }
+  if (!Array.isArray(parsedBanners) || parsedBanners.length === 0) {
+    if (tenantRow.banner_url) {
+      parsedBanners = [{ image_url: tenantRow.banner_url, target_link: '' }];
+    } else {
+      parsedBanners = [];
+    }
+  }
+
+  let parsedModes: string[] = ['doorstep', 'pickup'];
+  try {
+    if (tenantRow.delivery_modes) {
+      const m = typeof tenantRow.delivery_modes === 'string'
+        ? JSON.parse(tenantRow.delivery_modes)
+        : tenantRow.delivery_modes;
+      if (Array.isArray(m)) parsedModes = m;
+    }
+  } catch {}
 
   const tenant = {
     username: tenantRow.username,
-    store_name: tenantRow.store_name,
+    store_name: tenantRow.store_name || tenantRow.business_name || tenantRow.username,
+    business_type: tenantRow.business_type || 'Kirana / General Store',
     store_slug: tenantRow.store_slug || tenantRow.username,
     tagline: tenantRow.tagline || '',
+    theme_color: tenantRow.theme_color || 'emerald',
+    announcement_bar: tenantRow.announcement_bar || '',
     logo_url: tenantRow.logo_url || '',
     banner_url: tenantRow.banner_url || '',
+    promotional_banners: parsedBanners,
     whatsapp_number: cleanPhoneDigits,
+    social_instagram: tenantRow.social_instagram || '',
+    social_facebook: tenantRow.social_facebook || '',
+    social_whatsapp: tenantRow.social_whatsapp || cleanPhoneDigits,
     full_address: tenantRow.full_address || '',
     local_area: tenantRow.local_area || '',
-    max_delivery_radius_km: Number(tenantRow.max_delivery_radius_km || 15),
-    free_delivery_radius_km: Number(tenantRow.free_delivery_radius_km || 3),
-    delivery_charge_amount: Number(tenantRow.delivery_charge_amount || 40),
-    require_customer_location: Boolean(tenantRow.require_customer_location)
+    latitude: Number(tenantRow.latitude || 0),
+    longitude: Number(tenantRow.longitude || 0),
+    gstin_number: tenantRow.gstin_number || '',
+    privacy_policy: tenantRow.privacy_policy || '',
+    terms_conditions: tenantRow.terms_conditions || '',
+    refund_policy: tenantRow.refund_policy || '',
+    shipping_policy: tenantRow.shipping_policy || '',
+    max_delivery_radius_km: Number(tenantRow.max_delivery_radius_km ?? 15),
+    free_delivery_radius_km: Number(tenantRow.free_delivery_radius_km ?? 3),
+    delivery_charge_amount: Number(tenantRow.delivery_charge_amount ?? 40),
+    min_free_delivery_order: Number(tenantRow.min_free_delivery_order ?? 499),
+    min_order_amount: Number(tenantRow.min_order_amount ?? 0),
+    packaging_charge: Number(tenantRow.packaging_charge ?? 0),
+    require_customer_location: Boolean(tenantRow.require_customer_location),
+    store_open_status: tenantRow.store_open_status !== false,
+    operating_hours: tenantRow.operating_hours || '9:00 AM - 10:00 PM',
+    delivery_modes: parsedModes,
+    allow_cod: tenantRow.allow_cod !== false,
+    paytm_vpa: tenantRow.paytm_vpa || '',
+    paytm_mid: tenantRow.paytm_mid || '',
+    custom_domain: tenantRow.custom_domain || '',
+    domain_status: tenantRow.domain_status || 'not_configured'
   };
 
   // Fetch Categories for tenant
@@ -3397,11 +4787,22 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
   if (pool) {
     try {
       const cRes = await pool.query(
-        `SELECT c.id, c.category_name, COALESCE(c.category_image_url, '') as category_image_url,
-          (SELECT COUNT(*) FROM products p WHERE LOWER(p.username)=LOWER(c.username) AND (p.category_id=c.id OR LOWER(TRIM(p.category))=LOWER(TRIM(c.category_name)))) as product_count
-        FROM categories c
-        WHERE LOWER(c.username) = LOWER($1)
-        ORDER BY c.id ASC`,
+        `SELECT c.id,
+                c.category_name,
+                COALESCE(c.category_image_url, '') as category_image_url,
+                COALESCE(c.parent_id, 0)::int as parent_id,
+                COALESCE(c.parent_name, '') as parent_name,
+                (SELECT COUNT(*)::int FROM products p
+                 WHERE LOWER(p.username) = LOWER(c.username)
+                   AND (
+                     p.category_id = c.id
+                     OR LOWER(TRIM(COALESCE(p.category, ''))) = LOWER(TRIM(c.category_name))
+                     OR LOWER(TRIM(COALESCE(p.sub_category, ''))) = LOWER(TRIM(c.category_name))
+                   )
+                ) as product_count
+         FROM categories c
+         WHERE LOWER(c.username) = LOWER($1)
+         ORDER BY COALESCE(c.parent_id, 0) ASC, c.id ASC`,
         [tenantUsername]
       );
       categories = cRes.rows.map(r => ({
@@ -3409,6 +4810,8 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
         name: r.category_name,
         category_name: r.category_name,
         category_image_url: r.category_image_url || '',
+        parent_id: r.parent_id || 0,
+        parent_name: r.parent_name || '',
         product_count: parseInt(r.product_count, 10) || 0
       }));
     } catch (e) {}
@@ -3420,53 +4823,98 @@ app.get(['/api/storefront', '/api/storefront/:slug'], async (req: Request, res: 
         name: c.category_name,
         category_name: c.category_name,
         category_image_url: c.category_image_url,
+        parent_id: (c as any).parent_id || 0,
+        parent_name: (c as any).parent_name || '',
         product_count: 0
       }));
   }
 
-  // Fetch Products for tenant
+  // Fetch Products for tenant (using exact PostgreSQL schema from /api/products)
   let products: any[] = [];
   if (pool) {
     try {
       const pRes = await pool.query(
-        `SELECT id, COALESCE(category_id, 0) as category_id, name, price, COALESCE(description, '') as description,
-          COALESCE(unit_type, 'custom') as unit_type, COALESCE(variants::text, '[]') as variants,
-          COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link,
-          COALESCE(NULLIF(image_url, ''), NULLIF(product_image_url, ''), '') as image_url,
-          COALESCE(category, 'General') as category,
-          COALESCE(in_stock, true) as in_stock,
-          COALESCE(mrp, 0) as mrp,
-          COALESCE(sale_price, 0) as sale_price
-        FROM products
-        WHERE LOWER(username) = LOWER($1)
-        ORDER BY id ASC`,
+        `SELECT id,
+                COALESCE(category_id, 0)::int as category_id,
+                name,
+                COALESCE(sku, '') as sku,
+                COALESCE(price, '₹0') as price,
+                COALESCE(description, '') as description,
+                COALESCE(category, 'General') as category,
+                COALESCE(sub_category, '') as sub_category,
+                COALESCE(sub_category_id, 0)::int as sub_category_id,
+                COALESCE(item_type, 'product') as item_type,
+                COALESCE(unit_type, 'custom') as unit_type,
+                COALESCE(variants, '[]'::jsonb) as variants,
+                COALESCE(images, '[]'::jsonb) as images,
+                COALESCE(in_stock, true) as in_stock,
+                COALESCE(stock_quantity, 50)::int as stock_quantity,
+                COALESCE(low_stock_threshold, 5)::int as low_stock_threshold,
+                COALESCE(mrp, 0)::float as mrp,
+                COALESCE(sale_price, 0)::float as sale_price,
+                COALESCE(NULLIF(product_image_url, ''), NULLIF(image_url, ''), '') as product_image_url,
+                COALESCE(whatsapp_catalog_link, '') as whatsapp_catalog_link
+         FROM products
+         WHERE LOWER(username) = LOWER($1)
+         ORDER BY id ASC`,
         [tenantUsername]
       );
       products = pRes.rows.map(r => {
-        let parsedVariants: any = [];
-        try { parsedVariants = JSON.parse(r.variants); } catch {}
+        let parsedVariants: any[] = [];
+        if (Array.isArray(r.variants)) {
+          parsedVariants = r.variants;
+        } else if (typeof r.variants === 'string') {
+          try { parsedVariants = JSON.parse(r.variants); } catch {}
+        }
+
+        let parsedImages: string[] = [];
+        if (Array.isArray(r.images)) {
+          parsedImages = r.images.filter(Boolean);
+        } else if (typeof r.images === 'string') {
+          try { parsedImages = JSON.parse(r.images).filter(Boolean); } catch {}
+        }
+        if (parsedImages.length === 0 && r.product_image_url) {
+          parsedImages = [r.product_image_url];
+        }
+        const primaryImg = parsedImages[0] || r.product_image_url || '';
+        const computedSale = Number(r.sale_price) || parseFloat(String(r.price || '').replace(/[^\d.]/g, '')) || 0;
+        const stockQty = typeof r.stock_quantity === 'number' ? r.stock_quantity : 50;
+
         return {
           id: r.id,
-          category_id: r.category_id,
-          category: r.category,
-          category_name: r.category,
+          category_id: r.category_id || 0,
+          category: r.category || 'General',
+          category_name: r.category || 'General',
+          sub_category: r.sub_category || '',
+          sub_category_id: r.sub_category_id || 0,
+          item_type: r.item_type || 'product',
           name: r.name,
+          sku: r.sku || `SKU-${String(r.id).padStart(4, '0')}`,
+          sku_code: r.sku || `SKU-${String(r.id).padStart(4, '0')}`,
           price: r.price,
-          mrp: parseFloat(r.mrp) || 0,
-          sale_price: parseFloat(r.sale_price) || 0,
-          description: r.description,
-          unit_type: r.unit_type,
+          mrp: Number(r.mrp) || 0,
+          sale_price: computedSale,
+          description: r.description || '',
+          unit_type: r.unit_type || 'custom',
           variants: parsedVariants,
-          whatsapp_catalog_link: r.whatsapp_catalog_link,
-          image_url: r.image_url || '',
-          in_stock: Boolean(r.in_stock)
+          whatsapp_catalog_link: r.whatsapp_catalog_link || '',
+          image_url: primaryImg,
+          product_image_url: primaryImg,
+          thumb_url: primaryImg,
+          images: parsedImages,
+          in_stock: Boolean(r.in_stock) && stockQty > 0,
+          stock_quantity: stockQty,
+          low_stock_threshold: typeof r.low_stock_threshold === 'number' ? r.low_stock_threshold : 5
         };
       });
-    } catch (e) {}
+    } catch (e: any) {
+      console.warn('Storefront products query fallback:', e.message);
+    }
   }
 
   return res.json({
     status: 'success',
+    allow_cod: tenant.allow_cod,
     tenant,
     categories,
     products
@@ -3776,7 +5224,7 @@ app.get('/api/customer/profile', async (req: Request, res: Response) => {
     }
   }
 
-  return res.json({ status: 'success', profile: customerData });
+  return res.json({ status: 'success', profile: customerData, customer: customerData });
 });
 
 app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
@@ -3785,10 +5233,6 @@ app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
   }
 
   const auth = extractCustomerAuth(req);
-  if (!auth) {
-    return res.status(401).json({ status: 'error', message: 'Authentication required' });
-  }
-
   let body = req.body;
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch {}
@@ -3797,8 +5241,17 @@ app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
   const name = (body?.name || body?.full_name || '').trim();
   const delivery_phone = (body?.delivery_phone || body?.contact_phone || '').trim();
   const delivery_address = (body?.delivery_address || '').trim();
+  const fallbackPhone = String(delivery_phone || body?.whatsapp_number || '').replace(/\D/g, '');
+  const fallbackTenant = String(body?.tenant_id || 'admin').trim();
 
-  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  const cleanPhone = auth ? (auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '')) : fallbackPhone;
+  const tenantId = auth ? auth.tenant_id : fallbackTenant;
+  const jid = auth ? auth.jid : (cleanPhone ? `${cleanPhone}@s.whatsapp.net` : '');
+
+  if (!cleanPhone) {
+    return res.status(400).json({ status: 'error', message: 'Phone number is required to save customer profile.' });
+  }
+
   const pool = getPool();
 
   if (pool) {
@@ -3817,7 +5270,7 @@ app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
            jid = EXCLUDED.jid,
            tenant_id = EXCLUDED.tenant_id,
            updated_at = NOW()`,
-        [auth.tenant_id, auth.jid, cleanPhone, name, delivery_phone || cleanPhone, delivery_address]
+        [tenantId, jid, cleanPhone, name, delivery_phone || cleanPhone, delivery_address]
       );
 
       // 2. Sync to customer_order_states so WhatsApp AI agent immediately knows updated info
@@ -3831,39 +5284,43 @@ app.all(['/api/customer/profile'], async (req: Request, res: Response) => {
            jid = EXCLUDED.jid,
            tenant_id = EXCLUDED.tenant_id,
            updated_at = NOW()`,
-        [auth.tenant_id, cleanPhone, auth.jid, name, delivery_phone || cleanPhone, delivery_address]
+        [tenantId, cleanPhone, jid, name, delivery_phone || cleanPhone, delivery_address]
       );
     } catch (e: any) {
       console.warn('Update customer profile DB error:', e.message);
     }
   }
 
+  const updatedProfile = {
+    jid,
+    tenant_id: tenantId,
+    name,
+    whatsapp_number: cleanPhone,
+    delivery_phone: delivery_phone || cleanPhone,
+    delivery_address
+  };
+
   return res.json({
     status: 'success',
     message: 'Profile updated successfully',
-    profile: {
-      jid: auth.jid,
-      tenant_id: auth.tenant_id,
-      name,
-      whatsapp_number: cleanPhone,
-      delivery_phone: delivery_phone || cleanPhone,
-      delivery_address
-    }
+    profile: updatedProfile,
+    customer: updatedProfile
   });
 });
 
 // 4. ORDER HISTORY API: GET /api/customer/orders
 app.get('/api/customer/orders', async (req: Request, res: Response) => {
   const auth = extractCustomerAuth(req);
-  if (!auth) {
-    return res.status(401).json({ status: 'error', message: 'Authentication required' });
-  }
+  const queryPhone = String(req.query.phone || req.query.customer_phone || '').replace(/\D/g, '');
+  const tenantSlug = String(req.query.tenant_id || req.query.slug || '').toLowerCase().trim();
 
-  const cleanPhone = auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '');
+  const cleanPhone = auth ? (auth.phone || auth.jid.replace(/@.*$/, '').replace(/\D/g, '')) : queryPhone;
+  const authJid = auth ? auth.jid : (cleanPhone ? `${cleanPhone}@s.whatsapp.net` : '');
+
   let orders: any[] = [];
   const pool = getPool();
 
-  if (pool) {
+  if (pool && (cleanPhone || authJid)) {
     try {
       // 1. Fetch from orders table
       const oRes = await pool.query(
@@ -3872,42 +5329,65 @@ app.get('/api/customer/orders', async (req: Request, res: Response) => {
           delivery_phone, delivery_address, items, total_amount, 
           payment_mode, payment_status, order_status, created_at
         FROM orders
-        WHERE (jid = $1 OR customer_phone = $2)
-        ORDER BY created_at DESC`,
-        [auth.jid, cleanPhone]
+        WHERE (jid = $1 OR customer_phone = $2 OR delivery_phone = $2)
+          AND ($3 = '' OR LOWER(tenant_id) = $3)
+        ORDER BY created_at DESC LIMIT 50`,
+        [authJid, cleanPhone, tenantSlug]
       );
 
-      orders = oRes.rows.map(r => ({
-        id: r.id,
-        order_id: r.order_id,
-        date: r.created_at,
-        status: (r.order_status || 'in_progress').toUpperCase(),
-        payment_status: (r.payment_status || 'unpaid').toUpperCase(),
-        payment_mode: r.payment_mode || 'Cash on Delivery',
-        total_amount: Number(r.total_amount || 0),
-        items: Array.isArray(r.items) ? r.items : []
-      }));
+      orders = oRes.rows.map(r => {
+        let parsedItems: any = r.items;
+        if (typeof parsedItems === 'string') {
+          try { parsedItems = JSON.parse(parsedItems); } catch { parsedItems = []; }
+        }
+        return {
+          id: r.id,
+          order_id: r.order_id,
+          created_at: r.created_at,
+          date: r.created_at,
+          customer_name: r.customer_name || '',
+          customer_phone: r.customer_phone || cleanPhone,
+          delivery_address: r.delivery_address || '',
+          order_status: (r.order_status || 'CONFIRMED').toUpperCase(),
+          status: (r.order_status || 'CONFIRMED').toUpperCase(),
+          payment_status: (r.payment_status || 'PENDING').toUpperCase(),
+          payment_mode: r.payment_mode || 'COD',
+          total_amount: Number(r.total_amount || 0),
+          items: Array.isArray(parsedItems) ? parsedItems : []
+        };
+      });
 
       // 2. Also check customer_order_states for current or recent order if orders table is empty
       if (orders.length === 0) {
         const sRes = await pool.query(
           `SELECT 
-            id, order_id, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at
+            id, order_id, customer_name, delivery_address, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at
           FROM customer_order_states
           WHERE (customer_phone = $1 OR jid = $2) AND (order_id IS NOT NULL AND order_id != '')
           ORDER BY updated_at DESC`,
-          [cleanPhone, auth.jid]
+          [cleanPhone, authJid]
         );
-        orders = sRes.rows.map(r => ({
-          id: r.id,
-          order_id: r.order_id,
-          date: r.updated_at || r.created_at,
-          status: (r.order_status || 'in_progress').toUpperCase(),
-          payment_status: (r.payment_status || 'unpaid').toUpperCase(),
-          payment_mode: r.payment_mode || 'Cash on Delivery',
-          total_amount: Number(r.total_amount || 0),
-          items: Array.isArray(r.items) ? r.items : []
-        }));
+        orders = sRes.rows.map(r => {
+          let parsedItems: any = r.items;
+          if (typeof parsedItems === 'string') {
+            try { parsedItems = JSON.parse(parsedItems); } catch { parsedItems = []; }
+          }
+          return {
+            id: r.id,
+            order_id: r.order_id,
+            created_at: r.updated_at || r.created_at,
+            date: r.updated_at || r.created_at,
+            customer_name: r.customer_name || '',
+            customer_phone: cleanPhone,
+            delivery_address: r.delivery_address || '',
+            order_status: (r.order_status || 'CONFIRMED').toUpperCase(),
+            status: (r.order_status || 'CONFIRMED').toUpperCase(),
+            payment_status: (r.payment_status || 'PENDING').toUpperCase(),
+            payment_mode: r.payment_mode || 'COD',
+            total_amount: Number(r.total_amount || 0),
+            items: Array.isArray(parsedItems) ? parsedItems : []
+          };
+        });
       }
     } catch (e: any) {
       console.warn('Customer orders query error:', e.message);
@@ -4082,27 +5562,60 @@ app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request
   }
 
   const finalDeliveryFee = Number(delivery_fee) || 0;
-  const finalTotal = calculatedSubtotal + finalDeliveryFee;
+  const finalPackagingFee = Number(body?.packaging_charge) || 0;
+  const finalTotal = calculatedSubtotal + finalDeliveryFee + finalPackagingFee;
 
-  const orderId = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const orderId = `ORD${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+  const isOnline = String(payment_mode).toUpperCase().trim() === 'ONLINE';
+  const initPayStatus = isOnline ? 'PENDING_PAYMENT' : 'PENDING';
+  const initOrdStatus = isOnline ? 'PENDING_PAYMENT' : 'CONFIRMED';
+
+  let tenantVpa = '';
+  let tenantStoreName = tenant_id;
 
   const pool = getPool();
   if (pool) {
     try {
+      // Fetch tenant UPI VPA & Store Name for Online QR generation
+      const tRes = await pool.query(
+        `SELECT COALESCE(paytm_vpa, '') as paytm_vpa, COALESCE(business_name, account_name, username) as store_name
+         FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(store_slug) = LOWER($1) LIMIT 1`,
+        [tenant_id]
+      );
+      if (tRes.rows.length > 0) {
+        tenantVpa = tRes.rows[0].paytm_vpa || '';
+        tenantStoreName = tRes.rows[0].store_name || tenant_id;
+      }
+
       // 1. Insert into orders table
       await pool.query(
         `INSERT INTO orders 
          (order_id, jid, customer_phone, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, payment_mode, payment_status, order_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', 'CONFIRMED', NOW(), NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
          ON CONFLICT (order_id) DO UPDATE SET updated_at = NOW()`,
-        [orderId, jid, cleanPhone, tenant_id, customer_name, cleanPhone, delivery_address, JSON.stringify(parsedItems), finalTotal, payment_mode]
+        [orderId, jid, cleanPhone, tenant_id, customer_name, cleanPhone, delivery_address, JSON.stringify(parsedItems), finalTotal, payment_mode, initPayStatus, initOrdStatus]
       );
 
-      // 2. Upsert customer_order_states for WhatsApp AI and thermal receipt generator
+      // 2. Decrement product stock_quantity in products table
+      for (const itm of parsedItems) {
+        const prodId = Number(itm.id || itm.product_id);
+        const qty = Number(itm.qty || 1);
+        if (prodId > 0 && qty > 0) {
+          await pool.query(
+            `UPDATE products
+             SET stock_quantity = GREATEST(0, COALESCE(stock_quantity, 100) - $1),
+                 in_stock = CASE WHEN GREATEST(0, COALESCE(stock_quantity, 100) - $1) = 0 THEN false ELSE in_stock END
+             WHERE id = $2 AND LOWER(username) = LOWER($3)`,
+            [qty, prodId, tenant_id]
+          ).catch(() => {});
+        }
+      }
+
+      // 3. Upsert customer_order_states for WhatsApp AI and thermal receipt generator
       await pool.query(
         `INSERT INTO customer_order_states 
          (username, customer_phone, jid, tenant_id, customer_name, delivery_phone, delivery_address, items, total_amount, order_id, payment_mode, payment_status, order_status, updated_at)
-         VALUES ($1, $2, $3, $1, $4, $2, $5, $6, $7, $8, $9, 'PENDING', 'CONFIRMED', NOW())
+         VALUES ($1, $2, $3, $1, $4, $2, $5, $6, $7, $8, $9, $10, $11, NOW())
          ON CONFLICT (username, customer_phone) DO UPDATE SET
            customer_name = EXCLUDED.customer_name,
            delivery_phone = EXCLUDED.delivery_phone,
@@ -4116,16 +5629,16 @@ app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request
            jid = EXCLUDED.jid,
            tenant_id = EXCLUDED.tenant_id,
            updated_at = NOW()`,
-        [tenant_id, cleanPhone, jid, customer_name, delivery_address, JSON.stringify(parsedItems), finalTotal, orderId, payment_mode]
+        [tenant_id, cleanPhone, jid, customer_name, delivery_address, JSON.stringify(parsedItems), finalTotal, orderId, payment_mode, initPayStatus, initOrdStatus]
       );
 
-      // 3. Clear active_carts
+      // 4. Clear active_carts
       await pool.query(
         `DELETE FROM active_carts WHERE (customer_phone = $1 OR jid = $2) AND (tenant_id = $3 OR LOWER(username) = LOWER($3))`,
         [cleanPhone, jid, tenant_id]
       );
 
-      // 4. Update customer profile info in customers table
+      // 5. Update customer profile info in customers table
       await pool.query(
         `INSERT INTO customers (username, tenant_id, jid, wa_number, whatsapp_number, full_name, name, contact_phone, delivery_phone, delivery_address, saved_address, updated_at)
          VALUES ($1, $1, $2, $3, $3, $4, $4, $3, $3, $5, $5, NOW())
@@ -4139,8 +5652,8 @@ app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request
         [tenant_id, jid, cleanPhone, customer_name, delivery_address]
       );
 
-      // 5. Record outbound order message in customer_chats
-      const confText = `🎉 *Order Received!* Your web order #${orderId} for ₹${finalTotal} has been successfully placed. We are processing it now.`;
+      // 6. Record outbound order message in customer_chats
+      const confText = `🎉 *Order Received!* Your web order #${orderId} for ₹${finalTotal} has been placed (${payment_mode}).`;
       await pool.query(
         `INSERT INTO customer_chats (username, customer_phone, role, message_text, sender_type, created_at)
          VALUES ($1, $2, 'assistant', $3, 'outgoing', NOW())`,
@@ -4151,11 +5664,23 @@ app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request
     }
   }
 
+  const cleanVpa = tenantVpa || 'merchant@paytm';
+  const upiUri = `upi://pay?pa=${encodeURIComponent(cleanVpa)}&pn=${encodeURIComponent(tenantStoreName)}&am=${finalTotal.toFixed(2)}&cu=INR&tn=${encodeURIComponent('Order_' + orderId)}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(upiUri)}`;
+
   return res.json({
     status: 'success',
-    message: "Order Placed Successfully! We've sent the confirmation and receipt to your WhatsApp.",
+    message: isOnline
+      ? 'Order created. Please scan UPI QR code to complete payment.'
+      : "Order Placed Successfully! We've sent the confirmation and receipt to your WhatsApp.",
     order_id: orderId,
+    payment_mode: isOnline ? 'ONLINE' : payment_mode,
+    payment_status: initPayStatus,
+    order_status: initOrdStatus,
     total_amount: finalTotal,
+    upi_uri: upiUri,
+    qr_url: qrUrl,
+    qr_image_url: qrUrl,
     order: {
       order_id: orderId,
       jid,
@@ -4165,12 +5690,137 @@ app.post(['/api/orders/checkout', '/api/customer/checkout'], async (req: Request
       items: parsedItems,
       subtotal: calculatedSubtotal,
       delivery_fee: finalDeliveryFee,
+      packaging_charge: finalPackagingFee,
       total_amount: finalTotal,
       payment_mode,
-      payment_status: 'PENDING',
-      order_status: 'CONFIRMED',
+      payment_status: initPayStatus,
+      order_status: initOrdStatus,
       created_at: new Date().toISOString()
     }
+  });
+});
+
+// POST /api/orders/confirm-upi (Allows customer/merchant to confirm UPI payment & UTR)
+app.post('/api/orders/confirm-upi', async (req: Request, res: Response) => {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch {}
+  }
+  const orderId = String(body?.order_id || '').trim();
+  const utrNumber = String(body?.utr_number || '').trim();
+  if (!orderId) {
+    return res.status(400).json({ status: 'error', message: 'order_id is required' });
+  }
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(
+        `UPDATE orders SET payment_status = 'PAID', order_status = 'CONFIRMED', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1)`,
+        [orderId]
+      );
+      await pool.query(
+        `UPDATE customer_order_states SET payment_status = 'PAID', order_status = 'CONFIRMED', updated_at = NOW() WHERE LOWER(order_id) = LOWER($1)`,
+        [orderId]
+      );
+    } catch (e: any) {
+      console.warn('Confirm UPI DB notice:', e.message);
+    }
+  }
+
+  return res.json({
+    status: 'success',
+    order_id: orderId,
+    utr_number: utrNumber,
+    payment_status: 'PAID',
+    order_status: 'CONFIRMED',
+    paid: true,
+    is_paid: true
+  });
+});
+
+// GET /api/orders/status & /api/orders/status/:orderId
+app.get(['/api/orders/status', '/api/orders/status/:orderId'], async (req: Request, res: Response) => {
+  const orderId = (req.params.orderId || req.query.order_id || req.query.orderId || '') as string;
+  const cleanOrderId = orderId.trim();
+  if (!cleanOrderId) {
+    return res.status(400).json({ status: 'error', message: 'order_id parameter is required' });
+  }
+
+  let paymentStatus = 'PENDING';
+  let orderStatus = 'CONFIRMED';
+  let totalAmount = 0;
+  let customerName = '';
+  let deliveryAddress = '';
+  let paymentMode = 'COD';
+  let updatedAt: any = null;
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      const oRes = await pool.query(
+        `SELECT COALESCE(payment_status, 'PENDING') as payment_status,
+                COALESCE(order_status, 'CONFIRMED') as order_status,
+                COALESCE(total_amount, 0) as total_amount,
+                COALESCE(customer_name, '') as customer_name,
+                COALESCE(delivery_address, '') as delivery_address,
+                COALESCE(payment_mode, 'COD') as payment_mode,
+                COALESCE(updated_at, created_at) as updated_at
+         FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1`,
+        [cleanOrderId]
+      );
+      if (oRes.rows.length > 0) {
+        paymentStatus = oRes.rows[0].payment_status;
+        orderStatus = oRes.rows[0].order_status;
+        totalAmount = Number(oRes.rows[0].total_amount || 0);
+        customerName = oRes.rows[0].customer_name || '';
+        deliveryAddress = oRes.rows[0].delivery_address || '';
+        paymentMode = oRes.rows[0].payment_mode || 'COD';
+        updatedAt = oRes.rows[0].updated_at;
+      } else {
+        const sRes = await pool.query(
+          `SELECT COALESCE(payment_status, 'PENDING') as payment_status,
+                  COALESCE(order_status, 'CONFIRMED') as order_status,
+                  COALESCE(total_amount, 0) as total_amount,
+                  COALESCE(customer_name, '') as customer_name,
+                  COALESCE(delivery_address, '') as delivery_address,
+                  COALESCE(payment_mode, 'COD') as payment_mode,
+                  COALESCE(updated_at, created_at) as updated_at
+           FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1`,
+          [cleanOrderId]
+        );
+        if (sRes.rows.length > 0) {
+          paymentStatus = sRes.rows[0].payment_status;
+          orderStatus = sRes.rows[0].order_status;
+          totalAmount = Number(sRes.rows[0].total_amount || 0);
+          customerName = sRes.rows[0].customer_name || '';
+          deliveryAddress = sRes.rows[0].delivery_address || '';
+          paymentMode = sRes.rows[0].payment_mode || 'COD';
+          updatedAt = sRes.rows[0].updated_at;
+        }
+      }
+    } catch (e: any) {
+      console.warn('Query order status error:', e.message);
+    }
+  }
+
+  const normPayStatus = String(paymentStatus).toUpperCase().trim();
+  const normOrdStatus = normalizeOrderStatusCode(orderStatus);
+  const isPaid = ['PAID', 'SUCCESS', 'TXN_SUCCESS', 'COMPLETED', 'CONFIRMED'].includes(normPayStatus);
+
+  return res.json({
+    status: 'success',
+    order_id: cleanOrderId,
+    payment_status: normPayStatus,
+    order_status: normOrdStatus,
+    order_status_label: formatOrderStatusLabel(normOrdStatus),
+    total_amount: totalAmount,
+    customer_name: customerName,
+    delivery_address: deliveryAddress,
+    payment_mode: paymentMode,
+    updated_at: updatedAt,
+    is_paid: isPaid,
+    status_label: isPaid ? 'PAID' : normPayStatus
   });
 });
 
@@ -4424,26 +6074,81 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
   let autoReplyUsers = 0;
   let libraryOwnersCount = 0;
   let businessUsersCount = 0;
+  let totalMediaItems = 0;
+  let totalOrders = 0;
+  let totalGMV = 0;
+  let todayOrders = 0;
+  let todayGMV = 0;
+  let totalLeads = 0;
+  let totalChats = 0;
+  let activeChannelRules = 0;
+
+  const sevenDayLabels: string[] = [];
+  const sevenDayGMV: number[] = [];
+  const sevenDayOrders: number[] = [];
+  const dayMap = new Map<string, { gmv: number; orders: number }>();
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    sevenDayLabels.push(d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }));
+    dayMap.set(key, { gmv: 0, orders: 0 });
+  }
 
   if (getPool()) {
     const pool = getPool();
     if (pool) {
       try {
         const rTotal = await pool.query("SELECT COUNT(*) FROM users WHERE LOWER(username) != 'admin'");
-        const rConn = await pool.query("SELECT COUNT(*) FROM users WHERE status = 'Connected' AND wa_jid != '' AND LOWER(username) != 'admin'");
+        const rConn = await pool.query("SELECT COUNT(*) FROM users WHERE (status = 'Connected' OR (wa_jid IS NOT NULL AND wa_jid != '')) AND LOWER(username) != 'admin'");
         const rAutoAcc = await pool.query("SELECT COUNT(*) FROM users WHERE automation_access = true AND LOWER(username) != 'admin'");
         const rAutoRep = await pool.query("SELECT COUNT(*) FROM users WHERE auto_reply = true AND LOWER(username) != 'admin'");
         const rLib = await pool.query("SELECT COUNT(*) FROM users WHERE user_type = 'library_owner' AND LOWER(username) != 'admin'");
         const rBiz = await pool.query("SELECT COUNT(*) FROM users WHERE user_type = 'business_user' AND LOWER(username) != 'admin'");
+        const rProds = await pool.query("SELECT COUNT(*) FROM products");
+        const rLeads = await pool.query("SELECT COUNT(*) FROM leads");
+        const rChats = await pool.query("SELECT COUNT(DISTINCT customer_phone) FROM customer_chats");
+        const rRules = await pool.query("SELECT COUNT(*) FROM channel_forwarding_rules WHERE is_active = true");
+        const rOrdersAgg = await pool.query(`
+          SELECT COUNT(*)::int as total_orders,
+                 COALESCE(SUM(total_amount), 0)::float as total_gmv,
+                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int as today_orders,
+                 COALESCE(SUM(total_amount) FILTER (WHERE created_at >= CURRENT_DATE), 0)::float as today_gmv
+          FROM orders
+        `);
 
-        totalUsers = parseInt(rTotal.rows[0].count, 10) || 0;
-        connectedUsers = parseInt(rConn.rows[0].count, 10) || 0;
-        automationEnabledUsers = parseInt(rAutoAcc.rows[0].count, 10) || 0;
-        autoReplyUsers = parseInt(rAutoRep.rows[0].count, 10) || 0;
-        libraryOwnersCount = parseInt(rLib.rows[0].count, 10) || 0;
-        businessUsersCount = parseInt(rBiz.rows[0].count, 10) || 0;
+        totalUsers = parseInt(rTotal.rows[0]?.count || '0', 10);
+        connectedUsers = parseInt(rConn.rows[0]?.count || '0', 10);
+        automationEnabledUsers = parseInt(rAutoAcc.rows[0]?.count || '0', 10);
+        autoReplyUsers = parseInt(rAutoRep.rows[0]?.count || '0', 10);
+        libraryOwnersCount = parseInt(rLib.rows[0]?.count || '0', 10);
+        businessUsersCount = parseInt(rBiz.rows[0]?.count || '0', 10);
+        totalMediaItems = parseInt(rProds.rows[0]?.count || '0', 10);
+        totalLeads = parseInt(rLeads.rows[0]?.count || '0', 10);
+        totalChats = parseInt(rChats.rows[0]?.count || '0', 10);
+        activeChannelRules = parseInt(rRules.rows[0]?.count || '0', 10);
+        totalOrders = Number(rOrdersAgg.rows[0]?.total_orders || 0);
+        totalGMV = Math.round(Number(rOrdersAgg.rows[0]?.total_gmv || 0));
+        todayOrders = Number(rOrdersAgg.rows[0]?.today_orders || 0);
+        todayGMV = Math.round(Number(rOrdersAgg.rows[0]?.today_gmv || 0));
 
-        // Sync RAM memoryUsers with Neon DB so stale deleted accounts are removed from RAM
+        const recent7dOrders = await pool.query(
+          `SELECT COALESCE(total_amount, 0)::float as total_amount, created_at
+           FROM orders
+           WHERE created_at >= NOW() - INTERVAL '7 days'`
+        );
+        for (const row of recent7dOrders.rows) {
+          const dt = row.created_at ? new Date(row.created_at) : now;
+          const k = !isNaN(dt.getTime()) ? dt.toISOString().slice(0, 10) : '';
+          if (dayMap.has(k)) {
+            const b = dayMap.get(k)!;
+            b.gmv += Number(row.total_amount || 0);
+            b.orders += 1;
+          }
+        }
+
+        // Sync RAM memoryUsers with Neon DB
         const allDbUsers = await pool.query("SELECT username, status, wa_jid FROM users");
         const validDbUsernames = new Set(allDbUsers.rows.map(r => r.username.toLowerCase()));
 
@@ -4472,6 +6177,12 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
     autoReplyUsers = users.filter(u => u.auto_reply).length;
     libraryOwnersCount = users.filter(u => u.user_type === 'library_owner').length;
     businessUsersCount = users.filter(u => u.user_type === 'business_user').length;
+    totalMediaItems = memoryCatalog.length;
+  }
+
+  for (const [, bucket] of dayMap.entries()) {
+    sevenDayGMV.push(Math.round(bucket.gmv));
+    sevenDayOrders.push(bucket.orders);
   }
 
   const activeUsersList = Array.from(memoryUsers.values())
@@ -4492,18 +6203,31 @@ app.get('/api/admin/dashboard', async (_req: Request, res: Response) => {
     }));
 
   return res.json({
+    status: 'success',
     metrics: {
       totalUsers,
       libraryOwnersCount,
       businessUsersCount,
       connectedUsers,
-      disconnectedUsers: totalUsers - connectedUsers,
+      disconnectedUsers: Math.max(0, totalUsers - connectedUsers),
       automationEnabledUsers,
       autoReplyUsers,
       totalMessagesSent: stats.totalMessagesSent,
       totalAiReplies: stats.totalAiReplies,
       campaignsLaunched: stats.campaignsLaunched,
-      totalMediaItems: getPool() ? parseInt((await getPool()!.query("SELECT COUNT(*) FROM products")).rows[0]?.count || '0', 10) : memoryCatalog.length
+      totalMediaItems,
+      totalOrders,
+      totalGMV,
+      todayOrders,
+      todayGMV,
+      totalLeads,
+      totalChats,
+      activeChannelRules
+    },
+    charts: {
+      seven_day_labels: sevenDayLabels,
+      seven_day_gmv: sevenDayGMV,
+      seven_day_orders: sevenDayOrders
     },
     users: activeUsersList
   });
@@ -4531,6 +6255,554 @@ app.post('/api/ai/test', async (req: Request, res: Response) => {
   });
 });
 
+// 16. NEWSLETTERS & CHANNELS ENDPOINTS (/api/admin/newsletters & /api/whatsapp/newsletters)
+interface NewsletterItem {
+  jid: string;
+  name: string;
+  role: string;
+  subscriber_count?: number;
+}
+
+app.all(['/api/admin/newsletters', '/api/whatsapp/newsletters', '/api/whatsapp/channels'], async (req: Request, res: Response) => {
+  const username = ((req.query.username as string) || (req.body?.username as string) || 'admin').trim().toLowerCase();
+
+  if (getPool()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS newsletters (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) NOT NULL,
+            jid VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            role VARCHAR(50) DEFAULT 'ADMIN',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, jid)
+          );
+        `);
+
+        // Remove any legacy fake placeholder rows
+        await pool.query(`
+          DELETE FROM newsletters
+          WHERE jid IN (
+            '120363000000000001@newsletter',
+            '120363000000000002@newsletter',
+            '120363000000000003@newsletter'
+          );
+        `);
+
+        // Allow POST to register/save a custom WhatsApp channel JID + Name + Role
+        if (req.method === 'POST') {
+          let body = req.body;
+          if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch {}
+          }
+          let rawJid = String(body?.jid || '').trim();
+          const name = String(body?.name || rawJid).trim();
+          const role = String(body?.role || 'ADMIN').trim().toUpperCase();
+          if (!rawJid) {
+            return res.status(400).json({ status: 'error', message: 'Channel JID is required' });
+          }
+          if (!rawJid.includes('@')) {
+            rawJid = `${rawJid}@newsletter`;
+          }
+          await pool.query(
+            `INSERT INTO newsletters (username, jid, name, role)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (username, jid) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role`,
+            [username, rawJid, name, role]
+          );
+          return res.json({ status: 'success', channel: { jid: rawJid, name, role } });
+        }
+
+        // Build map of real channels from both newsletters table and channel_forwarding_rules table
+        const channelMap = new Map<string, NewsletterItem>();
+
+        // 1. Pull all channels referenced in channel_forwarding_rules
+        try {
+          const rulesChannelsRes = await pool.query(`
+            SELECT source_jid, source_name, target_jid, target_name
+            FROM channel_forwarding_rules
+            ORDER BY id DESC
+          `);
+          for (const row of rulesChannelsRes.rows) {
+            const sJid = String(row.source_jid || '').trim();
+            const sName = String(row.source_name || sJid).trim();
+            if (sJid && !channelMap.has(sJid)) {
+              channelMap.set(sJid, { jid: sJid, name: sName, role: 'SUBSCRIBER' });
+            }
+            const tJid = String(row.target_jid || '').trim();
+            const tName = String(row.target_name || tJid).trim();
+            if (tJid) {
+              // Target channels are writeable (OWNER / ADMIN)
+              channelMap.set(tJid, { jid: tJid, name: tName, role: 'OWNER' });
+            }
+          }
+        } catch (ruleErr) {
+          console.warn('Error reading channels from channel_forwarding_rules:', ruleErr);
+        }
+
+        // 2. Pull saved channels from newsletters table
+        const nlRes = await pool.query(
+          `SELECT jid, name, role FROM newsletters ORDER BY id ASC`
+        );
+        for (const row of nlRes.rows) {
+          const jid = String(row.jid || '').trim();
+          const name = String(row.name || jid).trim();
+          const role = String(row.role || 'SUBSCRIBER').trim().toUpperCase();
+          if (!jid) continue;
+          const existing = channelMap.get(jid);
+          if (!existing || role === 'OWNER' || role === 'ADMIN') {
+            channelMap.set(jid, { jid, name: name || existing?.name || jid, role });
+          }
+        }
+
+        // Sync discovered real channels back into newsletters table for this user
+        for (const item of channelMap.values()) {
+          await pool.query(
+            `INSERT INTO newsletters (username, jid, name, role)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (username, jid) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role`,
+            [username, item.jid, item.name, item.role]
+          ).catch(() => {});
+        }
+
+        return res.json(Array.from(channelMap.values()));
+      } catch (err) {
+        console.warn('Newsletters DB query error:', err);
+      }
+    }
+  }
+
+  return res.json([]);
+});
+
+// 17. CHANNEL FORWARDING RULES ENDPOINTS (/api/admin/channel-rules & /api/whatsapp/channel-rules)
+interface ChannelRule {
+  id: number;
+  admin_account_id: string;
+  source_jid: string;
+  source_name: string;
+  target_jid: string;
+  target_name: string;
+  forward_logic: string;
+  block_urls: boolean;
+  strip_channel_links: boolean;
+  is_active: boolean;
+  created_at?: string;
+}
+
+let memoryChannelRules: ChannelRule[] = [];
+let nextChannelRuleId = 1;
+
+async function ensureChannelRulesTable() {
+  if (getPool()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS channel_forwarding_rules (
+            id SERIAL PRIMARY KEY,
+            admin_account_id VARCHAR(100) DEFAULT 'admin',
+            source_jid VARCHAR(255) NOT NULL,
+            source_name VARCHAR(255) DEFAULT '',
+            target_jid VARCHAR(255) NOT NULL,
+            target_name VARCHAR(255) DEFAULT '',
+            forward_logic VARCHAR(50) DEFAULT 'all',
+            block_urls BOOLEAN DEFAULT false,
+            strip_channel_links BOOLEAN DEFAULT true,
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (err) {
+        console.warn('channel_forwarding_rules table creation error:', err);
+      }
+    }
+  }
+}
+
+app.all(['/api/admin/channel-rules', '/api/whatsapp/channel-rules'], async (req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+
+  // GET: Fetch all channel forwarding rules from channel_forwarding_rules
+  if (req.method === 'GET') {
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const rulesRes = await pool.query(`
+            SELECT id,
+                   COALESCE(admin_account_id, 'admin') AS admin_account_id,
+                   source_jid,
+                   COALESCE(NULLIF(source_name, ''), source_jid) AS source_name,
+                   target_jid,
+                   COALESCE(NULLIF(target_name, ''), target_jid) AS target_name,
+                   COALESCE(NULLIF(forward_logic, ''), 'all') AS forward_logic,
+                   COALESCE(block_urls, false) AS block_urls,
+                   COALESCE(strip_channel_links, true) AS strip_channel_links,
+                   COALESCE(is_active, true) AS is_active,
+                   COALESCE(TO_CHAR(created_at, 'DD Mon YYYY HH24:MI'), '') AS created_at
+            FROM channel_forwarding_rules
+            ORDER BY id DESC
+          `);
+          return res.json({
+            status: 'success',
+            rules: rulesRes.rows
+          });
+        } catch (err: any) {
+          console.warn('channel_forwarding_rules DB fetch error:', err);
+        }
+      }
+    }
+
+    return res.json({
+      status: 'success',
+      rules: memoryChannelRules
+    });
+  }
+
+  // POST: Create a new channel rule in channel_forwarding_rules
+  if (req.method === 'POST') {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch {}
+    }
+
+    const adminAccountId = String(body?.admin_account_id || 'admin').trim();
+    let sourceJid = String(body?.source_jid || '').trim();
+    const sourceName = String(body?.source_name || sourceJid).trim();
+    let targetJid = String(body?.target_jid || '').trim();
+    const targetName = String(body?.target_name || targetJid).trim();
+    const forwardLogic = String(body?.forward_logic || 'all').trim().toLowerCase();
+    const blockUrls = Boolean(body?.block_urls);
+    const stripLinks = body?.strip_channel_links !== undefined ? Boolean(body.strip_channel_links) : true;
+
+    if (!sourceJid || !targetJid) {
+      return res.status(400).json({ status: 'error', message: 'Source and Target channels are required' });
+    }
+    if (!sourceJid.includes('@')) sourceJid = `${sourceJid}@newsletter`;
+    if (!targetJid.includes('@')) targetJid = `${targetJid}@newsletter`;
+
+    if (sourceJid === targetJid) {
+      return res.status(400).json({ status: 'error', message: 'Source and Target channel cannot be identical' });
+    }
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const insertRes = await pool.query(
+            `INSERT INTO channel_forwarding_rules (admin_account_id, source_jid, source_name, target_jid, target_name, forward_logic, block_urls, strip_channel_links, is_active, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, NOW())
+             RETURNING *`,
+            [adminAccountId, sourceJid, sourceName, targetJid, targetName, forwardLogic, blockUrls, stripLinks]
+          );
+
+          // Also persist source & target in newsletters table so dropdowns stay updated
+          await pool.query(
+            `INSERT INTO newsletters (username, jid, name, role) VALUES ($1, $2, $3, 'SUBSCRIBER') ON CONFLICT (username, jid) DO NOTHING`,
+            [adminAccountId, sourceJid, sourceName]
+          ).catch(() => {});
+          await pool.query(
+            `INSERT INTO newsletters (username, jid, name, role) VALUES ($1, $2, $3, 'OWNER') ON CONFLICT (username, jid) DO UPDATE SET name = EXCLUDED.name, role = 'OWNER'`,
+            [adminAccountId, targetJid, targetName]
+          ).catch(() => {});
+
+          return res.json({
+            status: 'success',
+            message: 'Channel forwarding rule added successfully!',
+            rule: insertRes.rows[0]
+          });
+        } catch (err: any) {
+          return res.status(500).json({ status: 'error', message: err?.message || 'DB error adding rule' });
+        }
+      }
+    }
+
+    const newRule: ChannelRule = {
+      id: nextChannelRuleId++,
+      admin_account_id: adminAccountId,
+      source_jid: sourceJid,
+      source_name: sourceName,
+      target_jid: targetJid,
+      target_name: targetName,
+      forward_logic: forwardLogic,
+      block_urls: blockUrls,
+      strip_channel_links: stripLinks,
+      is_active: true,
+      created_at: new Date().toISOString()
+    };
+    memoryChannelRules.unshift(newRule);
+
+    return res.json({
+      status: 'success',
+      message: 'Channel forwarding rule added successfully!',
+      rule: newRule
+    });
+  }
+
+  // PUT: Update an existing rule in channel_forwarding_rules
+  if (req.method === 'PUT') {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch {}
+    }
+
+    const id = parseInt(body?.id, 10);
+    if (!id || id <= 0) {
+      return res.status(400).json({ status: 'error', message: 'Valid rule ID is required' });
+    }
+
+    let sourceJid = String(body?.source_jid || '').trim();
+    const sourceName = String(body?.source_name || sourceJid).trim();
+    let targetJid = String(body?.target_jid || '').trim();
+    const targetName = String(body?.target_name || targetJid).trim();
+    const forwardLogic = String(body?.forward_logic || 'all').trim().toLowerCase();
+    const blockUrls = Boolean(body?.block_urls);
+    const stripLinks = body?.strip_channel_links !== undefined ? Boolean(body.strip_channel_links) : true;
+    const isActive = body?.is_active !== undefined ? Boolean(body.is_active) : true;
+
+    if (!sourceJid || !targetJid) {
+      return res.status(400).json({ status: 'error', message: 'Both Source and Target channels are required' });
+    }
+    if (!sourceJid.includes('@')) sourceJid = `${sourceJid}@newsletter`;
+    if (!targetJid.includes('@')) targetJid = `${targetJid}@newsletter`;
+    if (sourceJid === targetJid) {
+      return res.status(400).json({ status: 'error', message: 'Source and Target channel cannot be identical' });
+    }
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const updateRes = await pool.query(
+            `UPDATE channel_forwarding_rules
+             SET source_jid = $1, source_name = $2, target_jid = $3, target_name = $4,
+                 forward_logic = $5, block_urls = $6, strip_channel_links = $7, is_active = $8
+             WHERE id = $9
+             RETURNING *`,
+            [sourceJid, sourceName, targetJid, targetName, forwardLogic, blockUrls, stripLinks, isActive, id]
+          );
+
+          if (updateRes.rows.length === 0) {
+            return res.status(404).json({ status: 'error', message: 'Rule not found' });
+          }
+
+          return res.json({
+            status: 'success',
+            message: `Forwarding rule #${id} updated successfully!`,
+            rule: updateRes.rows[0]
+          });
+        } catch (err: any) {
+          return res.status(500).json({ status: 'error', message: err?.message || 'DB error updating rule' });
+        }
+      }
+    }
+
+    const rule = memoryChannelRules.find(r => r.id === id);
+    if (!rule) {
+      return res.status(404).json({ status: 'error', message: 'Rule not found' });
+    }
+
+    rule.source_jid = sourceJid;
+    rule.source_name = sourceName;
+    rule.target_jid = targetJid;
+    rule.target_name = targetName;
+    rule.forward_logic = forwardLogic;
+    rule.block_urls = blockUrls;
+    rule.strip_channel_links = stripLinks;
+    rule.is_active = isActive;
+
+    return res.json({
+      status: 'success',
+      message: `Forwarding rule #${id} updated successfully!`,
+      rule
+    });
+  }
+
+  // DELETE: Delete a rule from channel_forwarding_rules
+  if (req.method === 'DELETE') {
+    let idStr = (req.query.id as string) || '';
+    if (!idStr && req.body) {
+      let body = req.body;
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch {}
+      }
+      if (body && body.id) idStr = String(body.id);
+    }
+
+    const id = parseInt(idStr, 10);
+    if (!id || id <= 0) {
+      return res.status(400).json({ status: 'error', message: 'Valid rule ID is required' });
+    }
+
+    if (getPool()) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`DELETE FROM channel_forwarding_rules WHERE id = $1`, [id]);
+          return res.json({
+            status: 'success',
+            message: `Forwarding rule #${id} deleted successfully!`
+          });
+        } catch (err: any) {
+          return res.status(500).json({ status: 'error', message: err?.message || 'DB error deleting rule' });
+        }
+      }
+    }
+
+    memoryChannelRules = memoryChannelRules.filter(r => r.id !== id);
+    return res.json({
+      status: 'success',
+      message: `Forwarding rule #${id} deleted successfully!`
+    });
+  }
+
+  return res.status(405).json({ status: 'error', message: 'Method not allowed' });
+});
+
+// 18. TOGGLE CHANNEL RULE (/api/admin/channel-rules/toggle & /api/whatsapp/channel-rules/toggle)
+app.post(['/api/admin/channel-rules/toggle', '/api/whatsapp/channel-rules/toggle'], async (req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+
+  let idStr = (req.query.id as string) || '';
+  if (!idStr && req.body) {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch {}
+    }
+    if (body && body.id) idStr = String(body.id);
+  }
+
+  const id = parseInt(idStr, 10);
+  if (!id || id <= 0) {
+    return res.status(400).json({ status: 'error', message: 'Valid rule ID is required' });
+  }
+
+  if (getPool()) {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const toggleRes = await pool.query(
+          `UPDATE channel_forwarding_rules SET is_active = NOT is_active WHERE id = $1 RETURNING *`,
+          [id]
+        );
+        if (toggleRes.rows.length === 0) {
+          return res.status(404).json({ status: 'error', message: 'Rule not found' });
+        }
+        return res.json({
+          status: 'success',
+          id,
+          is_active: toggleRes.rows[0].is_active,
+          message: `Forwarding rule #${id} status toggled!`,
+          rule: toggleRes.rows[0]
+        });
+      } catch (err: any) {
+        return res.status(500).json({ status: 'error', message: err?.message || 'DB error toggling rule' });
+      }
+    }
+  }
+
+  const rule = memoryChannelRules.find(r => r.id === id);
+  if (!rule) {
+    return res.status(404).json({ status: 'error', message: 'Rule not found' });
+  }
+
+  rule.is_active = !rule.is_active;
+  return res.json({
+    status: 'success',
+    id,
+    is_active: rule.is_active,
+    message: `Forwarding rule #${id} status toggled!`,
+    rule
+  });
+});
+
+// 19. CHANNEL-FORWARD COMPATIBILITY ENDPOINTS (/api/channel-forward/*)
+app.get('/api/channel-forward/list', async (_req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+  const pool = getPool();
+  if (pool) {
+    try {
+      const rulesRes = await pool.query(`
+        SELECT id,
+               COALESCE(NULLIF(source_name, ''), 'Pipeline #' || id::text) AS name,
+               source_jid,
+               target_jid AS dest_jid,
+               COALESCE(is_active, true) AS enabled,
+               0 AS forwarded_count
+        FROM channel_forwarding_rules
+        ORDER BY id DESC
+      `);
+      return res.json(rulesRes.rows);
+    } catch (err) {}
+  }
+  return res.json([]);
+});
+
+app.post(['/api/channel-forward/add', '/api/channel-forward/update'], async (req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+  const { id, name, source_jid, dest_jid } = req.body || {};
+  let sJid = String(source_jid || '').trim();
+  let dJid = String(dest_jid || '').trim();
+  if (!sJid || !dJid) {
+    return res.status(400).json({ error: 'Source and Destination Channel JIDs are required' });
+  }
+  if (!sJid.includes('@')) sJid = `${sJid}@newsletter`;
+  if (!dJid.includes('@')) dJid = `${dJid}@newsletter`;
+
+  const pool = getPool();
+  if (pool) {
+    try {
+      if (id) {
+        await pool.query(
+          `UPDATE channel_forwarding_rules SET source_name = $1, source_jid = $2, target_jid = $3 WHERE id = $4`,
+          [name || sJid, sJid, dJid, Number(id)]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO channel_forwarding_rules (admin_account_id, source_name, source_jid, target_name, target_jid, is_active, created_at)
+           VALUES ('admin', $1, $2, $1, $3, true, NOW())`,
+          [name || sJid, sJid, dJid]
+        );
+      }
+      return res.json({ status: 'success', success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Database error saving channel rule' });
+    }
+  }
+  return res.json({ status: 'success', success: true });
+});
+
+app.post('/api/channel-forward/toggle', async (req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+  const { id, enabled } = req.body || {};
+  const pool = getPool();
+  if (pool && id) {
+    try {
+      await pool.query(
+        `UPDATE channel_forwarding_rules SET is_active = $1 WHERE id = $2`,
+        [Boolean(enabled), Number(id)]
+      );
+    } catch (err) {}
+  }
+  return res.json({ status: 'success', success: true });
+});
+
+app.delete('/api/channel-forward/delete', async (req: Request, res: Response) => {
+  await ensureChannelRulesTable();
+  const id = Number(req.query.id || req.body?.id || 0);
+  const pool = getPool();
+  if (pool && id > 0) {
+    try {
+      await pool.query(`DELETE FROM channel_forwarding_rules WHERE id = $1`, [id]);
+    } catch (err) {}
+  }
+  return res.json({ status: 'success', success: true });
+});
+
 // --- SERVE PUBLIC ---
 const publicDir = fs.existsSync(path.join(__dirname, 'public'))
   ? path.join(__dirname, 'public')
@@ -4545,7 +6817,7 @@ app.get(['/business', '/business-portal', '/business-portal.html', '/dashboard']
   res.sendFile(path.join(publicDir, 'business-portal.html'));
 });
 
-app.get(['/store', '/storefront', '/storefront.html'], (_req: Request, res: Response) => {
+app.get(['/store', '/storefront', '/storefront.html', '/store/:store_slug', '/storefront/:store_slug'], (_req: Request, res: Response) => {
   res.sendFile(path.join(publicDir, 'storefront.html'));
 });
 

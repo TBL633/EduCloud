@@ -331,6 +331,169 @@ func SendOrderConfirmationWhatsApp(waClient *whatsmeow.Client, jid string, order
 	return nil
 }
 
+// NormalizeOrderStatus standardizes fulfillment status strings across DB, API, and WhatsApp notifications.
+func NormalizeOrderStatus(rawStatus string) string {
+	s := strings.ToUpper(strings.TrimSpace(rawStatus))
+	switch s {
+	case "DISPATCHED", "SHIPPED":
+		return "DISPATCHED"
+	case "OUT_FOR_DELIVERY", "OUT FOR DELIVERY", "ON_THE_WAY", "ON THE WAY":
+		return "OUT_FOR_DELIVERY"
+	case "DELIVERED", "COMPLETED":
+		return "DELIVERED"
+	case "PROCESSING", "PREPARING", "PACKING":
+		return "PROCESSING"
+	case "CANCELLED", "CANCELED":
+		return "CANCELLED"
+	case "NEW", "CONFIRMED", "ORDER_CONFIRMED":
+		return "CONFIRMED"
+	default:
+		if s != "" {
+			return s
+		}
+		return "CONFIRMED"
+	}
+}
+
+// SendOrderStatusUpdateWhatsApp automatically dispatches a real-time WhatsApp message via whatsmeow
+// when an order's fulfillment status changes to Dispatched, Out for Delivery, or Delivered.
+func SendOrderStatusUpdateWhatsApp(tenantID string, jid string, customerPhone string, orderID string, newStatus string) error {
+	cleanOrdID := strings.TrimSpace(orderID)
+	if cleanOrdID == "" {
+		return fmt.Errorf("empty order_id")
+	}
+
+	normStatus := NormalizeOrderStatus(newStatus)
+	cleanTenant := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(tenantID), "@"))
+	if cleanTenant == "" {
+		cleanTenant = "admin"
+	}
+
+	cleanJID := strings.TrimSpace(jid)
+	reg := regexp.MustCompile(`\D`)
+	cleanPhone := FormatPhone(reg.ReplaceAllString(customerPhone, ""))
+	if cleanPhone == "" && strings.Contains(cleanJID, "@") {
+		cleanPhone = FormatPhone(reg.ReplaceAllString(strings.Split(cleanJID, "@")[0], ""))
+	}
+
+	var totalAmt float64
+	var payMode string = "COD"
+	var custName string = "Customer"
+	var storeName string = "Our Store"
+
+	if DB != nil {
+		var dbTenant, dbJID, dbPhone, dbDelivPhone, dbName, dbPayMode string
+		err := DB.QueryRow(`
+			SELECT COALESCE(tenant_id, ''), COALESCE(jid, ''), COALESCE(customer_phone, ''), COALESCE(delivery_phone, ''),
+			       COALESCE(customer_name, ''), COALESCE(total_amount, 0), COALESCE(payment_mode, 'COD')
+			FROM orders WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+		`, cleanOrdID).Scan(&dbTenant, &dbJID, &dbPhone, &dbDelivPhone, &dbName, &totalAmt, &dbPayMode)
+
+		if err != nil || (dbPhone == "" && dbJID == "") {
+			_ = DB.QueryRow(`
+				SELECT COALESCE(NULLIF(tenant_id, ''), username, ''), COALESCE(jid, ''), COALESCE(customer_phone, ''), COALESCE(delivery_phone, ''),
+				       COALESCE(customer_name, ''), COALESCE(total_amount, 0), COALESCE(payment_mode, 'COD')
+				FROM customer_order_states WHERE LOWER(order_id) = LOWER($1) LIMIT 1
+			`, cleanOrdID).Scan(&dbTenant, &dbJID, &dbPhone, &dbDelivPhone, &dbName, &totalAmt, &dbPayMode)
+		}
+
+		if dbTenant != "" && (cleanTenant == "admin" || cleanTenant == "") {
+			cleanTenant = strings.ToLower(strings.TrimSpace(dbTenant))
+		}
+		if cleanJID == "" && dbJID != "" {
+			cleanJID = dbJID
+		}
+		if cleanPhone == "" && dbPhone != "" {
+			cleanPhone = FormatPhone(reg.ReplaceAllString(dbPhone, ""))
+		}
+		if cleanPhone == "" && dbDelivPhone != "" {
+			cleanPhone = FormatPhone(reg.ReplaceAllString(dbDelivPhone, ""))
+		}
+		if cleanPhone == "" && strings.Contains(cleanJID, "@") {
+			cleanPhone = FormatPhone(reg.ReplaceAllString(strings.Split(cleanJID, "@")[0], ""))
+		}
+		if dbName != "" {
+			custName = dbName
+		}
+		if dbPayMode != "" {
+			payMode = strings.ToUpper(dbPayMode)
+		}
+
+		_ = DB.QueryRow(`
+			SELECT COALESCE(NULLIF(business_name, ''), NULLIF(account_name, ''), username)
+			FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(store_slug) = LOWER($1) LIMIT 1
+		`, cleanTenant).Scan(&storeName)
+	}
+
+	if storeName == "" {
+		storeName = cleanTenant
+	}
+
+	var statusMsg string
+	switch normStatus {
+	case "DISPATCHED":
+		statusMsg = fmt.Sprintf(
+			"📦 *Your order has been dispatched!*\n\nHello *%s*,\nYour order *#%s* from *%s* (₹%.2f) has been packed and dispatched! We will notify you as soon as our delivery partner is out for delivery. 🚀",
+			custName, cleanOrdID, storeName, totalAmt,
+		)
+	case "OUT_FOR_DELIVERY":
+		statusMsg = fmt.Sprintf(
+			"🛵 *Your order is out for delivery!*\n\nHello *%s*,\nYour order *#%s* from *%s* (₹%.2f • %s) is on the way to your address! Please keep your phone reachable. 📍",
+			custName, cleanOrdID, storeName, totalAmt, payMode,
+		)
+	case "DELIVERED":
+		statusMsg = fmt.Sprintf(
+			"✅ *Your order is delivered!*\n\nHello *%s*,\nYour order *#%s* (₹%.2f) from *%s* has been successfully delivered. Thank you for shopping with us! 🙏✨",
+			custName, cleanOrdID, totalAmt, storeName,
+		)
+	case "PROCESSING":
+		statusMsg = fmt.Sprintf(
+			"👨‍🍳 *Your order #%s is being prepared!*\n\nHello *%s*, *%s* is currently packing your items (₹%.2f). You will receive an update once it is dispatched!",
+			cleanOrdID, custName, storeName, totalAmt,
+		)
+	default:
+		return nil
+	}
+
+	if cleanPhone != "" {
+		PushToLiveChat(cleanTenant, cleanPhone, statusMsg, "outgoing_ai")
+		go SaveCustomerChatAndPrune(cleanTenant, cleanPhone, "assistant", statusMsg)
+	}
+
+	// Locate active whatsmeow client for tenant
+	var client *whatsmeow.Client
+	if c, exists := ActiveClients[cleanTenant]; exists && c != nil && c.IsLoggedIn() {
+		client = c
+	} else if c, exists := ActiveClients["admin"]; exists && c != nil && c.IsLoggedIn() {
+		client = c
+	} else {
+		for _, c := range ActiveClients {
+			if c != nil && c.IsLoggedIn() {
+				client = c
+				break
+			}
+		}
+	}
+
+	if client == nil || !client.IsLoggedIn() {
+		log.Printf("⚠️ [Order Fulfillment WhatsApp] No active whatsmeow client for +%s (Order #%s -> %s)", cleanPhone, cleanOrdID, normStatus)
+		return fmt.Errorf("no logged-in whatsapp client available")
+	}
+
+	if cleanPhone == "" {
+		return fmt.Errorf("customer phone not found for order %s", cleanOrdID)
+	}
+
+	if err := SendMessage(client, cleanPhone, statusMsg); err != nil {
+		log.Printf("⚠️ [Order Fulfillment WhatsApp] Failed sending %s update to +%s for #%s: %v", normStatus, cleanPhone, cleanOrdID, err)
+		return err
+	}
+
+	log.Printf("📲 [Order Fulfillment WhatsApp] Sent %s notification to +%s for Order #%s", normStatus, cleanPhone, cleanOrdID)
+	return nil
+}
+
+
 // PollPaymentStatusBackground runs an asynchronous, zero-CPU-blocking Goroutine background loop
 // to poll Paytm payment status for an order up to 3 minutes (60 iterations x 3 seconds).
 func PollPaymentStatusBackground(ctx context.Context, db *sql.DB, waClient *whatsmeow.Client, jid string, tenantID string, orderID string) {

@@ -2753,17 +2753,11 @@ func SendCatalogImagesHand(client *whatsmeow.Client, username, customerPhone, ca
 
 	for i, prod := range productsList {
 		caption := fmt.Sprintf("🛍️ *%s*\n💰 Price: *₹%.2f*", prod.Name, prod.Price)
-		// Dynamic thumbnail via wsrv.nl proxy (w=200, q=80) for lightweight just-in-time delivery
 		targetImageURL := prod.ImageURL
-		if strings.HasPrefix(targetImageURL, "http://") || strings.HasPrefix(targetImageURL, "https://") {
-			targetImageURL = fmt.Sprintf("https://wsrv.nl/?url=%s&w=200&q=80", url.QueryEscape(targetImageURL))
-		}
 
 		if errImg := SendImageFromURL(client, cleanPhone, targetImageURL, caption); errImg != nil {
-			log.Printf("⚠️ Error sending catalog image for %s to +%s: %v. Retrying with original URL...", prod.Name, cleanPhone, errImg)
-			if errRetry := SendImageFromURL(client, cleanPhone, prod.ImageURL, caption); errRetry != nil {
-				return fmt.Errorf("failed to deliver image for %s: %w", prod.Name, errRetry)
-			}
+			log.Printf("⚠️ Error sending catalog image for %s to +%s: %v", prod.Name, cleanPhone, errImg)
+			return fmt.Errorf("failed to deliver image for %s: %w", prod.Name, errImg)
 		}
 		if i < len(productsList)-1 {
 			time.Sleep(1200 * time.Millisecond)
@@ -3628,7 +3622,7 @@ func extractNewsletterRole(nl *types.NewsletterMetadata) string {
 	return "SUBSCRIBER"
 }
 
-// FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters(ctx) for admin client
+// FetchSubscribedNewsletters calls whatsmeow client.GetSubscribedNewsletters(ctx) and syncs with Neon DB
 func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 	cleanUsr := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
 	if cleanUsr == "" {
@@ -3640,39 +3634,102 @@ func FetchSubscribedNewsletters(username string) ([]NewsletterItem, error) {
 	if !exists || client == nil || !client.IsLoggedIn() {
 		client = ActiveClients["admin"]
 	}
+	if client == nil || !client.IsLoggedIn() {
+		for _, c := range ActiveClients {
+			if c != nil && c.IsLoggedIn() {
+				client = c
+				break
+			}
+		}
+	}
 	ClientsLock.Unlock()
 
-	if client == nil || !client.IsLoggedIn() {
-		return nil, fmt.Errorf("WhatsApp client is disconnected")
+	channelMap := make(map[string]NewsletterItem)
+	var orderedJIDs []string
+	addChannel := func(item NewsletterItem) {
+		jid := strings.TrimSpace(item.JID)
+		if jid == "" {
+			return
+		}
+		if existing, ok := channelMap[jid]; ok {
+			if item.Role == "OWNER" || item.Role == "ADMIN" {
+				existing.Role = item.Role
+			}
+			if item.Name != "" && item.Name != "Unknown Channel" && item.Name != jid {
+				existing.Name = item.Name
+			}
+			if item.SubscriberCount > 0 {
+				existing.SubscriberCount = item.SubscriberCount
+			}
+			channelMap[jid] = existing
+		} else {
+			channelMap[jid] = item
+			orderedJIDs = append(orderedJIDs, jid)
+		}
 	}
 
-	newsletters, err := client.GetSubscribedNewsletters(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch subscribed newsletters: %w", err)
+	// 1. Live fetch from WhatsApp if client is connected
+	if client != nil && client.IsLoggedIn() {
+		if newsletters, err := client.GetSubscribedNewsletters(context.Background()); err == nil {
+			for _, nl := range newsletters {
+				if nl == nil {
+					continue
+				}
+				name := extractNewsletterName(nl)
+				role := extractNewsletterRole(nl)
+				subCount := nl.ThreadMeta.SubscriberCount
+				item := NewsletterItem{
+					JID:             nl.ID.String(),
+					Name:            name,
+					Role:            role,
+					SubscriberCount: subCount,
+				}
+				addChannel(item)
+				if DB != nil {
+					_, _ = DB.Exec(`INSERT INTO newsletters (username, jid, name, role) VALUES ($1, $2, $3, $4)
+						ON CONFLICT (username, jid) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role`,
+						cleanUsr, item.JID, item.Name, item.Role)
+				}
+			}
+		}
+	}
+
+	// 2. Merge saved channels from channel_forwarding_rules & newsletters table in Neon DB
+	if DB != nil {
+		if ruleRows, err := DB.Query(`SELECT source_jid, source_name, target_jid, target_name FROM channel_forwarding_rules ORDER BY id DESC`); err == nil {
+			defer ruleRows.Close()
+			for ruleRows.Next() {
+				var sJID, sName, tJID, tName string
+				if ruleRows.Scan(&sJID, &sName, &tJID, &tName) == nil {
+					if strings.TrimSpace(sJID) != "" {
+						addChannel(NewsletterItem{JID: strings.TrimSpace(sJID), Name: strings.TrimSpace(sName), Role: "SUBSCRIBER"})
+					}
+					if strings.TrimSpace(tJID) != "" {
+						addChannel(NewsletterItem{JID: strings.TrimSpace(tJID), Name: strings.TrimSpace(tName), Role: "OWNER"})
+					}
+				}
+			}
+		}
+		if nlRows, err := DB.Query(`SELECT jid, name, role FROM newsletters WHERE jid NOT LIKE '12036300000000000%' ORDER BY id ASC`); err == nil {
+			defer nlRows.Close()
+			for nlRows.Next() {
+				var jid, name, role string
+				if nlRows.Scan(&jid, &name, &role) == nil && strings.TrimSpace(jid) != "" {
+					addChannel(NewsletterItem{JID: strings.TrimSpace(jid), Name: strings.TrimSpace(name), Role: strings.ToUpper(strings.TrimSpace(role))})
+				}
+			}
+		}
 	}
 
 	var items []NewsletterItem
-	for _, nl := range newsletters {
-		if nl == nil {
-			continue
-		}
-
-		name := extractNewsletterName(nl)
-		role := extractNewsletterRole(nl)
-		subCount := nl.ThreadMeta.SubscriberCount
-
-		items = append(items, NewsletterItem{
-			JID:             nl.ID.String(),
-			Name:            name,
-			Role:            role,
-			SubscriberCount: subCount,
-		})
+	for _, jid := range orderedJIDs {
+		items = append(items, channelMap[jid])
 	}
-
 	if items == nil {
 		items = []NewsletterItem{}
 	}
 
 	return items, nil
 }
+
 

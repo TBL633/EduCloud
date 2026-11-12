@@ -240,6 +240,8 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_jid ON orders(jid);
 CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);
 CREATE INDEX IF NOT EXISTS idx_orders_tenant ON orders(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(order_status);
+CREATE INDEX IF NOT EXISTS idx_order_states_status ON customer_order_states(order_status);
 
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS jid VARCHAR(100) DEFAULT '';
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100) DEFAULT '';

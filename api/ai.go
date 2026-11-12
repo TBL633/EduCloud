@@ -169,8 +169,13 @@ func AISettingsHandler(w http.ResponseWriter, r *http.Request) {
 				_, _ = DB.Exec("UPDATE users SET allow_cod=$1 WHERE LOWER(username)=LOWER($2)", *req.AllowCOD, username)
 			}
 			_, err := DB.Exec(`UPDATE users SET 
-				ai_provider=$1, api_key=$2, business_name=$3, business_type=$4, response_language=$5, auto_reply=$6, ai_model=$7, ai_temperature=$8, notification_phone=$9, import_catalog_details=$10,
-				paytm_mid=$11, paytm_vpa=$12, store_policies=$13,
+				ai_provider=$1, api_key=$2,
+				business_name = CASE WHEN $3 != '' THEN $3 ELSE business_name END,
+				business_type = CASE WHEN $4 != '' THEN $4 ELSE business_type END,
+				response_language=$5, auto_reply=$6, ai_model=$7, model=$7, ai_temperature=$8, temperature=$8, notification_phone=$9, import_catalog_details=$10,
+				paytm_mid = CASE WHEN $11 != '' THEN $11 ELSE paytm_mid END,
+				paytm_vpa = CASE WHEN $12 != '' THEN $12 ELSE paytm_vpa END,
+				store_policies=$13,
 				max_delivery_radius_km = CASE WHEN $14 > 0 THEN $14 ELSE max_delivery_radius_km END,
 				free_delivery_radius_km = CASE WHEN $15 >= 0 THEN $15 ELSE free_delivery_radius_km END,
 				delivery_charge_amount = CASE WHEN $16 >= 0 THEN $16 ELSE delivery_charge_amount END

@@ -343,15 +343,25 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := extractCustomerFromRequest(r)
-	if claims == nil {
-		respondJSON(w, 401, map[string]interface{}{"status": "error", "message": "Authentication required"})
-		return
+	reg := regexp.MustCompile(`\D`)
+	queryPhone := reg.ReplaceAllString(r.URL.Query().Get("phone"), "")
+	if queryPhone == "" {
+		queryPhone = reg.ReplaceAllString(r.URL.Query().Get("customer_phone"), "")
 	}
 
-	cleanPhone := claims.Phone
-	if cleanPhone == "" {
-		reg := regexp.MustCompile(`\D`)
-		cleanPhone = reg.ReplaceAllString(strings.Split(claims.JID, "@")[0], "")
+	var cleanPhone, jid string
+	if claims != nil {
+		cleanPhone = claims.Phone
+		if cleanPhone == "" {
+			cleanPhone = reg.ReplaceAllString(strings.Split(claims.JID, "@")[0], "")
+		}
+		jid = claims.JID
+	} else if queryPhone != "" {
+		cleanPhone = queryPhone
+		jid = queryPhone + "@s.whatsapp.net"
+	} else {
+		respondJSON(w, 200, map[string]interface{}{"status": "success", "orders": []interface{}{}, "count": 0})
+		return
 	}
 
 	seenOrderIDs := make(map[string]bool)
@@ -369,7 +379,7 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 			created_at
 			FROM orders
 			WHERE jid = $1 OR customer_phone = $2 OR delivery_phone = $2
-			ORDER BY created_at DESC LIMIT 5`, claims.JID, cleanPhone)
+			ORDER BY created_at DESC LIMIT 20`, jid, cleanPhone)
 
 		if err == nil {
 			defer rows.Close()
@@ -411,7 +421,7 @@ func CustomerOrdersHandler(w http.ResponseWriter, r *http.Request) {
 				updated_at
 				FROM customer_order_states
 				WHERE jid = $1 OR customer_phone = $2 OR delivery_phone = $2
-				ORDER BY updated_at DESC LIMIT $3`, claims.JID, cleanPhone, limitNeeded)
+				ORDER BY updated_at DESC LIMIT $3`, jid, cleanPhone, limitNeeded)
 
 			if stErr == nil {
 				defer stRows.Close()
@@ -757,15 +767,18 @@ func OrderStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	normPayStatus := strings.ToUpper(strings.TrimSpace(paymentStatus))
+	normOrdStatus := whatsapp.NormalizeOrderStatus(orderStatus)
 	isPaid := normPayStatus == "PAID" || normPayStatus == "SUCCESS" || normPayStatus == "TXN_SUCCESS" || normPayStatus == "COMPLETED"
 
 	respondJSON(w, 200, map[string]interface{}{
-		"status":         "success",
-		"order_id":       orderID,
-		"payment_status": normPayStatus,
-		"order_status":   orderStatus,
-		"total_amount":   totalAmt,
-		"paid":           isPaid,
+		"status":             "success",
+		"order_id":           orderID,
+		"payment_status":     normPayStatus,
+		"order_status":       normOrdStatus,
+		"order_status_label": formatGoOrderStatus(normOrdStatus),
+		"total_amount":       totalAmt,
+		"paid":               isPaid,
+		"is_paid":            isPaid,
 	})
 }
 
